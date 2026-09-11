@@ -1,0 +1,1230 @@
+WM-Craftnet: World Synesthesia Model for
+Generalizable and Robust Dexterous In-Hand
+Manipulation
+Jie Yin†, Zeyuan Zhao†,‡, Xiaojing Tan, Yang Liu‡, Chiyu Wang, Xinyang Gu∗
+Sharpa Robotics
+https://wmcraftnet.github.io
+Abstract: Generalizable and robust dexterous in-hand manipulation requires a
+policy to infer object pose, geometry, contact, and potential slip from partial
+and noisy observations.
+Although recent tactile and visuotactile RL methods
+achieve strong in-hand rotation in controlled settings, their robustness often de-
+grades under pose shifts, force disturbances, and object variation. We propose
+WM-Craftnet, a world-model-conditioned framework that learns compact action-
+conditioned latent dynamics from proprioception, depth, tactile sensing, and ac-
+tions, supervised by multimodal reconstruction and reward prediction. Rather than
+using the world model for latent imagination or policy optimization, WM-Craftnet
+uses the learned World Synesthesia Model (WSM) as recurrent task context for an
+asymmetric actor–critic policy. Importantly, WSM is trained to reconstruct clean
+depth targets from noisy depth inputs, providing a denoised geometric state for
+real-robot deployment. Ablations over recurrent baselines, auxiliary heads, tactile
+masking, and WSM modality heads show that predictive world modeling, clean-
+depth supervision, and tactile contact cues all shape the learned state. A WSM pre-
+trained on nine z-axis objects serves as a reusable prior for 49-object downstream
+policy learning. This context improves multi-object rotation, with quantitative
+and qualitative evidence for unseen-object, perturbation-recovery, and sim-to-real
+transfer.
+Keywords: Robot Manipulation, Sim-to-real Transfer, World Model, Visuotactile
+Perception
+1
+Introduction
+Dexterous in-hand manipulation is essential for contact-rich skills such as object reorientation, tool
+use, and fine-grained adjustment. Unlike arm-gripper manipulation with relatively stable contacts,
+in-hand manipulation must control a partially observed object through intermittent fingertip interac-
+tions while adapting to changes in pose, geometry, and external force.
+Learning-based methods have made substantial progress with proprioception, touch, and vision [1,
+2, 3, 4, 5]. However, policies trained on narrow object sets or fixed initial poses can overfit to object-
+specific finger gaits, making them fragile to pose offsets, force disturbances, and object drift. Some
+methods add object identities or shape embeddings, but this ties deployment to known annotations
+and limits general-purpose manipulation.
+Pose-robust adjustment requires inferring object geometry, pose, contact state, and slip risk under
+partial observability. Depth and touch provide complementary evidence, but simply concatenating
+sensor streams leaves the policy to learn temporal contact dynamics from noisy fused observations,
+especially when real wrist-depth inputs are corrupted or shifted from clean simulation.
+Our goal is to study how an action-conditioned latent state can improve task-relevant physical infer-
+ence for contact-rich manipulation. Inspired by human synesthetic physical reasoning, we combine
+global geometry from vision, local contact evidence from touch, and action history that reveals how
+contacts evolve under control. Prior visuotactile work fuses these cues for in-hand control [6], and
+† are co-first authors.
+‡ contributed while interning at Sharpa Robotics.
+∗Corresponding author: Xinyang Gu (zlw21gxy@gmail.com).
+10th Conference on Robot Learning (CoRL 2026), Austin TX, USA.
+© 2026 Sharpa. All rights reserved.
+arXiv:2609.07002v1  [cs.RO]  7 Sep 2026
+
+
+world-model representations can provide deployable predictive features [7]. WM-Craftnet uses this
+idea to anticipate contact transitions, object drift, and slip, enabling adjustment under perturbations
+rather than repetition of a fixed gait.
+WM-Craftnet learns a World Synesthesia Model with a Dreamer-style recurrent state from proprio-
+ception, noisy depth, tactile observations, and recent actions, with reward used as a prediction target
+during training. The policy is conditioned on this recurrent feature, which captures object state,
+geometry, and contact evolution. During WSM training, noisy augmented depth is used as input
+while clean wrist-depth targets supervise reconstruction, encouraging denoised geometry for down-
+stream control. This representation improves robust multi-object rotation, supports unseen-object
+evaluation, and enables WSM pretraining as a reusable prior for downstream 49-object control. We
+summarize our contributions as follows:
+• We propose WM-Craftnet, a World Synesthesia Model-based framework that learns an
+action-conditioned recurrent representation from proprioception, noisy depth, tactile sens-
+ing, actions, and multimodal prediction targets for contact-rich dexterous manipulation.
+• We analyze WSM with recurrent-history baselines, auxiliary-head and modality-head abla-
+tions, latent-state diagnostics, clean-depth reconstruction, and pretraining, showing that the
+predictive representation can serve as a reusable prior for 49-object downstream control.
+• We conduct quantitative simulation and real-world evaluations, supported by qualitative
+videos, showing that WSM improves single-policy manipulation across object variations,
+unseen objects, perturbations, and enables sim-to-real transfer on a human-sized 22-DoF
+five-finger dexterous hand.
+2
+Related Work
+Learning-based in-hand manipulation.
+Learning-based systems have achieved sim-to-real in-
+hand control through several complementary strategies.
+Rapid Motor Adaptation infers object
+properties online from proprioceptive history for z-axis rotation [4], whereas DeXtreme couples
+a domain-randomized reorientation policy with a vision-based pose estimator [3]. Touch Dexterity
+demonstrates vision-free rotation with distributed binary contact sensing [1], and AnyRotate uses
+dense tactile feedback for gravity-invariant multi-axis rotation [5]. More complex reorientation can
+compose pretrained axis-wise skills [8] or route among shape-specialized experts [9]. Other ap-
+proaches adapt with real pen-spinning trajectories [10], learn joint-wise actuator corrections from
+hardware data [11], or randomize 3D Gaussians for monocular pose estimation [12]. In adjacent
+dexterous grasping, Goal-Auxiliary Actor-Critic combines point-cloud control with an auxiliary
+goal objective [13], while DextrAH-G couples pixel policies with geometric-fabric control priors
+[14]. These methods address grasp acquisition; WM-Craftnet instead learns recurrent interaction
+state for sustained in-hand control.
+Visuotactile perception for dexterity.
+RotateIt distills privileged object shape and physical prop-
+erties into a temporal transformer driven by vision, touch, proprioception, and action history [2].
+Robot Synesthesia projects camera, hand, and active tactile points into a common 3D representation
+before teacher–student policy distillation [6]. NeuralFeels fuses vision and touch in an online neu-
+ral field for object-state estimation [15], while tactile skins with normal and shear sensing enable
+feedback-driven in-hand translation [16]. ViTacFormer learns cross-modal features for visuotac-
+tile dexterous manipulation [17]; image-based hand-object reconstruction also shows how contact-
+aware geometric objectives can structure a latent representation [18]. WM-Craftnet differs by learn-
+ing action-conditioned recurrent dynamics with multimodal prediction objectives and exposing the
+deterministic state as detached PPO context, rather than regressing a fixed privileged encoding or
+separating perception from control.
+World models for robot control.
+World Models introduced compact learned dynamics for control
+[19], and Dreamer optimizes behavior through trajectories imagined in a recurrent state-space model
+[20, 21]. DayDreamer applies this paradigm directly to physical robots [22], while MoDem-V2 uses
+2
+
+
+WM-Craftnet: World Synesthesia Model for Robust In-hand Manipulation 
+World Synesthesia Model Pretraining
+Reusable Synesthetic Prior
+contact
+World Synesthesia Model
+(multi-modal RSSM)
+Reconstruct per
+modality
+Proprioception qt
+Wrist depth It
+Tactile st
+Prev. action ut-1
+ht-1
+zt
+predictive feature ht
+Inputs
+Rotation
+Translation
+piggy bank around z axis
+screwdriver along y axis
+Reward. rt
+In-hand Interaction in Simulation
+…
+other skills
+Multimodal Predictive Learning
+from Interaction in simulation
+Reusable Synesthetic Prior
+that reasons and predicts the world
+Prediction Objectives
+Robust Dexterous Control
+generalizable, perturbation-robust, sim2real-ready
+WSM-conditioned Policy
+World Synesthesia Model
+(pretrained)
+Reconstruct 
+depth
+Reconstruct 
+proprio-tactile
+Predict reward 
+Reason
+object pose, shape, 
+contact
+Current obs.
+Commanded axis
+WSM features
+Synesthetic 
+prior
+Asymmetric Actor-Critic Policy
+Knowledge transfer to new tasks
+Scalable 
+Object Types
+Depth Denoising
+Reason about 
+dynamics, geometry 
+and contact 
+Predict object motion
+Reusable knowledge 
+Outcomes
+Perturbation 
+Recovery
+Successful 
+Sim-to-real
+Relative  
+action ut
+Update  Target
+qtarget,t= qtarget,t-1 + αut
+Unseen 
+Objects
+ht
+ht+1
+zt
+Stochastic state
+deterministic state
+Figure 1: Overview of WM-Craftnet. A Dreamer-style recurrent state-space model (RSSM) learns
+a denoised recurrent state from multimodal observations and provides it as predictive context for the
+manipulation policy.
+visual world models for real-world contact-rich manipulation [23]. Robotic World Model instead
+treats learned dynamics as a neural simulator for policy optimization [24]. In the representation-
+conditioning branch, World Model-based Perception supplies a stopped-gradient recurrent state to a
+locomotion policy without imagined PPO rollouts [7], and DreamMimic uses world-model predic-
+tive features for visuomotor whole-body policy distillation [25]. WM-Craftnet extends this branch
+to visuotactile in-hand manipulation, adding noisy-to-clean depth reconstruction and reuse of the
+predictive model across object distributions.
+3
+WM-Craftnet Framework
+WM-Craftnet targets partially observed in-hand manipulation on a human-sized 22-DoF five-finger
+hand. We define the World Synesthesia Model as a Dreamer-style recurrent latent dynamics model
+trained with multimodal reconstruction and reward prediction, whose detached deterministic state
+serves as deployable policy context. The name reflects its cross-modal predictive role: visual geom-
+etry, tactile contact, proprioception, and action history jointly constrain the latent interaction state.
+This predictive state supports object-ID-free adaptation from deployable visuotactile observations
+and serves as a recurrent state estimate for the actor, as illustrated in Figure 1.
+3.1
+Problem Formulation and Observations
+We consider continuous in-hand rotation of a grasped object around a commanded axis a ∈
+{±x, ±y, ±z}. At time t, we denote the deployable policy observation by
+ot =
+ pstack
+t
+, cstack
+t
+, Dt, ut−1
+
+,
+(1)
+where pstack
+t
+and cstack
+t
+are short stacks of normalized hand proprioception and binary tactile/contact
+measurements, Dt is the current noisy wrist-depth stream, and ut−1 is the previous joint-target
+command. Importantly, ot contains only on-robot sensor streams and control history; it does not
+include clean simulator depth or any depth reconstructed by the WSM decoder. The actor conditions
+on ot, the commanded axis a, and the projected WSM feature ψ(wt). The policy outputs a relative
+22-DoF joint target command ut, which is smoothed and executed by the low-level hand controller.
+The objective is signed object rotation around the target axis while maintaining a stable grasp. Let
+Ro
+t ∈SO(3) denote object orientation. One-step progress is
+∆θt = proja
+ log
+ Ro
+t+1(Ro
+t)−1
+,
+(2)
+where log(·) maps rotation to axis-angle form and proja projects onto the commanded axis. During
+simulation training, object pose, velocity, and contact-force fields support reward computation, critic
+learning, and diagnostics. Table 8 lists the complete observation/action interface.
+3
+
+
+3.2
+Multimodal Predictive State Encoder
+The encoder maps sensory streams to a latent state for prediction and control. The world-model
+update receives a single-step proprioceptive vector pt, tactile/contact vector ct, noisy normalized
+depth image It, previous action ut−1, and episode-start flag mt. The rollout record additionally
+contains clean depth and reward as training targets; neither is required as a deployment-time input.
+The actor observes stacked proprioceptive/tactile state, whereas the world model uses unstacked
+low-dimensional vectors to keep dynamics compact.
+Given rollout data
+D = {(pt, ct, It, Iclean
+t
+, ut−1, rt, mt)}T
+t=1,
+(3)
+the proprioceptive and tactile/contact streams are encoded with MLP branches and the depth stream
+is encoded with a CNN branch. These features are fused by a Dreamer-style multimodal encoder:
+et = fenc(pt, ct, It).
+(4)
+Depth is clipped and cropped around the hand-object workspace. WSM input depth is augmented
+with temporally correlated dropout, Gaussian noise, and small random rotations, while the recon-
+struction target remains the clean crop-only ground-truth depth. During deployment, the actor uses
+the noisy sensor stream together with the recurrent WSM feature. WSM is trained to reconstruct
+clean hand-object geometry from corrupted observations, while its recurrent dynamics provide tem-
+poral memory from a compact per-step encoder embedding.
+3.3
+World Model for In-Hand Manipulation
+WM-Craftnet uses a Dreamer-style recurrent state-space model (RSSM) as its world model. World-
+model optimization is decoupled from the PPO gradient path, and the actor receives a detached
+deterministic latent feature. Let zt be the stochastic latent state and ht be the deterministic recurrent
+state. Given the previous latent state, previous action, and current encoded observation, the posterior
+update is
+zt, ht = fwm(zt−1, ht−1, ut−1, et, mt) .
+(5)
+The actor-side feature is the deterministic component
+wt = ht,
+(6)
+which is detached before entering the policy network. In the current implementation, 512-dim ht is
+projected by a small MLP to a 16-dim feature before being concatenated with the policy observation.
+The world model is trained from a replay buffer populated during PPO rollouts. Each row stores
+(pt, ct, It, Iclean
+t
+, ut−1, rt, mt), where It is the noisy/augmented depth input and Iclean
+t
+is the clean
+depth target used by the decoder. Training samples contiguous chunks and optimizes the Dreamer-
+style model objective:
+Lwm = Limg + Lprop + λcLtac + λrLreward + λdynLdyn-KL + λrepLrep-KL + Laux.
+(7)
+Here Limg reconstructs Iclean
+t
+from the latent state inferred with noisy depth input, Lprop reconstructs
+proprioception, Lreward predicts rollout reward, and the KL terms regularize posterior/prior dynam-
+ics. Reward supervises the predictive model during training. Together, these targets encourage a
+geometry- and contact-aware state for deployment with noisy wrist-depth observations. Inspired by
+recent rotation and grasping systems [15, 18, 13, 17, 14], the full WSM uses depth, proprioception,
+tactile contact, reward, object pose, value, and object shape auxiliary heads to learn a task-relevant
+predictive state. During simulation training, the pose and shape heads use simulator labels, with
+shape represented by a basis-point-set-to-mesh displacement vector. Appendix B.1 analyzes the
+contribution of these heads.
+3.4
+Pretrained Synesthetic Prior for Multi-Object Control
+Scaling one dexterous policy from a small object set to many new objects requires inferring how
+geometry, contact, slip, and action-conditioned motion interact. WM-Craftnet addresses this by
+4
+
+
+making WSM reusable across object distributions. After pretraining on contact-rich data from the
+nine-object z-axis setting, the predictive model initializes the 49-object experiment and continues
+adapting to new rollouts, while a task-specific controller is learned with reinforcement learning.
+The resulting world model acts as a reusable physical prior. It captures how depth, proprioception,
+action, reward, object motion, and contact evidence co-vary, giving downstream PPO a structured
+recurrent representation of contact transitions, object motion, and slip.
+3.5
+World Model-Conditioned Manipulation Policy
+The actor receives the current policy observation, commanded axis, and projected World Synesthesia
+Model feature:
+ut = πθ(ot, a, ψ(wt)) ,
+(8)
+where ot is the deployable observation in Eq. (1) and ψ(wt) is the projected deterministic WSM
+feature derived from Eq. (6). Actions are relative joint target updates,
+qtarget
+t
+= qtarget
+t−1 + αut,
+(9)
+followed by signal-level smoothing and hardware-limit clamping.
+The policy is trained with PPO in simulation using the same reward for all baselines. The reward
+encourages stable, human-like, and goal-consistent object rotation while suppressing off-axis mo-
+tion, object drift, excessive effort, large actions, and unstable contacts; Appendix A.2 gives the full
+reward expression, reset rules, and weights.
+The actor input therefore comprises deployable observations ot and the WSM feature ψ(wt), while
+the critic additionally receives simulator state during training. After each PPO epoch, replay chunks
+update the RSSM; a stopped gradient at the actor interface decouples the two optimization paths.
+4
+Experiments and Evaluations
+To evaluate WM-Craftnet, we organize the experiments around four questions:
+• Q1. Multi-object rotation and sim-to-real: Can WM-Craftnet learn robust multi-object
+rotation and transfer the learned behavior to a real robot?
+• Q2. WSM mechanism and prior: What does the World Synesthesia Model improve, how
+does it work, and can it be reused as a synesthetic prior?
+• Q3. More difficult rotation modes: Can WM-Craftnet learn rotation modes with less
+stable support and more complex contact rearrangement as in x-axis and y-axis rotation?
+• Q4. Robustness under extreme conditions: Can WM-Craftnet rotate unseen objects and
+recover from challenging initial poses and external force disturbances?
+4.1
+Experimental Setup
+Hardware and Simulation Setting.
+We use the same deployable observation/action setting and
+control frequency in simulation and on hardware. Each reported simulation number averages 128
+evaluation episodes per method under randomized evaluation seeds. To reduce the sim-to-real gap,
+we combine joint-level system identification with domain randomization over dynamics, sensing,
+resets, and perturbations. Appendix A provides implementation details, and Appendix A.3 describes
+system identification and sim-to-real randomization.
+Baselines.
+For the z-axis evaluation, we compare Open-loop Replay, Blind RL Policy (no depth,
+no tactile), Touch Dexterity (w/ tactile) [1], RL Policy (w/ depth, w/o tactile), In-Hand Rotation
+(w/ depth + tactile) [6], and WM-Craftnet with WSM variants. The x- and y-axis evaluations use a
+compact baseline comparison. All baselines are reimplemented for the 22-DoF Sharpa Wave Hand
+with the same reward, randomization range, initialization distribution, and reset strategy.
+5
+
+
+Table 1: z-axis multi-object rotation and WSM analysis on nine objects, including test-time tactile
+masking and modality controls.
+Method
+Return↑
+EpLen↑
+RotR↑
+OffAxis↓
+AngVar↓
+Open-loop Replay
+306.3 ± 48.3
+320.2 ± 35.0
+0.332 ± 0.080
+1.789 ± 0.295
+2.241 ± 0.679
+Blind RL Policy (no depth, no tactile)
+304.1 ± 3.8
+295.8 ± 2.3
+0.944 ± 0.004
+1.539 ± 0.007
+1.810 ± 0.011
+Touch Dexterity (w/ tactile)[1]
+386.9 ± 3.1
+362.5 ± 2.3
+1.018 ± 0.004
+1.601 ± 0.008
+1.764 ± 0.053
+RL Policy (w/ depth, w/o tactile)
+362.2 ± 4.7
+351.0 ± 3.6
+0.978 ± 0.004
+1.806 ± 0.009
+2.222 ± 0.065
+In-Hand Rotation (w/ depth + tactile)[6]
+236.1 ± 2.7
+272.5 ± 2.8
+0.882 ± 0.003
+1.986 ± 0.009
+2.487 ± 0.074
+WM-Craftnet (from scratch)
+414.3 ± 15.7
+264.2 ± 8.8
+0.742 ± 0.012
+1.285 ± 0.010
+1.735 ± 0.052
+WM-Craftnet (all-zero tactile)
+724.9 ± 4.4
+428.8 ± 2.8
+1.252 ± 0.004
+1.224 ± 0.006
+1.388 ± 0.031
+WM-Craftnet (75% tactile dropout)
+735.2 ± 4.1
+429.8 ± 2.7
+1.272 ± 0.004
+1.224 ± 0.006
+1.390 ± 0.031
+WM-Craftnet (50% tactile dropout)
+737.8 ± 4.4
+425.1 ± 3.6
+1.276 ± 0.004
+1.279 ± 0.006
+1.511 ± 0.061
+WM-Craftnet (25% tactile dropout)
+743.4 ± 4.2
+427.9 ± 3.2
+1.287 ± 0.004
+1.243 ± 0.006
+1.434 ± 0.032
+WM-Craftnet (WSM pretrained, prop-only)
+684.5 ± 4.3
+424.0 ± 2.2
+1.191 ± 0.003
+1.310 ± 0.007
+1.234 ± 0.013
+WM-Craftnet (WSM pretrained, prop+tac)
+698.9 ± 4.3
+435.4 ± 1.9
+1.192 ± 0.002
+1.165 ± 0.006
+1.373 ± 0.024
+WM-Craftnet (full WSM)
+753.3 ± 3.6
+435.2 ± 1.9
+1.293 ± 0.004
+1.225 ± 0.006
+1.324 ± 0.027
+Table 2: Controlled WSM variants on the z-axis benchmark. The left panel shows training reward;
+the right panel reports evaluation metrics (mean ± 95% confidence interval).
+Method
+Return↑
+EpLen↑
+RotR↑
+OffAxis↓
+AngVar↓
+Noisy-depth supervision
+708.0 ± 3.5 431.1 ± 2.0 1.265 ± 0.005 1.299 ± 0.006 1.456 ± 0.045
+No ht−1 recurrent input
+705.4 ± 4.3 434.3 ± 2.3 1.282 ± 0.005 1.125 ± 0.006 1.185 ± 0.008
+Encoder–decoder zt policy 667.6 ± 4.7 417.4 ± 2.6 1.254 ± 0.003 1.323 ± 0.006 1.343 ± 0.018
+Full WSM
+753.3 ± 3.6 435.2 ± 1.9 1.293 ± 0.004 1.225 ± 0.006 1.324 ± 0.027
+Metrics.
+For simulation, we report return, episode length, rotation rate (RotR), and, where in-
+formative, off-axis motion and angular-velocity variation. Simulation entries are means with 95%
+confidence intervals over 128 evaluation episodes unless otherwise noted, and highlighting marks
+the first three ranks under each metric direction. For hardware, RR reports radians of rotation in
+a 20-s episode, and SR is the success rate, where success requires more than a half-spin. Four
+annotators independently score synchronized videos, and their measurements are averaged.
+4.2
+Robust Multi-Object z-Axis Rotation
+We first evaluate whether one policy can rotate multiple everyday objects under randomized starts.
+The nine-object set beside Table 1 spans diverse shapes, mass-center distributions, textures, and
+contact affordances, requiring online state and contact inference rather than object-specific gaits. As
+shown in Table 1, baseline returns range from 236.1 to 386.9. WM-Craftnet trained from scratch
+improves return to 414.3 and reduces OffAxis and AngVar to 1.285 and 1.735, while its 0.742 RotR
+remains below some baselines. The pretrained full WSM reaches 753.3 return and 1.293 RotR, with
+OffAxis 1.225 and AngVar 1.324. Figure 2(a) compares the z-axis methods; qualitative results are
+available on the project website1.
+Figure 2(a) reports training reward for the z-axis methods and shows the same ordering as the main
+comparison in Table 1. Table 1 also shows that reducing tactile availability from full input to 25%
+dropout and all-zero input decreases return from 753.3 to 743.4 and 724.9. The modality controls
+progress from 684.5 with proprioception alone to 698.9 with proprioception and touch, and 753.3
+with full depth–touch input; prop+touch yields lower OffAxis (1.165) but lower RotR than full
+WSM. Figure 2(b) shows these controls.
+Controlled WSM variants.
+Table 2 isolates clean-depth supervision, deterministic recurrence,
+and the recurrent policy feature. Reconstructing noisy rather than clean depth lowers return from
+753.3 to 708.0, while replacing the recurrent policy context with a per-step encoder–decoder feature
+lowers it to 667.6. Removing ht−1 yields 705.4 return and 1.282 RotR, but improves OffAxis and
+AngVar to 1.125 and 1.185, indicating a stability–task-performance trade-off. The training curves
+beside the table show that full WSM reaches the highest final reward.
+Sim-to-real experiments.
+We also evaluate real-robot z-axis rotation on duck, cross block, corner
+block, and an unseen double-notched block. Table 3 compares a progression from fixed open-
+loop replay (OlR), to tactile feedback in Touch Dexterity (TD) [1], and then depth–tactile feedback
+in In-Hand Rotation (IHR) [6]. IHR is sensitive to the shift from simulated depth to noisy real
+1https://wmcraftnet.github.io/
+6
+
+
+Figure 2: Training reward curves on (a) z-axis baselines, (b)
+WSM ablation and (c,d) x/y-axis baselines.
+Method
+Duck
+Cross
+block
+Corner
+block
+Double-notched
+block(unseen)
+RR
+SR
+RR
+SR
+RR
+SR
+RR
+SR
+OlR
+2.32
+6/10
+3.04
+6/10
+5.19
+7/10
+0.23
+0/10
+TD[1]
+1.54
+4/10
+0.34
+2/10
+0.22
+0/10
+0.27
+0/10
+IHR[6]
+1.83
+5/10
+0.45
+1/10
+0.36
+1/10
+0.39
+0/10
+IHR + WSM-denoised depth
+2.76
+8/10
+1.21
+8/10
+2.43 10/10 0.80
+0/10
+Ours
+16.179 10/10 8.01 10/10 8.48 10/10 4.32
+8/10
+Table 3: Real-robot z-axis rotation.
+RR is radians per 20-s episode and SR
+is success over 10 trials.
+Figure 3: t-SNE visualization
+of WSM recurrent states ht col-
+lected from z-axis rotation roll-
+outs over nine objects.
+Figure 4: Depth reconstruction
+from a simulated z-axis duck
+rotation rollout.
+Figure 5: Downstream policy
+learning over 49 new objects us-
+ing the WSM pretrained on nine
+z-axis objects.
+observations. Feeding it WSM-denoised depth improves rotation and success on the three seen
+objects, confirming the value of geometric denoising, but yields limited rotation and no successful
+trials on the unseen block. WM-Craftnet conditions the actor on a recurrent WSM feature learned
+jointly from depth, touch, proprioception, and action history. This temporally informed context
+supports high RR and SR on both the seen objects and the unseen block.
+4.3
+World Synesthesia Model Analysis
+We next analyze the representation learned by WSM. The results suggest that its recurrent context
+combines cues relevant to geometry, contact evolution, and object motion.
+The auxiliary-head study in Table 10 raises return from 688.1 without auxiliary heads to 737.0 with
+the value head alone and 753.3 with all heads. Table 2 provides the controlled clean-depth and
+recurrent-state variants, while the LSTM and GRU history baselines remain in Appendix B.1.
+We further examine the learned state with two diagnostics. For the nine z-axis objects, we project
+evaluation-time recurrent states ht with t-SNE to characterize object- and interaction-phase struc-
+ture; object labels are used only to color the visualization and are not policy inputs. We also decode
+clean depth from the latent state and compare it with ground-truth and noisy wrist-depth inputs.
+Latent-state and reconstruction analysis. Figure 3 shows partially object-dependent regions to-
+gether with overlap across objects and rollout phases. Figure 4 shows that WSM reconstructs cleaner
+depth from noisy input, suppressing artifacts while preserving hand-object geometry; real-hardware
+videos show the same effect. Together, these diagnostics are consistent with recurrent states that
+reflect both object-related geometry and shared interaction phases under noisy depth observations.
+Reusable synesthetic prior.
+The same predictive model can be reused beyond the nine-object z-
+axis setting. Figure 5 and website videos show one downstream policy trained over 49 new objects;
+after 3000 epochs, each object rotates 9.37 ± 0.13 rad per episode on average, compared with
+3.28 rad for the no-prior baseline, while the training fall rate drops from 6% to 0.3% from start to
+end. In a separate five-block prior-scaling diagnostic (diagonal, narrow, double-notched, step, and
+V-cut blocks), RotR improves from scratch / 9-object prior / 49-object prior as 1.10/1.34/1.46. This
+diagnostic is distinct from the axis-specific held-out sets below; Appendix B.2 shows the full object
+set and Figure 8 visualizes its recurrent-state organization.
+4.4
+More Difficult Rotation Modes
+We next evaluate rotation axes with less passive palm support. y-axis rotation creates larger moment
+arms and asymmetric contacts for elongated objects; x-axis rotation is harder because the hand has
+7
+
+
+Table 4: y-axis rotation on nine tool-like objects. Metrics are averaged over the nine-object set
+shown in the adjacent grid and all evaluation trials.
+Method
+Return↑
+EpLen↑
+RotR↑
+Fall↓
+ObjVel↓
+Open-loop Replay
+-52.4 ± 5.2
+85.8 ± 10.0
+0.031 ± 0.063
+0.784 ± 0.082
+0.0366 ± 0.0042
+Blind RL Policy (no depth, no tactile)
+177.8 ± 9.2
+192.4 ± 7.6
+0.545 ± 0.016
+0.164 ± 0.002
+0.0737 ± 0.0014
+Touch Dexterity (w/ tactile)[1]
+105.3 ± 5.8
+172.0 ± 6.2
+0.297 ± 0.030
+0.208 ± 0.003
+0.0760 ± 0.0021
+RL Policy (w/ depth, w/o tactile)
+154.8 ± 6.9
+178.4 ± 5.4
+0.288 ± 0.033
+0.103 ± 0.002
+0.0909 ± 0.0015
+In-Hand Rotation (w/ depth + tactile)[6]
+142.8 ± 5.5
+162.5 ± 4.8
+0.377 ± 0.025
+0.063 ± 0.003
+0.0787 ± 0.0021
+WM-Craftnet
+272.7 ± 13.5
+215.0 ± 8.7
+1.025 ± 0.026
+0.049 ± 0.001
+0.0682 ± 0.0013
+Table 5: x-axis rotation on four objects. Metrics are averaged over the four-object set shown in the
+adjacent grid and all evaluation trials.
+Method
+Return↑
+EpLen↑
+RotR↑
+Fall↓
+ObjVel↓
+Open-loop Replay
+18.0 ± 6.8
+129.4 ± 22.3
+0.411 ± 0.054
+0.164 ± 0.064
+0.0448 ± 0.0019
+Blind RL Policy (no depth, no tactile)
+44.0 ± 0.8
+63.4 ± 1.0
+0.867 ± 0.002
+0.033 ± 0.001
+0.0311 ± 0.0001
+Touch Dexterity (w/ tactile)[1]
+37.8 ± 0.2
+42.7 ± 0.2
+1.023 ± 0.002
+0.039 ± 0.002
+0.0334 ± 0.0001
+RL Policy (w/ depth, w/o tactile)
+38.2 ± 0.2
+43.7 ± 0.4
+1.079 ± 0.003
+0.033 ± 0.001
+0.0323 ± 0.0001
+In-Hand Rotation (w/ depth + tactile)[6]
+295.1 ± 3.3
+365.1 ± 3.1
+0.839 ± 0.001
+0.103 ± 0.003
+0.0433 ± 0.0001
+WM-Craftnet
+432.8 ± 2.1
+435.4 ± 1.8
+1.114 ± 0.001
+0.020 ± 0.001
+0.0460 ± 0.0001
+limited fingertip workspace and must reallocate contacts while gravity pulls the object away from
+the palm. All axis-specific policies use the same WM-Craftnet design, reward, randomized starts,
+and deployable observations, with a separately trained WSM for each axis.
+The y-axis evaluation uses the tool-like object set shown with Table 4, testing whether the policy can
+rotate objects that tend to lever against the fingers. Table 4 shows that WM-Craftnet improves return
+from the strongest baseline value of 177.8 to 272.7, nearly doubles the best baseline RotR from
+0.545 to 1.025, and achieves the lowest fall rate. The 88.1% RotR gain is substantially larger than the
+11.7% EpLen gain, indicating that the return improvement reflects faster target-axis progress rather
+than only longer episodes. Its ObjVel ranks second rather than first, so the advantage is specific to
+controlled rotation and fall reduction, not uniformly lower object motion. Figure 2(d) shows the
+same training trend, suggesting that the recurrent state helps resolve the changing moment arms and
+asymmetric contacts.
+The x-axis evaluation in Table 5 is a stricter test of contact sequencing: the policy must roll the
+object within a small effective finger workspace and reallocate contacts before the object leaves the
+palm-supported configuration.
+Table 5 and Figure 2(c) show that blind, tactile-only, and depth-only policies stay below 45 return
+and 64 episode length, while open-loop replay lasts longer but still has low return, low RotR, and a
+high fall rate. WM-Craftnet reaches 432.8 return, 435.4 episode length, the highest RotR, and the
+lowest fall rate, maintaining grasp while finding contacts that advance the commanded spin.
+4.5
+Stress Tests in Challenging Interaction States
+Unseen-object tests. We begin with axis-specific zero-shot transfer in simulation. We directly
+evaluate the x-, y-, and z-axis policies trained on their respective 4-, 9-, and 9-object training sets,
+without object-specific fine-tuning. For each axis, the held-out evaluation contains four unseen
+objects: small corner block, narrow block, large step block, and small Lego for x; double-notched
+block, large flashlight, narrow block, and V-cut block for y; and lidded jar, tilted tumbler, handled
+pot, and pedal bin for z. Table 6 shows that WM-Craftnet achieves the highest RotR and return in all
+three axis-specific evaluations. Relative to the strongest non-WSM entry on each metric, the RotR
+gains are 8.6%, 89.2%, and 20.9% for x, y, and z, respectively; the corresponding return gains are
+35.6%, 5.4%, and 76.7%.
+Perturbation-recovery test. We next isolate recovery under severe simulated perturbations and
+measure whether the policy restores a controllable configuration, together with the elapsed time
+among recovered trials. WM-Craftnet reaches 14.1% recovery success, compared with 6.2% for
+the strongest baseline, and has the shortest mean recovery time at 2.56 s. This is a 7.9-percentage-
+point absolute gain and a 0.58-s reduction in mean recovery time over the strongest baseline on the
+respective metric. Under difficult starts and in-process force perturbations, the representative suc-
+cessful rollouts in Figure 6 show the policy re-centering, uprighting, or transferring the object back
+8
+
+
+Table 6: Stress tests on axis-specific held-out rotation, simulated z-axis perturbation recovery, and
+large-scale real-world z-axis rotation. The left panel shows four held-out objects per axis. Simu-
+lation entries report RotR and return; Real Rot. SR aggregates 200 hardware trials over 20 objects
+using the half-spin success criterion.
+Method
+RotR, Ret. (x)↑RotR, Ret. (y)↑RotR, Ret. (z)↑Sim. Recovery↑Sim. Time↓(s) Real Rot. SR↑
+Blind RL Policy
+0.852, 134.7
+0.300, 135.7
+0.665, 277.1
+4.7% ± 3.7%
+3.62 ± 2.25
+41/200
+Touch Dexterity [1]
+0.923, 35.8
+0.174, 78.7
+0.605, 242.2
+6.2% ± 4.2%
+3.33 ± 1.41
+33/200
+RL Policy (w/o tactile)
+0.853, 33.8
+0.378, 168.9
+0.696, 301.7
+5.5% ± 4.0%
+3.14 ± 0.79
+45/200
+In-Hand Rotation [6]
+0.732, 246.0
+0.309, 193.0
+0.468, 156.1
+0.0% ± 0.0%
+N/A
+53/200
+WM-Craftnet
+1.002, 333.6
+0.715, 203.5
+0.842, 533.1
+14.1% ± 6.0%
+2.56 ± 0.77
+175/200
+into a controllable finger workspace before resuming target-axis rotation. The absolute recovery rate
+remains limited under these large disturbances.
+(b) Recovery from difficult starts
+bottle
+coke can
+cross block
+(c) Adjustment after force perturbation
+injecting 
+external force
+upholding
+pushing
+to fingers
+adjusting
+continue 
+rotation
+challenging pose
+human-applied
+position
+perturbance
+adjusting
+continue 
+rotation
+corner block
+duck
+irregular block
+OOD state
+recovering 
+a controllable grasp
+continue 
+rotation
+notched block
+Double notched
+cube
+(a) Generalization to unseen objects
+smooths 
+rotation
+unseen object
+unseen object
+smooths 
+rotation
+smooths 
+rotation
+Double notched
+cube
+smooths 
+rotation
+irregular block
+Figure 6: Qualitative stress tests in simulation and on hardware. The six rows show representative
+successful sequences in which WM-Craftnet returns the object to a controllable workspace and
+resumes rotation; quantitative recovery rates are evaluated in simulation.
+Large-scale real-world evaluation. Finally, in a separate large-scale hardware protocol, we test
+standard z-axis in-hand rotation on 20 real objects with 10 trials per object. The set combines the
+nine training objects with eleven unseen objects: lidded jar, tilted tumbler, pedal bin, handled pot,
+diagonal block, narrow block, double-notched block, step block, V-cut block, trash can, and bucket.
+WM-Craftnet succeeds in 175/200 trials, compared with 33/200–53/200 for the baselines. This
+hardware result measures rotation success across a broad object set.
+Tool use behavior.
+Appendix B.3 reports screwdriver translation and rotation using the same pol-
+icy formulation.
+5
+Conclusions and Limitations
+This paper presents WM-Craftnet, a world model-based visuotactile framework for robust dexterous
+in-hand manipulation. WSM learns Dreamer-style latent dynamics from noisy depth, propriocep-
+tion, tactile sensing, and actions, reconstructs clean depth targets, and conditions the policy with its
+deterministic recurrent feature. Depth reconstruction suppresses sensor artifacts while preserving
+hand-object geometry. The predictive representation also serves as a reusable prior for a 49-object
+downstream policy. Experiments show improved multi-object rotation, unseen-object transfer, per-
+turbation recovery, and sim-to-real performance over baseline visuotactile methods.
+Limitations: current tasks remain short-horizon, and severe-perturbation recovery remains limited.
+Failures occur when objects exceed the hand workspace, large offsets leave the recovery basin, or
+drift and jamming disrupt stable contacts. Future work will explore broader distributions and more
+complex tool use.
+9
+
+
+References
+[1] Z.-H. Yin, B. Huang, Y. Qin, Q. Chen, and X. Wang. Rotating without seeing: Towards in-
+hand dexterity through touch. In Robotics: Science and Systems (RSS), 2023. URL https:
+//arxiv.org/abs/2303.10880.
+[2] H. Qi, B. Yi, S. Suresh, M. Lambeta, Y. Ma, R. Calandra, and J. Malik. General in-hand
+object rotation with vision and touch. In Conference on Robot Learning, 2023. URL https:
+//arxiv.org/abs/2309.09979.
+[3] A. Handa, A. Allshire, V. Makoviychuk, A. Petrenko, R. Singh, J. Liu, D. Makoviichuk,
+K. Van Wyk, A. Zhurkevich, B. Sundaralingam, Y. S. Narang, J.-F. Lafleche, D. Fox, and
+G. State. Dextreme: Transfer of agile in-hand manipulation from simulation to reality. In
+2023 IEEE International Conference on Robotics and Automation (ICRA), pages 5977–5984.
+IEEE, 2023.
+doi:10.1109/ICRA48891.2023.10160216.
+URL https://arxiv.org/abs/
+2210.13702.
+[4] H. Qi, A. Kumar, R. Calandra, Y. Ma, and J. Malik. In-hand object rotation via rapid motor
+adaptation. In Conference on Robot Learning, pages 1722–1732. PMLR, 2023. URL https:
+//arxiv.org/abs/2210.04887.
+[5] M. Yang, C. Lu, A. Church, Y. Lin, C. Ford, H. Li, E. Psomopoulou, D. A. Barton, and N. F.
+Lepora. Anyrotate: Gravity-invariant in-hand object rotation with sim-to-real touch. arXiv
+preprint arXiv:2405.07391, 2024. URL https://arxiv.org/abs/2405.07391.
+[6] Y. Yuan, H. Che, Y. Qin, B. Huang, Z.-H. Yin, K.-W. Lee, Y. Wu, S.-C. Lim, and X. Wang.
+Robot synesthesia: In-hand manipulation with visuotactile sensing. In 2024 IEEE Interna-
+tional Conference on Robotics and Automation (ICRA), pages 6558–6565. IEEE, 2024. URL
+https://arxiv.org/abs/2312.01853.
+[7] H. Lai, J. Cao, J. Xu, H. Wu, Y. Lin, T. Kong, Y. Yu, and W. Zhang. World model-based
+perception for visual legged locomotion.
+arXiv preprint arXiv:2409.16784, 2024.
+URL
+https://arxiv.org/abs/2409.16784.
+[8] H. Qi, B. Yi, M. Lambeta, Y. Ma, R. Calandra, and J. Malik. From simple to complex skills:
+The case of in-hand object reorientation. In 2025 IEEE International Conference on Robotics
+and Automation (ICRA), pages 14291–14298. IEEE, 2025. URL https://arxiv.org/abs/
+2501.05439.
+[9] J. Wan, X. Liu, and Y. Dong. Dexremoe: In-hand reorientation of general object via mixtures
+of experts, 2025. URL https://arxiv.org/abs/2508.01695.
+[10] J. Wang, Y. Yuan, H. Che, H. Qi, Y. Ma, J. Malik, and X. Wang. Lessons from learning
+to spin “pens”. In Proceedings of The 8th Conference on Robot Learning, volume 270 of
+Proceedings of Machine Learning Research, pages 3124–3138. PMLR, 2025. URL https:
+//proceedings.mlr.press/v270/wang25j.html.
+[11] X. Liu, H. Wang, and L. Yi. Dexndm: Closing the reality gap for dexterous in-hand rotation
+via joint-wise neural dynamics model. arXiv preprint arXiv:2510.08556, 2025. URL https:
+//arxiv.org/abs/2510.08556.
+[12] A. Bhardwaj, M. Wilder-Smith, M. Mittal, V. Patil, and M. Hutter. Viserdex: Visual sim-to-
+real for robust dexterous in-hand reorientation, 2026. URL https://arxiv.org/abs/2604.
+11138.
+[13] L. Wang, Y. Xiang, W. Yang, A. Mousavian, and D. Fox. Goal-auxiliary actor-critic for 6D
+robotic grasping with point clouds. In Proceedings of the 5th Conference on Robot Learning,
+volume 164 of Proceedings of Machine Learning Research, pages 70–80. PMLR, 2022. URL
+https://proceedings.mlr.press/v164/wang22a.html.
+10
+
+
+[14] T. G. W. Lum, M. Matak, V. Makoviychuk, A. Handa, A. Allshire, T. Hermans, N. D. Ratliff,
+and K. Van Wyk. Dextrah-g: Pixels-to-action dexterous arm-hand grasping with geometric
+fabrics. arXiv preprint arXiv:2407.02274, 2024. URL https://arxiv.org/abs/2407.
+02274.
+[15] S. Suresh, H. Qi, T. Wu, T. Fan, L. Pineda, M. Lambeta, J. Malik, M. Kalakrish-
+nan, R. Calandra, M. Kaess, J. Ortiz, and M. Mukadam.
+Neuralfeels with neural
+fields: Visuotactile perception for in-hand manipulation. Science Robotics, 9(96):eadl0628,
+2024. doi:10.1126/scirobotics.adl0628. URL https://www.science.org/doi/10.1126/
+scirobotics.adl0628.
+[16] J. Yin, H. Qi, J. Malik, J. Pikul, M. Yim, and T. Hellebrekers. Learning in-hand translation
+using tactile skin with shear and normal force sensing. In 2025 IEEE International Conference
+on Robotics and Automation (ICRA), pages 5850–5856. IEEE, 2025. URL https://arxiv.
+org/abs/2407.07885.
+[17] L. Heng, H. Geng, K. Zhang, P. Abbeel, and J. Malik. Vitacformer: Learning cross-modal
+representation for visuo-tactile dexterous manipulation, 2025. URL https://arxiv.org/
+abs/2506.15953.
+[18] Y. Hasson, G. Varol, D. Tzionas, I. Kalevatykh, M. J. Black, I. Laptev, and C. Schmid. Learn-
+ing joint reconstruction of hands and manipulated objects. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition, pages 11807–11816, 2019. URL
+https://arxiv.org/abs/1904.05767.
+[19] D. Ha and J. Schmidhuber. World models. arXiv preprint arXiv:1803.10122, 2018. URL
+https://arxiv.org/abs/1803.10122.
+[20] D. Hafner, T. Lillicrap, J. Ba, and M. Norouzi. Dream to control: Learning behaviors by
+latent imagination. In International Conference on Learning Representations, 2020. URL
+https://arxiv.org/abs/1912.01603.
+[21] D. Hafner, J. Pasukonis, J. Ba, and T. Lillicrap. Mastering diverse domains through world
+models. arXiv preprint arXiv:2301.04104, 2023. URL https://arxiv.org/abs/2301.
+04104.
+[22] P. Wu, A. Escontrela, D. Hafner, K. Goldberg, and P. Abbeel. Daydreamer: World models for
+physical robot learning, 2022. URL https://arxiv.org/abs/2206.14176.
+[23] P. Lancaster, N. Hansen, A. Rajeswaran, and V. Kumar. Modem-v2: Visuo-motor world models
+for real-world robot manipulation, 2023. URL https://arxiv.org/abs/2309.14236.
+[24] C. Li, A. Krause, and M. Hutter. Robotic world model: A neural network simulator for robust
+policy optimization in robotics, 2025. URL https://arxiv.org/abs/2501.10100.
+[25] J. Yin and X. Lai. Dreammimic: Learning visuomotor whole-body loco-manipulation via
+world model.
+arXiv preprint arXiv:2608.22278, 2026.
+URL https://arxiv.org/abs/
+2608.22278.
+11
+
+
+A
+Implementation Details
+We provide implementation details for reproducing WM-Craftnet, including the robot/simulator in-
+terface, hyper-parameters, deployable observations, reward design, and sim-to-real randomization.
+A.1
+World Model Training Details
+Table 7 summarizes the world-model and depth-preprocessing settings. The world-model update
+receives a single-step proprioceptive vector, tactile/contact vector, noisy preprocessed depth image,
+previous action, and an episode-start flag; reward is stored only as a prediction target. The RSSM
+performs an observation update at every control step and exposes only the detached deterministic
+feature ht, projected by a small MLP, as actor context.
+World-model data are collected online from PPO rollouts into a ring replay buffer storing propri-
+oception, tactile/contact, noisy depth input, clean crop-only target depth, previous action, reward,
+and episode-start flag. After warmup, contiguous chunks train clean-depth reconstruction, propri-
+oception reconstruction, tactile-contact prediction, reward prediction, and Dreamer-style dynam-
+ics/representation KL terms. The full WSM additionally predicts object pose, value, and object
+shape as training objectives; the shape target is a basis-point-set-to-mesh displacement vector. These
+heads provide additional supervision for object state, shape, and contact-related dynamics, and are
+used during both pretraining and downstream adaptation.
+For pretrained-prior evaluations, we transfer the encoder, multimodal RSSM, depth/proprioceptive
+decoder, and reward predictor. During downstream 49-object PPO training, these components con-
+tinue to adapt with new rollout data, while the actor–critic and task-specific heads are learned for
+the target distribution. This design transfers predictive physical structure across object sets while
+learning control for the new task distribution.
+A.2
+Policy Training Details
+Table 7 lists PPO, control, and reward settings, and Table 8 summarizes deployable and simulation-
+side signals. The actor outputs a relative target update for all 22 hand joints. A signal-level filter
+smooths these targets before execution by the 10 Hz hardware controller.
+The reward favors stable, goal-directed, human-like rotation rather than speed alone:
+rt := λspinrspin
+t
++ λvelrvel
+t
++ λcontactrcontact
+t
++ λdistrdist
+t
++ λτrτ
+t + λworkrwork
+t
++ λara
+t + λctrlrctrl
+t
++ λposerpose
+t
++ rdrift
+t
++ raxis
+t
++ rnospin
+t
+.
+(10)
+The target-axis spin term uses signed incremental rotation projected onto a, clipped by a maximum
+spin rate. Stability terms penalize object velocity, drift, off-axis rotation, high torque, mechanical
+work, large actions, and tracking error; contact and pose terms encourage useful fingertip proximity,
+avoid excessive force or non-tip contacts, and softly favor natural hand postures.
+Episodes reset when the object drops beyond the fall-distance threshold, deviates too far from the
+desired rotation axis, remains below the target-axis spin threshold for too many consecutive steps, or
+reaches the horizon. These resets reduce uninformative exploration after irrecoverable failures and
+keep all baselines under the same stability requirements.
+A.3
+System Identification and Domain Randomization
+Real-world evaluation uses the Sharpa Wave hand with tactile sensing and a wrist-mounted depth
+camera (RealSense L515). The hand controller, wrist camera, and tactile stream run at 10 Hz, and
+simulation uses the same policy/control rate with a 60 Hz physics step. The policy receives the same
+deployable observation/action interface in both domains.
+We identify joint-level dynamics before policy transfer by exciting the real hand with 1 Hz sinu-
+soidal action commands and comparing the measured joint response with simulation. The simulator
+Kp and Kd gains are adjusted to align the amplitude and phase of the simulated trajectories with the
+hardware response. This calibration provides a nominal dynamics model, while domain randomiza-
+tion covers residual mismatch. Figure 7 visualizes the post-calibration joint tracking fit across the
+12
+
+
+Table 7: Compact implementation parameters used in the current WM-Craftnet configuration.
+Parameter
+Value
+System
+Hand
+Sharpa Wave, 22-DoF five-finger hand
+Hardware rates
+hand control / wrist camera / tactile: 10 Hz
+Camera stream
+wrist-mounted, 640 × 480, fixed by 3D-
+printed bracket
+Simulation rates
+physics 60 Hz; observation/control 10 Hz
+World Model
+Type
+Dreamer-style RSSM with multimodal in-
+puts
+Deterministic / stochastic / discrete dims
+512/32/32
+Hidden size / recurrent depth
+512/1
+Actor projection
+512 →64 →32 →16
+Replay capacity / warmup
+256 rows / 10,000 transitions
+Batch size / chunk length / updates
+16/32/10 per PPO epoch
+Optimizer / LR / grad clip
+Adam / 10−4 / 1000
+KL free / dyn scale / rep scale
+1.0/0.5/0.1
+Depth Input
+Policy depth tensor / max depth
+96 × 72/0.4 m
+Temporal dropout / corr.
+0.02/0.95
+Random image rotation
+±0.3◦
+Policy and Control
+Envs / horizon / minibatch / mini-epochs
+1024/16/4096/4
+γ / GAE τ / LR / clip
+0.99/0.95/10−4/0.2
+Policy MLP / activation
+[512, 256, 256] / ELU
+DoF / episode / sim dt / control decimation
+22/500/0.01667/6
+Reward
+Spin / max spin / velocity
+1.0/2.0/ −0.1
+Torque / work / action / control
+−0.003/ −0.003/ −0.002/ −1.0
+Finger distance / hand pose / off-axis
+0.1/1.5/0.001
+Object drift / no-spin / fall penalty
+100.0/ −50.0/ −50.0
+Tip force coef. / thresh. / exp.
+0.9/2.0/0.01
+Randomization
+Object mass train / test
+[0.2, 0.4] kg / [0.1, 1.4] kg
+Friction scale / PD scale
+[0.5, 2.0]/[0.8, 1.2]
+Obs noise / action noise
+[0, 0.05]/[0, 0.04]
+Reset pos. / reset rot.
+[0.035, 0.02, 0.0025] m / 10◦
+External force scale / prob. / decay
+0.5/0.25/0.99
+Gravity curriculum
+1◦→4◦, step 0.05◦
+Table 8: Deployable and privileged information used by WM-Craftnet. The actor is restricted to
+deployable signals; simulator-only state is used for reward, critic training, and diagnostics.
+Signal
+Used by
+Description
+Hand proprioception
+Actor, WM
+normalized 22-DoF joint state and previous
+target history
+Tactile/contact
+Actor, WM
+binary
+contact
+stream
+with
+threshold,
+dropout, and latency noise
+Depth image
+Actor, WM
+noisy wrist depth input; clean depth is used
+only as WM reconstruction target
+Commanded axis
+Actor
+goal direction a ∈{±x, ±y, ±z}
+World-model feature
+Actor
+projected
+deterministic
+RSSM
+feature
+ψ(ht)
+Relative action
+Controller, WM
+22-DoF joint target increment, smoothed be-
+fore execution
+Object state
+Reward/critic only
+pose, velocity, contact force, and fall/reset
+diagnostics in simulation
+hand. The simulated trajectories closely match the real joint responses under the same sinusoidal
+commands, with an average sim-real tracking error below 0.2◦.
+Training randomizes object mass, friction, PD gains, observation/action noise, reset pose, external
+forces, and gravity direction as in Table 7. Object mass is sampled in [0.2, 0.4] kg during training
+and evaluated over a wider test range. Friction and hand-joint gains are randomized to cover contact
+and actuator uncertainty; depth and tactile observations include dropout, noise, small image rota-
+tions, threshold variation, and latency. External forces and a gravity-direction curriculum further
+encourage perturbation recovery instead of memorizing a single palm-up rotation gait.
+B
+Additional Experiments
+We include controlled WSM ablations, large-scale object generalization, and tool-use-style manip-
+ulation.
+B.1
+Additional WSM Mechanism Ablations
+Table 9 compares recurrent history with the predictive WSM objective. LSTM and GRU receive the
+same observation histories but are trained without multimodal prediction losses.
+13
+
+
+Figure 7: Joint-level system identification. Dashed green curves show commanded actions, orange
+curves show real joint states, and blue curves show calibrated simulation states. Across the evaluated
+joints, the average sim-real tracking error is below 0.2◦.
+Table 9: Recurrent-history baselines and Full WSM on the z-axis benchmark (mean ± 95% confi-
+dence interval).
+Method
+Return↑
+EpLen↑
+RotR↑
+OffAxis↓
+AngVar↓
+LSTM (w/o predictive obj.) 621.0 ± 4.3 424.3 ± 2.7 1.186 ± 0.004 1.297 ± 0.006 1.392 ± 0.028
+GRU (w/o predictive obj.)
+497.8 ± 4.5 377.1 ± 2.5 1.095 ± 0.003 1.226 ± 0.007 1.357 ± 0.013
+Full WSM
+753.3 ± 3.6 435.2 ± 1.9 1.293 ± 0.004 1.225 ± 0.006 1.324 ± 0.027
+Full WSM reaches 753.3 return and 1.293 RotR, compared with 621.0/1.186 for LSTM and
+497.8/1.095 for GRU. It also lowers AngVar to 1.324, while its OffAxis 1.225 is comparable to
+GRU’s 1.226. These results separate the benefit of predictive multimodal training from recurrent
+memory alone.
+Table 10 measures how simulation-side auxiliary objectives shape WSM. Removing all auxiliary
+heads yields 688.1 return, while value, pose, and object-shape prediction each improve different
+aspects of the learned state. The value head produces the largest return gain among the single-head
+variants, whereas pose prediction gives the lowest angular-velocity variation. Combining all heads
+achieves the strongest overall return and rotation rate.
+Table 10: Auxiliary-head ablations on the z-axis benchmark.
+Method
+Return↑
+EpLen↑
+RotR↑
+OffAxis↓
+AngVar↓
+No auxiliary heads
+688.1 ± 3.7 433.7 ± 2.0 1.239 ± 0.006 1.229 ± 0.005 1.778 ± 0.138
+Only value head
+737.0 ± 4.9 435.7 ± 2.2 1.291 ± 0.003 1.258 ± 0.007 1.346 ± 0.045
+Only pose head
+690.0 ± 5.8 432.3 ± 2.5 1.221 ± 0.007 1.228 ± 0.008 1.231 ± 0.011
+Only object-shape head 689.2 ± 4.2 428.1 ± 2.2 1.261 ± 0.002 1.255 ± 0.006 1.535 ± 0.032
+Full WSM
+753.3 ± 3.6 435.2 ± 1.9 1.293 ± 0.004 1.225 ± 0.006 1.324 ± 0.027
+14
+
+
+B.2
+Large-Scale Object Set
+Figure 8(a) shows the new 49-object set used for downstream large-scale multi-object policy train-
+ing after WSM pretraining on the nine z-axis objects. The set covers substantial variation in size,
+aspect ratio, curvature, and contact geometry. To examine whether the transferred WSM retains
+structured interaction states at this larger scale, we project evaluation-time recurrent states from the
+downstream policy with t-SNE. Figure 8(b) shows locally coherent trajectories and partially object-
+dependent regions together with substantial overlap. This pattern is consistent with a representation
+that captures both object-dependent geometry and interaction phases shared across objects, rather
+than acting as a strict object-identity classifier.
+(a)
+(b)
+Figure 8: Large-scale downstream analysis. (a) The 49-object set used for multi-object policy train-
+ing. (b) t-SNE projection of evaluation-time WSM recurrent states, with colors denoting object
+identities; locally coherent trajectories, partially separated regions, and shared regions coexist across
+the distribution.
+B.3
+Screwdriver Tool-Use Manipulation
+We also examine screwdriver manipulation beyond benchmark rotation, where elongated geometry,
+local handle contacts, slip risk, and task-dependent adjustment test tool-use-style behavior. Figure 9
+shows that the same WM-Craftnet interface can adjust the screwdriver to a target position in goal-
+conditioned translation (a) and rotate it while maintaining contact (b).
+Figure 9: Screwdriver tool-use manipulation. (a) Goal-conditioned screwdriver translation, where
+the policy adjusts the screwdriver to the target position. (b) Screwdriver rotation, where the policy
+rotates an elongated screwdriver object.
+B.4
+Supplementary rollouts and failure cases.
+Our project website provides supplementary real-world rollouts, qualitative comparisons, and failure
+cases involving depth noise, slip, and difficult contact transitions.
+15

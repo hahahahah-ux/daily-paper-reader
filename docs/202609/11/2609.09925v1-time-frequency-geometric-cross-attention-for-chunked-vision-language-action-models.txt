@@ -1,0 +1,630 @@
+Title: Time-Frequency Geometric Cross-Attention for Chunked Vision-Language-Action Models
+
+URL Source: https://arxiv.org/pdf/2609.09925v1
+
+Published Time: Thu, 10 Sep 2026 00:48:14 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# Time–Frequency Geometric Cross-Attention for Chunked Vision–Language–Action Models 
+
+## Shengye Dong, Haochen Niu, Hao Liu, Peiwen Lin, Chuang Wang, Shanmin Pang 
+
+Abstract 
+
+Modern vision–language–action (VLA) policies predict a whole chunk of actions: one to two seconds of coordinated motion emitted in a single forward pass. Yet an action chunk is essentially a short multivariate trajectory, and inside these models it is represented as a sequence of generic per-timestep hidden tokens and decoded by a linear head. This representa-tion tends to under-serve two structures of motion. The first is frequency : a chunk superimposes a smooth global trend and fine corrective motion across several time scales, and a single token entangles them. The second is cross-phase geometric relationships : within a chunk, the motions of dif-ferent phases (reach, contact, grasp adjustment, settling) un-fold along very different directions—near-orthogonal in the representation space, yet tightly related for the task, and aris-ing across the time axis (between phases) rather than at the same instant. Dot-product attention scores alignment by an inner product, so it favors similar (aligned) tokens and is least sensitive exactly near orthogonality, leaving such cross-phase relationships to be recovered by the network through a detour. We introduce Time–Frequency Geometric Cross-Attention (TFGCA) , a drop-in module that repairs both blind spots. TFGCA uses a per-dimension learnable stationary wavelet transform (SWT) to decompose the action chunk into time– frequency tokens, and each time token then retrieves infor-mation from them through a cross-attention that fuses the dot product (similarity) with the wedge -product magnitude (sensitive to near-orthogonality) via a learnable weight. The module uses a zero-initialized residual, so it reproduces the base behavior exactly at initialization and can be dropped onto a pretrained VLA and fine-tuned jointly with it. Relative to the same-source base, TFGCA improves the near-saturated in-distribution LIBERO by +1 .5 on average, the OOD bench-mark LIBERO-Plus by +6 .3, and the randomized average under RoboTwin domain randomization by +28 .5, and raises the overall success rate on three real-robot AgiBot A2 tasks by +11 .67 percentage points —with the gains larger under out-of-distribution conditions. 
+
+## 1 Introduction 
+
+Vision–language–action models have converged on a com-mon output interface: rather than emitting one action per step, they predict a chunk of T future actions at once and execute some prefix of it before re-planning. Flow-matching and dif-fusion policies such as π0 (Black et al. 2024), π0.5 (Physical Intelligence et al. 2025), RDT-1B (Liu et al. 2025), and the action-chunking transformer ACT (Zhao et al. 2023) all com-mit to a T × D trajectory in a single forward pass, where T is the chunk horizon and D the number of action dimensions. Chunked prediction improves temporal consistency and lets a policy plan short-horizon coordination instead of reacting one step at a time. The chunk is therefore a structured object : a short mul-tivariate trajectory whose value lies in how its dimensions move together over time. Current VLAs, however, treat it as an unstructured one. The action tokens leaving the trans-former are generic hidden vectors, and a single linear head maps each to an action. Two properties of motion that a trajectory model should exploit are left implicit. 
+
+Frequency structure. A manipulation chunk overlays mo-tion at several time scales. A slow transport component carries the end-effector across the workspace, while faster components perform contact-time corrections, grasp ad-justments, and settling. Packed into one hidden token per timestep, these scales are entangled, and the model has no explicit handle on “the trend” versus “the correction.” 
+
+Cross-phase geometric relationships. Skilled manipula-tion unfolds over time into several phases—reach, contact, grasp adjustment, settling—that are related for the task yet can act along very different directions in the representa-tion space, near-orthogonal in the limit. Where does this near-orthogonal “division of labor” occur? Our analysis of RoboTwin 2.0 bimanual data shows that it hardly ap-pears at the same instant, but unfolds sequentially along the 
+
+time axis —trajectories successively occupy a set of near-orthogonal subspaces in ordered temporal phases, which we call Temporal Orthogonal Division-of-Labor (TO-DoL) 
+
+(metrics and robustness in Appendix H). Dot-product atten-tion, however, measures only alignment and is least sensitive exactly near orthogonality, so it must spend extra capac-ity to re-encode such cross-phase relationships as similarity. This motivates an inductive hypothesis: giving attention an extra scoring channel sensitive to near-orthogonal compo-nents (the wedge product) may let each time token retrieve such cross-phase relationships more directly from the whole chunk’s time–frequency evidence (Section 4). Frequency structure and geometric attention have prece-dents in time-series forecasting (e.g., compact forecasters that pair a wavelet transform with a geometric attention). arXiv:2609.09925v1 [cs.AI] 9 Sep 2026 The VLA setting is different in kind: an action chunk is a short, non-periodic trajectory over actual control degrees of freedom , and any added module rides on a pretrained multi-billion-parameter backbone whose learned weights it must not disturb at initialization. We therefore design a time– frequency geometric attention module, TFGCA, purpose-built for VLA action prediction; its design parts and contri-butions follow. 
+
+Contributions. We introduce TFGCA , a time–frequency geometric cross-attention module for VLA action prediction that supplies chunked policies with two motion structures they previously ignored: multi-scale frequency content, and cross-phase geometric relationships within the chunk that fall along near-orthogonal directions. Its two core parts are as follows (full method in Section 4). 
+
+• (C1, frequency) Per-control-dimension action-space wavelet tokenization. We project the hidden action to-kens to action space and apply a per-dimension learnable 
+
+stationary wavelet transform (SWT), turning each con-trol dimension’s trajectory into length-preserving, multi-resolution frequency tokens—supplying the multi-scale frequency structure a base VLA leaves implicit. 
+
+• (C2, geometry) A time-to-time–frequency geometric cross-attention. Each time token retrieves information from the whole chunk’s time–frequency tokens through a learnable blend of the dot product (similarity) and the wedge product. Proposition 1 shows the wedge is sen-sitive to near-orthogonal directions in the representation space and can realize orderings the dot channel alone cannot; from this we propose a geometry-sensitive induc-tive hypothesis —that cross-phase, cross-time-scale cor-relations within a chunk often fall along dot-insensitive near-orthogonal directions, for which the wedge channel can provide a direct score—whose real-task payoff is an-swered empirically in Section 5. 
+
+## 2 Related Work 
+
+Vision–language–action models and action chunking. 
+
+VLAs map instructions and observations to robot actions by adapting large pretrained vision–language backbones. Discrete-token approaches such as RT-2 (Brohan et al. 2023) and OpenVLA (Kim et al. 2024) autoregress action tokens, while Octo (Octo Model Team 2024), diffusion policy (Chi et al. 2023), π0 (Black et al. 2024), π0.5 (Physical Intelligence et al. 2025), and RDT-1B (Liu et al. 2025) predict continu-ous action chunks with diffusion or flow matching (Lipman et al. 2023). Action chunking, introduced for imitation with ACT (Zhao et al. 2023), predicts a block of future actions and executes a prefix, improving temporal coherence, of-ten with temporal ensembling across overlapping chunks to reduce discontinuities. TFGCA operates inside this chunked-prediction interface: it is a representation of the chunk placed between the backbone and the action head, orthogonal to how the chunk is supervised (flow matching, diffusion, or regres-sion). 
+
+Frequency-domain methods for sequences and actions. 
+
+Frequency-domain inductive biases are well studied in fore-casting: Autoformer (Wu et al. 2021) and FEDformer (Zhou et al. 2022) inject seasonal–trend decomposition and Fourier attention, FreTS (Yi et al. 2023) learns in the frequency domain, and SimpleTM (Chen et al. 2025a) couples a sta-tionary wavelet transform with a geometric attention. Within VLAs, FAST (Pertsch et al. 2025) applies a DCT to ac-tion chunks to produce compact discrete tokens for au-toregressive policies, using frequency for tokenization and compression . Our use is different: we treat frequency as a multi-resolution, time-localized feature that attention con-sults, on a continuous flow-matching policy; the stationary (non-decimating) wavelet preserves sequence length, so ev-ery band stays aligned with the original timesteps and can serve directly as attention keys. 
+
+Geometric structure in attention. Geometric-algebra networks (the Geometric Algebra Transformer (Brehmer et al. 2023); Clifford neural layers (Brandstetter et al. 2023)) represent data as multivectors and act on them equivari-antly. We borrow only a single scalar—the wedge-product magnitude—and use it as an attention score alongside the in-ner product, keeping the module lightweight and free of mul-tivector bookkeeping while capturing the one property we need: sensitivity to orthogonality. Unlike iTransformer (Liu et al. 2024), which treats variables (dimensions) as atten-tion tokens, our frequency tokens jointly encode the multi-dimensional action at each time–band position, and the cross-attention retrieves along time–frequency rather than attend-ing between dimensions. 
+
+## 3 Preliminaries 
+
+VLA action prediction as trajectory forecasting. We build on a flow-matching VLA ( π0.5). Given observations (images and a language instruction) and proprioceptive state, the policy predicts an action chunk a ∈ RT ×D, where T is the chunk horizon and D the number of action dimensions. Flow matching trains a velocity field: sample noise ϵ and a time τ ∈ [0 , 1] , form the interpolant xτ = τ ϵ + (1 − τ ) a,and regress the network output vθ (xτ , ·) toward the target velocity u = ϵ − a with the loss 
+
+LFM = Eτ,ϵ vθ (xτ , ·) − (ϵ − a) 2. (1) The backbone is a decoder transformer that jointly attends over a multimodal prefix (image and language tokens) and an action suffix; the last T suffix positions produce hidden action tokens H ∈ RT ×d (with d the model width), which a linear action head maps to vθ . TFGCA is a transformation 
+
+H 7 → ˜H inserted just before this head, applied identically in training and in each denoising step at inference. 
+
+Dot-product attention prefers similarity. For queries Q
+
+and keys K split into heads of dimension dh, attention weights come from q⊤ 
+
+> i
+
+kj /√dh, largest when qi and kj are aligned and vanishing when orthogonal, so in a given repre-sentation two orthogonal tokens receive only a small direct score. A deep network can of course relearn features that re-encode orthogonal relationships as aligned and route them through the similarity channel (which is why existing dot-product policies work); but that spends representational ca-Q 
+
+> K, V
+> T
+> Bd
+> su ffi x_out
+> (B, T, d)
+
+Cross-Geometric Attention           
+
+> attn = (1 − β j) · softmax(Q · K) + β j· softmax(‖Q ∧K‖)
+> Dot-Product Attention
+> softmax(Q · K) — similarity
+> q
+> k
+> q · k = 0
+> orthogonal pair:
+> dot ignores it
+> Cross (Wedge) Attention
+> softmax(‖Q ∧K‖) — complementarity
+> q
+> k
+> ‖q ∧k‖ = max
+> = spanned area:
+> wedge attends to it
+> Q : time tokens (T) · K, V : frequency tokens ( N = T·(J+1) )
+> re fi ned_su ffi x
+> = su ffi x + Δ
+> (B, T, d)
+> +Δ=
+> action_out_proj
+> (Projection)
+> vt
+> predicted velocity
+> (B, T, A)
+> action_proj
+> (Projection)
+> ……
+> action_view
+> (B, T, A)
+> d1
+> d2
+> ⋮aJ
+> Per-Dimension SWT
+> db2 · per-dimension learnable
+> 1
+> 2
+> J+1
+> …
+> …
+> …
+> freq_tokens
+> (B, T·(J+1), d)
+> Data / Feature
+> input / output tensor
+> New Module
+> newly introduced
+> Backbone
+> existing / projection
+
+Figure 1: TFGCA architecture: a drop-in module between the VLA transformer output and the action head. The frequency branch (action-space projection → per-dimension SWT → frequency tokens) supplies the keys/values for the geometric cross-attention, whose queries are the time tokens; its output is written back residually and passed through the action head to give the velocity 
+
+vθ . (Blue: data tensors; amber: new modules; gray: backbone.) pacity, and an explicit orthogonality-sensitive signal removes the detour (formalized in the scope remark of Proposition 1). 
+
+The wedge product measures orthogonality. The wedge-product magnitude is the area of the parallelogram q, k span, with a closed form via the Cauchy–Schwarz identity (no antisymmetric-tensor construction): 
+
+∥q ∧ k∥2 = ∥q∥2 ∥k∥2 − (q⊤k)2. (2) It is geometrically complementary to the inner product: zero when q ∥ k, maximal (for fixed norms) when q ⊥ k. Using both scores gives attention access to alignment and orthog-onality at once. 
+
+## 4 Method 
+
+TFGCA transforms the hidden action tokens H ∈ RT ×d into refined tokens ˜H ∈ RT ×d in three stages (overall structure in Figure 1): a projection to a per-dimension control space (Section 4.1), a per-dimension wavelet tokenization (Sec-tion 4.2), and a geometric cross-attention that fuses the two (Section 4.3). Section 4.4 covers the identity-at-initialization construction that makes the module safe to attach to a pre-trained policy, and Section 4.5 gives the wedge’s theoretical properties and the mechanism explanation. 
+
+4.1 Action-Space Projection 
+
+The transformer’s action tokens live in an abstract d-dimensional space with no explicit per-control-dimension meaning, whereas the structure we want to model—the frequency content of each action dimension and their coordination—is defined in the action coordinates the policy actually outputs. We therefore first project each token to a 
+
+per-dimension control-space view ,
+
+Zact = ActionProj( H) ∈ RT ×D, (3) with a dedicated linear map. The physical meaning of the D
+
+output channels depends on the embodiment’s action param-eterization: in RoboTwin 2.0 and AgiBot A2 they correspond to joint-space actions; in LIBERO, the 7 channels correspond to Cartesian end-effector increments (3-D translation, 3-D rotation) and a 1-D binary gripper command, not 7 joint an-gles. The projection is initialized so that Zact is nonzero from the first step, which matters for gradient flow (Section 4.4). To give this projection explicit physical grounding, we add an auxiliary alignment loss that supervises Zact toward the 
+
+stop-gradient ground-truth action chunk a,
+
+Lalign = Zact − sg( a) 2, (4) where sg( ·) is the stop-gradient (only the projection is up-dated, no gradient flows to the target); training minimizes 
+
+L = LFM + λ Lalign for a small weight λ (per-benchmark values in Appendix B). This loss is part of the full model; removing it is the “w/o alignment” ablation (Section 5.1). 
+
+4.2 Per-Dimension Learnable SWT Tokenization 
+
+Given the control-space view Zact , we decompose each ac-tion dimension’s length-T sequence into multiple frequency bands with a stationary wavelet transform (SWT; Figure 2). Unlike the standard (decimated) wavelet transform, the SWT does not downsample: every band has length T , so bands stay aligned with the original timesteps and can serve as at-tention keys. One level splits an input approximation a(j)into a coarser approximation and a detail band using a low-pass/high-pass filter pair (h, g ) applied at dilation 2j ,
+
+a(j+1)  
+
+> t
+
+= X
+
+> k
+
+hk a(j) 
+
+> t+2 jk
+
+, d(j+1)  
+
+> t
+
+= X
+
+> k
+
+gk a(j) 
+
+> t+2 jk
+
+, (5) recursing on the approximation branch. With J levels this yields J detail bands and one final approximation, 
+
+{d(1) , . . . , d (J), a (J)}, ordered high to low frequency. We make three design choices specific to robot actions. 
+
+Per-dimension learnable filters. Each action dimension gets its own filter pair, initialized to Daubechies-2 ( db2 ,length 4; Haar is an option). db2 ’s two vanishing moments make its detail coefficients cancel locally linear motion and respond only to curvature, suiting the long, smooth segments common in manipulation; filters are learnable, so each di-mension specializes a task-relevant decomposition on top of this strong prior. 
+
+Per-dimension DC removal. A smooth demonstration’s energy sits mostly at zero frequency (a near-constant off-set) and would swamp the detail bands, so we subtract each dimension’s mean over time before decomposition. We de-liberately do not divide by the standard deviation: the ampli-tude contrast between high-motion moments (contact, grasp) and stationary segments is exactly the signal cross-attention should key on, and normalizing it away would amplify noise in still segments. 
+
+Optional derivative pre-processing. Because action se-quences can be low-frequency-dominated even after DC re-moval, the view may be finite-differenced before the SWT to move task-relevant energy into higher bands (the order used per benchmark is in Appendix B). At each (time, band) position, a per-band linear map em-beds the whole D-dimensional action vector at that position into the model width d (RD → Rd), plus a band-type em-bedding and a time-position embedding. This step jointly encodes the multiple action dimensions at the same time– band position into a single token—cross-dimension structure is carried as token content rather than paired dimension-by-dimension by the subsequent attention. Stacking the J+1 
+
+bands over T timesteps and flattening (band index fastest) gives a sequence of frequency tokens 
+
+F ∈ R T (J+1) ×d. (6) 
+
+4.3 Dot-Plus-Wedge Cross-Attention 
+
+TFGCA’s attention is a cross -attention: queries are the time tokens H, and keys/values are the frequency tokens F . Each time token thus retrieves evidence from the whole chunk’s time–frequency tokens (each token jointly encoding multi-dimensional action content at one time–band position). With multi-head projections Q = WQH, K = WK F , V = WV F
+
+(head dimension dh, scale s = 1 /√dh), we form two score matrices, 
+
+Sdot  
+
+> ij
+
+= s (q⊤ 
+
+> i
+
+kj ), (7) 
+
+Swed  
+
+> ij
+
+= s
+
+q
+
+∥qi∥2∥kj ∥2 − (q⊤ 
+
+> i
+
+kj )2. (8) contact     
+
+> action dim (DC-removed)
+> d¹ high
+> d²
+> a² trend
+> 010 20 30 40
+
+Figure 2: A per-dimension SWT ( db2 ) decomposes a single action-dimension sequence (top, DC-removed per dimen-sion) into multi-resolution bands. High-frequency jitter at the contact moment (shaded) concentrates in d(1) , while the final approximation a(2) retains the smooth trend—trend and correction are decoupled into different bands. We convert each score matrix to attention weights with its own softmax and blend them with a learnable scalar. Let 
+
+β = σ(ℓ) be a global learnable mixing weight (a single scalar logit ℓ, initialized so β = 0 .5). Then 
+
+A = (1 − β) softmax( Sdot ) + β softmax( Swed ). (9) This two-softmax-then-blend form (rather than one softmax over a pre-summed score) keeps each channel a proper dis-tribution and lets the model weight alignment (dot) against 
+
+orthogonality (wedge) with the learnable β. The attended value is projected and added residually, 
+
+˜H = H + WO
+
+ A V . (10) 
+
+4.4 Identity at Initialization and Integration 
+
+The output projection WO is zero-initialized, so at initializa-tion ˜H = H and the module reproduces the base prediction exactly on attachment. This is the standard zero-initialized residual paradigm (Zhang, Rao, and Agrawala 2023; Alayrac et al. 2022; Hu et al. 2022; Bachlechner et al. 2021). So that the module can leave the identity map, we zero only WO and keep the value path (band embeddings and action-space pro-jection) nonzero: the initial gradient ∇WO L = δ (AV )⊤ is then generically nonzero, whereas zeroing V too would trap the module at the identity (formal statement in Appendix I). This preserves function at initialization only —it eases drop-in but does not guarantee the fine-tuned model beats the base (Section 5.3 and Section 6). The added parameters are neg-ligible (about 4.23 M, roughly 0.10% of the π0.5 backbone; breakdown in Appendix G.2). 
+
+4.5 Theoretical Properties and Mechanism 
+
+We record the property that formalizes the wedge channel; its proof is short and follows from the definitions. Proposition 1 (Alignment–orthogonality decomposition and order separation) . For any nonzero q, k ∈ Rdh , (q⊤k)2 +
+
+∥q ∧ k∥2 = ∥q∥2∥k∥2; after norm normalization, ˆs =
+
+q⊤k/ (∥q∥∥ k∥) and ˆw = ∥q∧k∥/(∥q∥∥ k∥) satisfy ˆs2 + ˆ w2 =1 (with ˆs = cos θ and ˆw = |sin θ| for θ the angle between q
+
+and k). Thus the dot and wedge scores are two orthogonal co-ordinates on the unit circle of pairwise relatedness—the dot product reads only ˆs and is blind to the ˆw axis along which near-orthogonal relationships vary. Consequently there is an order separation : fix q̸ = 0 and two equal-norm keys 
+
+∥ka∥ = ∥kb∥ = κ with q⊤ka > q ⊤kb ≥ 0; then 
+
+• the dot channel under any monotone softmax has 
+
+Adot (ka) > A dot (kb)—it must place more weight on the more-aligned ka and can never favor the more-orthogonal 
+
+kb;
+
+• the wedge channel has ∥q ∧ ka∥ < ∥q ∧ kb∥ and hence 
+
+Awed (kb) > A wed (ka).Therefore, once β exceeds a threshold β⋆ = ∆ dot /(∆ dot +∆wed ) ∈ (0 , 1) (with ∆dot = Adot (ka) − Adot (kb) > 0,
+
+∆wed = Awed (kb) − Awed (ka) > 0), the blend A = (1 −
+
+β)Adot + βA wed favors the near-orthogonal key ( A(kb) >A(ka))—a ranking no dot-product score can realize . Such a 
+
+β exists and is reachable by the learnable weight; not every 
+
+β > 0 flips the order. Proof. The first identity is the Lagrange (Cauchy–Schwarz) identity; dividing by ∥q∥2∥k∥2 gives ˆs2 + ˆ w2 = 1 . The two per-channel orderings follow from monotonicity of the softmax and, for the wedge channel, from ∥q ∧ k∥2 =
+
+∥q∥2κ2 − (q⊤k)2 with (q⊤ka)2 > (q⊤kb)2. For the blend, 
+
+A(kb) − A(ka) = β ∆wed − (1 − β) ∆ dot , which is positive iff β > ∆dot /(∆ dot + ∆ wed ) = β⋆; since ∆dot , ∆wed > 0
+
+we have β⋆ ∈ (0 , 1) , and at β = 1 the blend equals the wedge channel, which already flips the order. 
+
+Representational-complexity view. ∥q∧k∥2 is a quadratic form in (q, k ); a dot product can reproduce it only after a quadratic feature lift ϕ(x) = vec( xx ⊤) of dimension up to 
+
+O(d2
+
+> h
+
+), whereas the wedge computes it in closed form at 
+
+O(dh) via Cauchy–Schwarz. 
+
+Scope of the claim. This separation holds at a fixed repre-sentation . Because Q, K come from learnable projections, a deep network can in principle relearn features that re-encode orthogonal relationships as aligned ones and route them through the dot channel, which is why existing dot-product policies work. Proposition 1 is therefore not an impossibility result for dot-product models; it states that the wedge sup-plies this ordering directly, without relearning features or a quadratic lift , a low-cost inductive bias whose payoff on real tasks is answered empirically in Section 5 (Figure 3 gives a 
+
+dh=2 instance). 
+
+Mechanism. Figure 3 visualizes Proposition 1 on a three-phase toy example: after the softmax the dot and wedge channels put their weight on opposite (aligned vs. orthog-onal) keys, and the learnable β interpolates between them. From this we hypothesize that cross-phase correlations within a chunk often fall along near-orthogonal directions the dot (a) geometry        
+
+> 45°
+> 90°
+> q₀ = k₀
+> k₁
+> k₂
+> (b) score vs. angle
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> 0°
+> k₀
+> 45°
+> k₁
+> 90°
+> k₂
+> dot ∝cos θ wedge ∝sin θ
+> angle θ between q₀ and k ⱼ
+> normalized score
+> (c) attention (softmax)
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.434
+> 0.214
+> k₀
+> 0.353 0.353
+> k₁
+> 0.214
+> 0.434
+> k₂
+> attention from q₀
+> dot → aligned k₀ wedge → orthogonal k₂
+
+Figure 3: Toy example ( dh=2 , q0 along axis A). (a) the three keys make angles 0◦/45 ◦/90 ◦ with q0; (b) normalized scores versus angle— dot ∝ cos θ (falls with angle), wedge ∝ sin θ
+
+(rises with angle), crossing at 45 ◦, exactly the ˆs2 + ˆ w2 =1 of Proposition 1; (c) after the softmax the two attention distributions are flipped : the dot channel gives its weight to the aligned k0 (0.434), the wedge channel to the orthogonal 
+
+k2 (0.434). product misses and that the wedge can score them directly— supported by the TO-DoL analysis of Section 1. Its real benefit is evaluated empirically (Section 5); the causal attri-bution ( Q/K routing analysis and OOD ablations) is left to future work (Section 6). 
+
+## 5 Experiments 
+
+We evaluate TFGCA in four settings: LIBERO (Liu et al. 2023) (Section 5.1, full-suite in-distribution performance and component ablations), LIBERO-Plus (Fei et al. 2025) (Section 5.2, OOD generalization), RoboTwin 2.0 (Chen et al. 2025b) (Section 5.3, single-task, clean and domain-randomized), and the AgiBot A2 real robot (Section 5.4). Dataset sources, per-benchmark training and evaluation hy-perparameters (optimizer, learning rate, chunk length, SWT levels, alignment-loss weight, etc.), and the training hardware and wall-clock times are all listed in Appendices A, B, and G; on each benchmark TFGCA and its same-source reproduced 
+
+π0.5 base share consistent data, training budget, and evalu-ation, differing only in the TFGCA-specific SWT/geometry configuration. The empirical emphasis across these four settings is TFGCA’s robustness under out-of-distribution (OOD) conditions : beyond the near-saturated in-distribution LIBERO, evaluation covers the unseen perturbations of LIBERO-Plus, RoboTwin domain randomization, and the real AgiBot A2 robot. We report each setting separately. 
+
+5.1 LIBERO: Full-Suite Experiments 
+
+Setup. We evaluate TFGCA attached to π0.5 on the four LIBERO task suites (Spatial, Object, Goal, Long/L10), against the π0.5 base (reported value and our reproduction); a broader comparison with external methods is deferred to Appendix C. Because the base success rate is already high (∼97% average), LIBERO is a near-saturated in-distribution setting. LIBERO is also single-arm (end-effector-delta con-trol), so the specific bimanual time-axis division-of-labor of TO-DoL (Section 1) does not arise here; even so, the wedge remains a general scoring channel sensitive to the near-orthogonal components the dot product misses, and can still supply complementary information in-distribution. The Method Spatial Object Goal Long Avg                                 
+
+> π0.5(reported) 98.8 98.2 98.0 92.4 96.9
+> π0.5(repro.) 95.2 99.6 97.2 94.6 96.7
+> TFGCA (full) 98.5 99.4 97.7 97.0 98.2
+> w/o SWT 96.8 99.1 97.1 97.8 97.7 w/o geometry 97.2 99.7 97.6 96.5 97.8 w/o alignment 94.9 99.5 98.5 95.5 97.1
+
+Table 1: LIBERO success rate (SR%) on the four suites and the average. TFGCA and the reproduced π0.5 base are run under the same protocol; the π0.5 reference is the re-ported value (Physical Intelligence et al. 2025). A broader comparison against 11 external methods (DP, OpenVLA, SpatialVLA, CoT-VLA, π0/-FAST, GR00T, OpenVLA-OFT, Fast-WAM, X-VLA) is given in Appendix C. full model is weakly but consistently best on the four-suite average below, though at LIBERO’s saturation these gaps are small and we do not read them as isolating the wedge’s effect. Both the ablations and the full TFGCA are trained on our reproduced π0.5. Table 1 reports the full TFGCA to-gether with per-component ablations: “w/o SWT” removes the wavelet frequency branch (C1); “w/o geometry” removes the wedge channel, reducing the attention to pure dot product (C2); “w/o alignment” disables the optional alignment loss of Section 4.1. 
+
+On near-saturated LIBERO, TFGCA still delivers a con-sistent average gain. Relative to our reproduced π0.5 base (96.7% average), full TFGCA lifts the four-suite average to 
+
+98.2% —a +1 .5 net gain despite only ∼3 points of head-room, and it raises the hardest suite (Long) from 94.6 to 
+
+97.0 ; the primary evidence for OOD robustness comes from the later evaluations. The component ablation illustrates the joint necessity of the three components in-distribution: re-moving the wavelet frequency branch (w/o SWT), the wedge channel (w/o geometry), or the alignment loss (w/o align-ment) each lowers the four-suite average (to 97.7, 97.8, and 97.1 respectively), with w/o alignment dropping the most. 
+
+5.2 LIBERO-Plus: OOD Generalization 
+
+Setup. LIBERO-Plus applies seven families of out-of-distribution perturbations to LIBERO tasks—camera view-point (Camera), robot initialization (Robot), language rephrasing (Language), lighting (Light), background (Back-ground), sensor noise (Noise), and object layout (Layout)— reporting a success rate per family and a Total. All policies are trained only on clean (unperturbed) LIBERO and then tested under each perturbation, so LIBERO-Plus measures OOD generalization to unseen perturbations. We compare TFGCA attached to π0.5 against the same-source reproduced base, both self-tested under the same protocol (Table 2). 
+
+On LIBERO-Plus, TFGCA improves broadly over its same-source base. Under the same protocol, TFGCA beats the reproduced base (66.7) on six of the seven perturba-tions, and the Total rises from 66.7 to 73.0 ( +6 .3), with the gains concentrated on the base’s hardest families—Noise, Robot, and Camera (per-family in Table 2; the full per-suite 
+
+× per-perturbation results are in Appendix E). The compo-nent ablation mirrors LIBERO but with a different ordering under OOD: removing the wedge channel (w/o geometry) drops the Total the most (to 69.7, −3.3), ahead of w/o align-ment (71.9) and w/o SWT (72.1)—the reverse of the near-saturated in-distribution case (Section 5.1), where alignment mattered most, consistent with the geometry channel con-tributing more precisely under out-of-distribution perturba-tions. 
+
+5.3 RoboTwin: Single-Task (Clean and Randomized) 
+
+Setup. All policies are trained only on RoboTwin 2.0 clean (no domain randomization) demonstrations for 30k steps ,then tested separately in clean and randomized environ-ments. Since randomization is never seen during training, the randomized column measures zero-shot generalization 
+
+to unseen perturbations. Table 3 compares TFGCA (attached to π0.5) against the π0.5 base under the same protocol; a full comparison with RoboTwin leaderboard baselines (DP, ACT, DP3, RDT, π0) is in Appendix D. 
+
+TFGCA improves the base on both clean and random-ized, and more so under OOD. Relative to π0.5, TFGCA improves the six-task mean by +3 .7 on clean and +28 .5
+
+on randomized (randomization is never trained on, so the randomized column measures zero-shot generalization). Its randomized average of 42.7 is also the highest among all methods in the Appendix D comparison—about 24 points above the next best—while non-pretrained baselines collapse almost entirely under randomization. The most dramatic are click_bell and stack_bowls_three: π0.5 nearly collapses un-der randomization ( ≈6%), whereas TFGCA holds 86% and 
+
+59% .
+
+The largest randomized gains are on contact/multi-stage tasks—a correlation, not causal proof. These tasks (click_bell, stack_bowls_three, turn_switch) are consistent in direction with the Section 4.5 motivation, but this is only a task-level correlation—handover_block dips from 13 to 11 on randomized, within the binomial confidence interval at 
+
+n=100 and better read as noise. The only two clean regres-sions (open_microwave, stack_bowls_three) also occur on near-saturated tasks and still show clear randomized gains, so they look like saturation noise. Component net contribu-tions are assessed by the Section 5.1 ablation. 
+
+5.4 AgiBot A2: Real-Robot Validation 
+
+We further conduct a real-robot evaluation on AgiBot A2, comparing TFGCA against the π0.5 base on three manipula-tion tasks (Table 4). Each task is run 20 times, for 60 trials in total; the phase decomposition, success criteria, and test protocol of each task are given in Appendix F. Across the three real-robot tasks, TFGCA attains an overall success rate of 61.67% , above the π0.5 base’s 50.00% , an improvement of 11.67 percentage points . All three tasks improve, with the largest gain on the pull-a-tissue-from-the-box task ( +15 points). This indicates that TFGCA improves multi-stage manipulation and object interaction on a real robot, beyond the simulation benchmarks. Method Camera Robot Language Light Background Noise Layout Total                                          
+
+> π0.5(our reproduced base) 42.1 62.9 77.2 96.3 88.4 38.4 79.6 66.7
+> TFGCA (ours, 30k) 51.5 73.4 81.8 96.4 87.8 52.3 81.7 73.0
+> w/o SWT 46.7 74.2 80.7 93.8 87.4 54.2 82.4 72.1 w/o geometry 41.1 67.9 81.0 94.6 87.1 49.8 83.4 69.7 w/o alignment 49.6 70.5 79.1 97.4 89.1 51.1 82.7 71.9
+
+Table 2: LIBERO-Plus success rate (%) across seven perturbation families and the Total. All rows are self-tested under the same protocol: our reproduced same-source base, the TFGCA-augmented model, and its three component ablations (w/o SWT, w/o geometry, w/o alignment; cf. Table 1).                 
+
+> Task π0.5TFGCA (ours)
+> open_microwave 93 / 27 88 / 36 stamp_seal 15 / 5 19 / 3 handover_block 57 / 13 72 / 11 turn_switch 41 / 28 54 / 61 stack_bowls_three 83 / 6 74 / 59 click_bell 79 / 6 83 / 86 Average 61.3 / 14.2 65.0 / 42.7
+
+Table 3: RoboTwin 2.0 success rate (%); each cell is clean / randomized . π0.5 and TFGCA (ours) are run under the same protocol (Aloha-AgileX, 30k steps, 100 evaluations each). The last row is the 6-task average. A full comparison with leaderboard baselines (DP, ACT, DP3, RDT, π0) is given in Appendix D.              
+
+> Task TFGCA π0.5∆
+> Soap into box 6/20 (30%) 4/20 (20%) +10 pts Plush toys into basket 19/20 (95%) 17/20 (85%) +10 pts Pull a tissue 12/20 (60%) 9/20 (45%) +15 pts
+> Overall 37/60 (61.67%) 30/60 (50.00%) +11.67 pts
+
+Table 4: AgiBot A2 real-robot success rate. 
+
+## 6 Discussion and Limitations 
+
+Boundary of the evidence. Identity initialization (Sec-tion 4.4) only guarantees that the module matches the base pointwise at initialization —a statement about attachment safety, not a theoretical guarantee that the jointly fine-tuned model beats the base. Effectiveness is instead established empirically: across all four settings TFGCA improves over the same-source base in a consistent direction (Section 5), and the occasional small regressions on near-saturated tasks (Section 5.3) do not change this overall conclusion. 
+
+Limitations. The frequency framing is weaker at short horizons : LIBERO’s T = 10 and single SWT level make the decomposition close to a single trend/detail split, so the frequency narrative is more solid on the T = 50 , two-level, second-order-difference RoboTwin setting. 
+
+Future work. First, linking TO-DoL to the wedge channel :a Q/K routing analysis can test whether the wedge really moves attention mass onto the cross-phase token pairs with “small dot but large wedge,” and, paired with a dot-only ablation under OOD, could upgrade the mechanism from a motivating hypothesis to evidence. Second, task-dependent inference frequency : how often a chunked policy should re-plan appears to interact with a task’s reactivity, and the mod-ule’s frequency view may help predict a good setting. Third, 
+
+chunk-boundary diagnostics : chunked policies jump where consecutive chunks disagree, and a boundary-discontinuity metric (e.g., spectral arc length in kinematics (Balasubrama-nian et al. 2015)) would make this observable and connect the frequency view to a concrete smoothness quantity. 
+
+## 7 Conclusion 
+
+Chunked VLA policies under-use the structure of the tra-jectories they emit, missing both the multi-scale frequency content of motion and the cross-phase, near-orthogonal re-lationships within a chunk that dot-product attention can re-trieve only indirectly (it is least sensitive exactly near orthog-onality and must re-encode such relationships as similarity). Time–Frequency Geometric Cross-Attention addresses both with a single drop-in module: a per-dimension control-space wavelet tokenization of the action chunk (jointly encoding the multi-dimensional action content at each time–band po-sition), and a cross-attention in which each time token re-trieves information from the whole chunk’s time–frequency tokens through a learnable blend of similarity and geometric difference. The module uses a zero-initialized residual, so it reproduces the base output exactly at initialization, easing drop-in onto a pretrained policy and joint fine-tuning with it. Empirically, TFGCA raises overall success on RoboTwin and improves more under domain randomization; on LIBERO it yields an average gain on a near-saturated benchmark, and on its OOD variant LIBERO-Plus it improves the Total by 
+
++6 .3 over the same-source base; on the real AgiBot A2 robot the overall success rate rises from 50.00% to 61.67% . These gains are consistent in direction under varying degrees of out-of-distribution conditions. References 
+
+Alayrac, J.-B.; Donahue, J.; Luc, P.; Miech, A.; Barr, I.; Hasson, Y.; Lenc, K.; Mensch, A.; Millican, K.; Reynolds, M.; et al. 2022. Flamingo: A Visual Language Model for Few-Shot Learning. In Advances in Neural Information Pro-cessing Systems (NeurIPS) .Bachlechner, T.; Majumder, B. P.; Mao, H. H.; Cottrell, G. W.; and McAuley, J. 2021. ReZero is All You Need: Fast Convergence at Large Depth. In Conference on Uncertainty in Artificial Intelligence (UAI) .Balasubramanian, S.; Melendez-Calderon, A.; Roby-Brami, A.; and Burdet, E. 2015. On the Analysis of Movement Smoothness. Journal of NeuroEngineering and Rehabilita-tion , 12(112). Black, K.; et al. 2024. π0: A Vision-Language-Action Flow Model for General Robot Control. arXiv preprint arXiv:2410.24164 .Brandstetter, J.; van den Berg, R.; Welling, M.; and Gupta, J. K. 2023. Clifford Neural Layers for PDE Modeling. In In-ternational Conference on Learning Representations (ICLR) .Brehmer, J.; de Haan, P.; Behrends, S.; and Cohen, T. 2023. Geometric Algebra Transformer. In Advances in Neural In-formation Processing Systems (NeurIPS) .Brohan, A.; et al. 2023. RT-2: Vision-Language-Action Mod-els Transfer Web Knowledge to Robotic Control. In Confer-ence on Robot Learning (CoRL) .Chen, H.; Luong, V.; Mukherjee, L.; and Singh, V. 2025a. SimpleTM: A Simple Baseline for Multivariate Time Se-ries Forecasting. In International Conference on Learning Representations (ICLR) .Chen, T.; et al. 2025b. RoboTwin 2.0: A Scalable Data Gen-erator and Benchmark with Strong Domain Randomization for Robust Bimanual Robotic Manipulation. arXiv preprint arXiv:2506.18088 .Chi, C.; Xu, Z.; Feng, S.; Cousineau, E.; Du, Y.; Burchfiel, B.; Tedrake, R.; and Song, S. 2023. Diffusion Policy: Visuo-motor Policy Learning via Action Diffusion. In Robotics: Science and Systems (RSS) . Extended in International Jour-nal of Robotics Research 44(10–11):1684–1704, 2025. Fei, S.; Wang, S.; Shi, J.; Dai, Z.; Cai, J.; Qian, P.; Ji, L.; He, X.; Zhang, S.; Fei, Z.; Fu, J.; Gong, J.; and Qiu, X. 2025. LIBERO-Plus: In-depth Robustness Analysis of Vision-Language-Action Models. arXiv preprint arXiv:2510.13626 .Hu, E. J.; Shen, Y.; Wallis, P.; Allen-Zhu, Z.; Li, Y.; Wang, S.; Wang, L.; and Chen, W. 2022. LoRA: Low-Rank Adaptation of Large Language Models. In International Conference on Learning Representations (ICLR) .Kim, M. J.; Finn, C.; and Liang, P. 2025. Fine-Tuning Vision-Language-Action Models: Optimizing Speed and Success. In 
+
+Robotics: Science and Systems (RSS) .Kim, M. J.; et al. 2024. OpenVLA: An Open-Source Vision-Language-Action Model. In Conference on Robot Learning (CoRL) .Lipman, Y.; Chen, R. T. Q.; Ben-Hamu, H.; Nickel, M.; and Le, M. 2023. Flow Matching for Generative Modeling. In International Conference on Learning Representations (ICLR) .Liu, B.; Zhu, Y.; Gao, C.; Feng, Y.; Liu, Q.; Zhu, Y.; and Stone, P. 2023. LIBERO: Benchmarking Knowledge Trans-fer for Lifelong Robot Learning. In Advances in Neural Infor-mation Processing Systems (NeurIPS), Datasets and Bench-marks Track .Liu, S.; et al. 2025. RDT-1B: A Diffusion Foundation Model for Bimanual Manipulation. In International Conference on Learning Representations (ICLR) .Liu, Y.; Hu, T.; Zhang, H.; Wu, H.; Wang, S.; Ma, L.; and Long, M. 2024. iTransformer: Inverted Transformers Are Effective for Time Series Forecasting. In International Con-ference on Learning Representations (ICLR) .NVIDIA. 2025. GR00T N1.6: An Improved Open Foun-dation Model for Generalist Humanoid Robots. https: //research.nvidia.com/labs/gear/gr00t-n1_6/. NVIDIA; Bjorck, J.; Castañeda, F.; Cherniadev, N.; Da, X.; Ding, R.; Fan, L.; Fang, Y.; Fox, D.; et al. 2025. GR00T N1: An Open Foundation Model for Generalist Humanoid Robots. arXiv preprint arXiv:2503.14734 .Octo Model Team. 2024. Octo: An Open-Source Generalist Robot Policy. In Robotics: Science and Systems (RSS) .Pertsch, K.; Stachowicz, K.; Ichter, B.; Driess, D.; Nair, S.; Vuong, Q.; Mees, O.; Finn, C.; and Levine, S. 2025. FAST: Efficient Action Tokenization for Vision-Language-Action Models. arXiv preprint arXiv:2501.09747 .Physical Intelligence; Black, K.; Brown, N.; Darpinian, J.; Dhabalia, K.; Driess, D.; Esmail, A.; Equi, M.; Finn, C.; Fusai, N.; et al. 2025. π0.5: A Vision-Language-Action Model with Open-World Generalization. arXiv preprint arXiv:2504.16054 .Qu, D.; Song, H.; Chen, Q.; Yao, Y.; Ye, X.; Ding, Y.; Wang, Z.; Gu, J.; Zhao, B.; Wang, D.; et al. 2025. SpatialVLA: Ex-ploring Spatial Representations for Visual-Language-Action Model. In Robotics: Science and Systems (RSS) .Wu, H.; Xu, J.; Wang, J.; and Long, M. 2021. Auto-former: Decomposition Transformers with Auto-Correlation for Long-Term Series Forecasting. In Advances in Neural Information Processing Systems (NeurIPS) .Yi, K.; et al. 2023. Frequency-Domain MLPs Are More Effective Learners in Time Series Forecasting. In Advances in Neural Information Processing Systems (NeurIPS) .Yuan, T.; Dong, Z.; Liu, Y.; and Zhao, H. 2026. Fast-WAM: Do World Action Models Need Test-Time Future Imagina-tion? arXiv preprint arXiv:2603.16666 .Ze, Y.; Zhang, G.; Zhang, K.; Hu, C.; Wang, M.; and Xu, H. 2024. 3D Diffusion Policy: Generalizable Visuomotor Policy Learning via Simple 3D Representations. In Robotics: Science and Systems (RSS) .Zhang, L.; Rao, A.; and Agrawala, M. 2023. Adding Con-ditional Control to Text-to-Image Diffusion Models. In 
+
+IEEE/CVF International Conference on Computer Vision (ICCV) .Zhao, Q.; Lu, Y.; Kim, M. J.; Fu, Z.; Zhang, Z.; Wu, Y.; Li, Z.; Ma, Q.; Han, S.; Finn, C.; et al. 2025. CoT-VLA: Visual Chain-of-Thought Reasoning for Vision-Language-Action Models. In IEEE/CVF Conference on Computer Vi-sion and Pattern Recognition (CVPR) .Zhao, T. Z.; Kumar, V.; Levine, S.; and Finn, C. 2023. Learn-ing Fine-Grained Bimanual Manipulation with Low-Cost Hardware. In Robotics: Science and Systems (RSS) .Zheng, J.; Li, J.; Wang, Z.; Liu, D.; Kang, X.; Feng, Y.; Zheng, Y.; Zou, J.; Chen, Y.; Zeng, J.; et al. 2026. X-VLA: Soft-Prompted Transformer as Scalable Cross-Embodiment Vision-Language-Action Model. In International Confer-ence on Learning Representations (ICLR) .Zhou, T.; Ma, Z.; Wen, Q.; Wang, X.; Sun, L.; and Jin, R. 2022. FEDformer: Frequency Enhanced Decomposed Trans-former for Long-Term Series Forecasting. In International Conference on Machine Learning (ICML) .This document provides the dataset configurations, training and evaluation settings, resource usage, and the Temporal Orthogonal Division-of-Labor (TO-DoL) analysis that are omitted from the main paper for space. Unless otherwise noted, the simulated experiments use LeRobot as the com-mon infrastructure for data organization, policy training, and rollout evaluation; TFGCA and the corresponding π0.5 base share data processing, training budget, and evaluation con-ditions. Method definitions, theoretical properties, and the main results are given in the main paper and are not repeated here. 
+
+## A Datasets 
+
+LIBERO. The LIBERO experiments use the LeRobot Hugging Face dataset lerobot/libero , read and orga-nized in the LeRobot data format. Evaluation covers the four standard suites LIBERO-Long, LIBERO-Goal, LIBERO-Object, and LIBERO-Spatial. Each sample contains two 
+
+256 × 256 RGB images, an 8-dimensional robot state, and a 7-dimensional action; that action is not seven joint an-gles but a Cartesian end-effector increment (3-D translation, 3-D rotation) plus a 1-D binary gripper command. Images use identity normalization; states and actions use quantile normalization. Training and evaluation episodes follow the LeRobot dataset documentation and the standard LIBERO benchmark conventions. 
+
+RoboTwin 2.0. The RoboTwin 2.0 experi-ments use the LeRobot Hugging Face dataset 
+
+lerobot/robotwin_unified , organized in the LeRobot format. Each sample contains three 480 × 640 RGB images, a 14-dimensional robot state, and a 14-dimensional joint-space action (dual-arm qpos ). Policies are trained only on clean demonstrations and evaluated separately in clean and randomized environments, to probe in-distribution performance and generalization to unseen environmental perturbations. Episode setup follows the LeRobot dataset documentation and the RoboTwin benchmark conventions. 
+
+AgiBot A2. The real-robot data were collected in-house and cover three tasks: placing soap into a soap box, placing two plush toys into a basket, and pulling a tissue from a tissue box. Owing to confidentiality constraints, we do not release the raw data or the collection procedure; public documenta-tion of the A2 platform’s software/hardware and developer interfaces is available from AgiBot’s official developer ma-terials. 
+
+## B Training and Evaluation Configuration 
+
+Common implementation. All simulated training and evaluation are run in LeRobot, including the policy interface, data loading, feature normalization, action post-processing, and environment rollout. TFGCA is attached between the VLA transformer output and the action head, with base model 
+
+lerobot/pi05_base . Apart from TFGCA-specific set-tings, the augmented model and its π0.5 base use the same data, training budget, and evaluation pipeline. The common training configuration is given in Table 5.                         
+
+> Setting Value Base model lerobot/pi05_base
+> Optimizer AdamW Initial learning rate 2.5×10 −5
+> Adam betas (0 .9,0.95)
+> Adam epsilon 10 −8
+> Weight decay 0.01 Gradient clipping 1.0 Warmup 1,000 steps LR schedule cosine to 2.5×10 −6at 30k steps Numerical precision bfloat16 Memory optimization gradient checkpointing Random seed 1000 FM time sampling Beta(1 .5,1.0) , scale 0.999, shift 0.001 Inference denoising steps 10 Checkpoint interval 1,000 steps
+
+Table 5: Common training configuration shared by TFGCA and the π0.5 base. 
+
+Per-benchmark configuration. The training and evalu-ation configuration for the three simulation benchmarks (LIBERO, LIBERO-Plus, RoboTwin 2.0) is given in Ta-ble 6; other common hyperparameters are in Table 5. On each benchmark TFGCA and the corresponding reproduced π0.5
+
+base share consistent data, training budget, and evaluation, differing only in the TFGCA-specific SWT/geometry con-figuration. The action-space alignment loss uses the ground-truth action as its target with a stop-gradient on the target branch. The difference order counts the per-dimension se-quence out of action_proj as order 0: LIBERO and LIBERO-Plus feed the SWT directly, while RoboTwin 2.0 applies two finite differences before the SWT. Success rates are computed as the fraction of rollouts that strictly com-plete the task. LIBERO-Plus is not trained separately :the LIBERO-trained models are evaluated on its out-of-distribution perturbations to measure zero-shot generaliza-tion; the construction, parameter ranges, and success criteria of the seven perturbation families (camera viewpoint, robot initialization, language, lighting, background, sensor noise, object layout) follow the official LIBERO-Plus setting (Fei et al. 2025). 
+
+How the TFGCA-specific settings are chosen. We do not run a large hyperparameter sweep; the few TFGCA-specific settings in Table 6 are fixed from the data and the base configuration rather than tuned per benchmark. The chunk and execution length follow the LeRobot base configuration for each benchmark (10 for LIBERO/LIBERO-Plus, 50 for RoboTwin). The number of SWT levels is tied to the chunk length—one level for the short LIBERO chunk, two for the longer RoboTwin chunk, so that the coarsest band still cov-ers a meaningful fraction of the chunk. The difference order before the SWT is set from the energy distribution of the action sequence: LIBERO/LIBERO-Plus end-effector deltas are already near-stationary and are fed to the SWT directly (order 0), whereas RoboTwin joint-space qpos carries a strong low-frequency drift, so we apply two finite differ-Setting LIBERO LIBERO-Plus RoboTwin Training data libero reuse robotwin                         
+
+> Training steps 30k —30k/task Batch (per GPU / global) 32 / 64 —32 / 64 Chunk /exec. length 10 / 10 10 / 10 50 / 50 SWT levels 112Diff. order before SWT 002Mother wavelet db2 db2 db2
+> Attention heads 888Alignment-loss weight 0.01 0.01 0.1 Rollouts / condi-tion conv. official 100 each
+
+Table 6: Per-benchmark training and evaluation config-uration. Filters are learnable in all cases (initialized to 
+
+db2 ). “reuse” means LIBERO-Plus reuses the LIBERO-trained model without separate training; “30k/task” means RoboTwin is trained 30k steps per task; “conv.” follows the LIBERO benchmark convention for rollouts per condition. ences (order 2) to move its energy into the detail bands. The alignment-loss weight is 0.01 in the multi-task simulation settings (LIBERO, LIBERO-Plus) and 0.1 in the single-task RoboTwin setting, where a stronger alignment target is af-fordable without competing across tasks. The remaining val-ues (optimizer, learning rate, schedule, batch size, denoising steps, seed) are shared with the π0.5 base and are not re-tuned for TFGCA. 
+
+## C LIBERO: Extended Comparison 
+
+Table 1 of the main paper reports TFGCA, the reproduced 
+
+π0.5 base, and the ablations under a single protocol. Table 7 places these alongside external methods for context. As these values come from the original papers or recent public com-parisons under possibly different evaluation protocols, they are provided for reference only and should not be read as a strict ranking against TFGCA. 
+
+## D RoboTwin 2.0: Full Comparison 
+
+Table 3 of the main paper compares TFGCA against the 
+
+π0.5 base under a single protocol. Table 8 places these alongside the RoboTwin 2.0 official leaderboard baselines. 
+
+π0.5 and TFGCA (ours) are run under the same protocol (Aloha-AgileX, 30k steps, 100 evaluations each) and are directly comparable; DP, ACT, DP3, RDT, and π0 are the leaderboard-reported values. DP3 uses point-cloud input, a different modality from the other RGB methods. 
+
+## E LIBERO-Plus: Per-Suite Full Results 
+
+Table 2 of the main paper reports only the average of the seven LIBERO-Plus perturbations across the four suites. Table 9 gives TFGCA’s full per-perturbation success rate (%) on each of the four suites (Spatial, Object, Goal, Long); each cell is TFGCA, with the π0.5 base and the delta relative to it in 
+
+Figure 4: Put the soap into the soap box. Four-stage keyframes: grasp the soap → move above the box → re-lease into the box → reset. 
+
+Figure 5: Pull a tissue from the box. Four-stage keyframes: the near hand picks up the tissue box → the other hand pulls a tissue → put down the box → put down the tissue. parentheses. The final Avg row is the four-suite average and corresponds to the two LIBERO-Plus rows of main-paper Table 2. Both models are self-tested under the same protocol. By suite, TFGCA’s gains remain concentrated on the per-turbations the base handles worst—Noise and Camera (e.g., Spatial-Noise +19 .1, Long-Noise +18 .5, Goal-Camera 
+
++15 .7)—while on the near-saturated Light/Background it is roughly flat or slightly regresses, within the evaluation sampling variance. This is consistent with the average-level conclusion of Section 5.2 in the main paper. 
+
+## F Real-Robot Task Decomposition (AgiBot A2) 
+
+AgiBot A2 protocol. TFGCA and the π0.5 base use the same training data, number of steps, task initialization, and testing conditions. Each model is tested 20 times per task. Evaluation is strict: a single continuous execution counts as a success only if the goal state is fully reached; human intervention, mid-task retries, dropped objects, or the failure of any required sub-step count as failures. Figures 4–6 show a stage-wise keyframe decomposition of the three AgiBot A2 real-robot tasks. Keyframes are taken from a representative rollout and correspond one-to-one with Table 4 of the main paper. 
+
+## G Resource Usage 
+
+G.1 Training Hardware and Wall-Clock 
+
+The resource records in Table 10 correspond to each training job rather than the cumulative cost of a whole benchmark. Beyond the measured training hardware and approximate wall-clock, we do not report peak memory, training through-put, end-to-end inference latency, or other quantities that were not independently measured, so as to avoid inferring real running costs from configuration files or theoretical val-ues. Exact software versions were not recorded in a single verifiable log and are therefore not stated speculatively; the AgiBot A2 platform’s internal resource configuration is also withheld for confidentiality reasons. Method Spatial Object Goal Long Avg Diffusion Policy (Chi et al. 2023) 78.5 87.5 73.5 64.8 76.1 OpenVLA (Kim et al. 2024) 84.7 88.4 79.2 53.7 76.5 SpatialVLA (Qu et al. 2025) 88.2 89.9 78.6 55.5 78.1 CoT-VLA (Zhao et al. 2025) 87.5 91.6 87.6 69.0 83.9                                                                           
+
+> π0-FAST (Pertsch et al. 2025) 96.4 96.8 88.6 60.2 85.5 GR00T-N1 (NVIDIA et al. 2025) 94.4 97.6 93.0 90.6 93.9
+> π0(Black et al. 2024) 98.0 96.8 94.4 88.4 94.4
+> π0.5(Physical Intelligence et al. 2025) 98.8 98.2 98.0 92.4 96.9 GR00T-N1.6 (NVIDIA 2025) 97.7 98.5 97.5 94.4 97.0 OpenVLA-OFT (Kim, Finn, and Liang 2025) 97.6 98.4 97.9 94.5 97.1 Fast-WAM (Yuan et al. 2026) 98.2 100.0 97.0 95.2 97.6 X-VLA (Zheng et al. 2026) 98.2 98.6 97.8 97.6 98.1
+> π0.5(our repro.) 95.2 99.6 97.2 94.6 96.7
+> TFGCA (full) 98.5 99.4 97.7 97.0 98.2
+> TFGCA −SWT 96.8 99.1 97.1 97.8 97.7 TFGCA −geometry 97.2 99.7 97.6 96.5 97.8 TFGCA −alignment 94.9 99.5 98.5 95.5 97.1
+
+Table 7: LIBERO success rate (SR%), TFGCA and π0.5 (our reproduction and ablations, same protocol) alongside external methods (upper block, reference only—protocols may differ).                                                         
+
+> Task DP ACT DP3 RDT π0π0.5TFGCA (ours)
+> open_microwave 5 / 0 86 / 0 61 / 22 37 / 20 80 / 50 93 / 27 88 / 36 stamp_seal 2 / 0 2 / 0 18 / 0 1 / 0 3 / 4 15 / 5 19 / 3 handover_block 10 / 0 42 / 0 70 / 0 45 / 14 45 / 8 57 / 13 72 / 11 turn_switch 36 / 1 5 / 2 46 / 8 35 / 15 27 / 23 41 / 28 54 / 61 stack_bowls_three 63 / 0 48 / 0 57 / 5 51 / 17 66 / 24 83 / 6 74 / 59 click_bell 54 / 0 58 / 3 90 / 0 80 / 9 44 / 3 79 / 6 83 / 86 Average 28.3 / 0.2 40.2 / 0.8 57.0 / 5.8 41.5 / 12.5 44.2 / 18.7 61.3 / 14.2 65.0 / 42.7
+
+Table 8: RoboTwin 2.0 success rate (%); each cell is clean / randomized (the leaderboard’s Easy / Hard). Values for DP (Chi et al. 2023), ACT (Zhao et al. 2023), DP3 (Ze et al. 2024), RDT (Liu et al. 2025), and π0 (Black et al. 2024) are from the RoboTwin 2.0 official leaderboard; π0.5 and TFGCA (ours) are run under the same protocol and directly comparable. The last row is the 6-task average. 
+
+Figure 6: Put the two plush toys into the basket. Keyframes: pick up a toy → place it in the basket, then repeat for the second toy. 
+
+G.2 Added Parameter Count 
+
+The parameters TFGCA adds over the π0.5 base are fully determined by the module structure and can be computed exactly from the architecture (no independent measurement needed). Taking model width d = 1024 and LIBERO’s ac-tion dimension D = 7 (6-D Cartesian end-effector increment + 1-D binary gripper), the per-module counts are given in Ta-ble 11. The added parameters are dominated by the geomet-ric cross-attention’s Q/K/V/output projections (four 1024 ×
+
+1024 matrices), which do not exist in the π0.5 base and are the genuinely new part of TFGCA; the per-dimension SWT encoder and the action-space projection (PerDimensionSWTEncoder and action_proj ) are almost negligible. The total of about 4.23M is roughly 0.10% 
+
+of the ∼4B-parameter π0.5 backbone, consistent with the main paper’s positioning of TFGCA as a lightweight drop-in module. This count is an architecture-determined exact value and does not change with training data or steps; when the action dimension D varies with the embodiment (e.g., 
+
+D = 14 for RoboTwin and AgiBot), only action_proj 
+
+scales linearly in d × D, with negligible effect on the total. 
+
+## H Temporal Orthogonal Division-of-Labor (TO-DoL): Definition and Data Analysis 
+
+Sections 1 and 4.5 of the main paper use the claim that “the near-orthogonal structure of division-of-labor coordination lives along the time axis” as data support for the design motivation. This section gives the full definition, metrics, and robustness analysis. The analysis covers RoboTwin 2.0’s 
+
+handover_block and stack_bowls_three tasks, 50 demonstrations each, over the aloha-agilex and arx-x5 bi-Suite Camera Robot Language Light Background Noise Layout Total Spatial 68.3 (59.3, +9.0) 88.6 (80.9, +7.7) 87.7 (81.8, +5.9) 99.0 (97.3, +1.7) 99.2 (94.2, +5.0) 65.8 (46.7, +19.1) 97.4 (95.1, +2.3) 85.8 (78.3, +7.4) Object 41.7 (33.6, +8.1) 70.8 (58.5, +12.3) 94.1 (84.5, +9.6) 96.6 (100.0, −3.4) 96.4 (97.6, −1.2) 49.3 (40.8, +8.5) 82.6 (82.9, −0.2) 73.3 (67.9, +5.4) Goal 60.8 (45.1, +15.7) 67.0 (58.4, +8.5) 53.2 (58.3, −5.1) 97.5 (95.7, +1.8) 75.1 (77.2, −2.1) 48.8 (39.3, +9.5) 64.2 (60.7, +3.5) 64.9 (59.9, +4.9) Long 35.1 (30.3, +4.8) 67.2 (53.9, +13.3) 92.2 (84.1, +8.1) 92.7 (92.3, +0.4) 80.6 (84.8, −4.2) 45.2 (26.7, +18.5) 82.4 (79.8, +2.6) 67.9 (60.7, +7.2)          
+
+> Avg 51.5 (42.1, +9.4) 73.4 (62.9, +10.5) 81.8 (77.2, +4.6) 96.4 (96.3, +0.1) 87.8 (88.4, −0.6) 52.3 (38.4, +13.9) 81.7 (79.6, +2.1) 73.0 (66.7, +6.3)
+
+Table 9: LIBERO-Plus per-suite, per-perturbation success rate (%). Each cell is TFGCA ( π0.5 base, ∆); the Avg row is the four-suite average and corresponds to the two LIBERO-Plus rows of Table 2 in the main paper. 
+
+Experiment GPU Wall-clock LIBERO 2× NVIDIA A800 80GB ∼26 hours RoboTwin 2.0 2× NVIDIA A800 80GB ∼28 hours 
+
+Table 10: Resource usage per training job (not the cumulative cost of a full benchmark). 
+
+Module Parameters 
+
+CrossGeometricAttention 4,198,403 (4.20M) 
+
+PerDimensionSWTEncoder 28,728 (0.029M) 
+
+action_proj 7,168 (0.007M) 
+
+Total 4,234,299 (4.23M) 
+
+Table 11: Added parameters of TFGCA at d = 1024 , D = 7 .manual embodiments. It is based on existing demonstration trajectories and involves no new training or evaluation. 
+
+H.1 Motivation: Two Notions of Orthogonality 
+
+A natural but untested hypothesis is a same-instant version of orthogonality: at some frame t, two division-of-labor sub-actions A and B are simultaneously active with joint direc-tions vA(t) ⊥ vB (t). The data nearly falsify this hypothesis (Table 12): same-instant orthogonal coupling is essentially absent. The same data, however, exhibit very strong positive structure along the time axis —this is TO-DoL. 
+
+H.2 Definition 
+
+Let each trajectory e have per-frame joint velocity v(t) ∈ R14 
+
+and active-frame direction u(t) = v(t)/∥v(t)∥. Segment the trajectory by its dominant active subspace into ordered phases P1 ≺ P2 ≺ · · · ≺ PK , where phase k’s principal direction ¯uk is the principal component of u(t) within that phase. The trajectory has Temporal Orthogonal Division-of-Labor (TO-DoL) if the following three conditions hold simultaneously: 
+
+• (C1) Inter-phase orthogonality : max i̸=j |⟨ ¯ui, ¯uj ⟩| ≤ ε,i.e., different temporal phases occupy near-orthogonal joint directions. 
+
+• (C2) Non-trivial temporal order : the phase order (P1 ≺· · · ≺ PK ) and relative onset times are stable across trials and significantly better than a null control .
+
+• (C3) Within-phase coherence : within a single phase, the direction u(t) is stable (low variance), so the phase 
+
+Test Observation Verdict 
+
+≥ 3 subspaces co-active within a 10-frame chunk 
+
+0.0% (all four datasets) almost never “many things at once” Cross-arm co-activation rate 14% / 13% below ran-dom control (27–30%) Left/right direction corr. in active frames (handover) 
+
+−0.24 to −0.37 one arm moves, the other pauses 
+
+Table 12: Same-instant orthogonal coupling is near-zero. 
+
+Metric Value Control Left →right phase-order rate (handover) 100% of episodes —Gripper-event order (L-grasp 
+
+< R-grasp < L-release) 100% (both em-bodiments) —Grasp →release interval 22 frames, std =0
+
+—Envelope-preserving, order-shuffled clean control real 3.5–5×
+
+tighter than control —
+
+Table 13: C2 evidence: the temporal order is stable and beats the clean control. genuinely “occupies” a subspace rather than wandering. 
+
+C2 is the crux. In high dimensions any two sparse direc-tions with disjoint support are already near-orthogonal, so C1 is nearly geometrically trivial and is not evidence on its own; what genuinely needs data support is C2—the ordering must beat controls that “shuffle the phase order” and “randomly pair across trials”. 
+
+H.3 Condition-by-Condition Verification 
+
+C1 (inter-phase orthogonality) — holds, but is a triv-ial baseline. The 14-D direction cosine between the left-dominant and right-dominant segments: aloha-agilex |cos | =0.0013 (p90 ≈ 0.0017 ), arx-x5 = 0 .0014 (p90 ≈ 0.002 ). Disjoint coordinate blocks are almost exactly orthogonal by geometry, so the weight of evidence rests on C2. 
+
+C2 (non-trivial temporal order) — holds strongly (Ta-ble 13). Two honest corrections must be stated. (1) The effect size is 3.5–5×, not higher. A “random-phase” con-trol destroys the entire motion envelope (not just the order-ing), inflating the effect size to 9–37 ×; using an envelope-preserving, order-only-shuffled clean control, the real order structure is 3.5–5× tighter, and both the main paper and this section quote the latter. (2) The coupling sits at the “population-template” level, not per-trial feedback. Ran-domly pairing across episodes (a left-arm trajectory with any right-arm trajectory) almost perfectly reproduces the or-dering coupling (ratio ≈ 1.0). This means each arm follows its own fixed “temporal script” and the two scripts happen to be staggered—a shared sequential template rather than one arm closed-loop-adjusting to the other in real time. C2 still holds (the order is significant, stable, and beats the clean con-trol), but is more accurately described as a population-level, script-level temporal coupling. 
+
+C3 (within-phase coherence) — essentially holds. Each arm’s direction is stable within its dominant phase; the han-dover left arm is bimodal (grasp at t ≈ 0, release at t ≈ 0.8), but both peaks lie in the left-arm subspace and do not break C3—they merely split the left-arm phase into two segments. 
+
+H.4 Robustness 
+
+• Across embodiments : aloha-agilex and arx-x5 give same-order numbers and consistent conclusions (C1 |cos |
+
+0.0013 vs 0.0014; C2 order 100% of episodes; determin-istic gripper timing lock). 
+
+• Across tasks : handover (sequential hand-off) strongly satisfies C2 (clear ordering); stack (left–right symmet-ric, no strict order, 48–50%) weakens C2 but still satisfies C1/C3. The “order” strength of C2 is thus task-dependent—the main paper states C2 as “a stable temporal-phase separation exists”, not universally “strict order”. 
+
+• Across datasets : LIBERO (end-effector delta, single arm) has no left/right-arm structure and TO-DoL does not apply; but it corroborates the triviality of “same-instant orthogonality”, which does not conflict with this defini-tion. 
+
+## I Identity Initialization: Formal Properties 
+
+Section 4.4 of the main paper constructs the identity ini-tialization from a zero-initialized residual; here we give its formal statement. Let fθ be the base policy and fθ,ϕ its TFGCA-augmented version with module parameters ϕ and output projection WO = 0 . Then ˜H = H + WO (AV ) = H,giving two complementary properties. 
+
+• (a) Safe (non-decreasing capacity). fθ,ϕ = fθ point-wise, so the base policy lies in the augmented hypothesis class and min ϕ L(fθ,ϕ ) ≤ L (fθ ): attaching TFGCA can-not worsen the best attainable fit, and it changes no output at initialization. 
+
+• (b) Trainable (escaping the identity). The initial gradi-ent of the loss with respect to WO is ∇WO L = δ (AV )⊤,where δ is the upstream gradient at the module output. As long as the value tokens satisfy V̸ = 0 (and δ̸ = 0 ), this gradient is generically nonzero, so WO leaves zero and the module begins to act; if V = 0 then AV = 0 forces 
+
+∇WO L = 0 , and the gradient to the upstream wavelet parameters also vanishes through WO = 0 , trapping the module at the identity. This is why we initialize the sub-band embeddings and the action-space projection to be nonzero and zero only WO .
+
+Proof. With WO = 0 we have ˜H = H and the head and backbone are unchanged; (a) follows by evaluating the aug-mented class at WO = 0 , and (b) follows by differentiating 
+
+˜H = H + WO (AV ) with respect to WO . □
+
+Safety and effectiveness are two different things. These properties guarantee function preservation at the moment of initialization —the module reproduces the base output point-wise on attachment and does not decrease capacity, a state-ment about attachment risk. They neither guarantee that the jointly fine-tuned behavior is no worse than the base (there are indeed a few per-task regressions on clean, Section 5.3 of the main paper) nor constitute evidence that the module is ef-fective; effectiveness can only be supported by post-training empirical results (Section 5 of the main paper). The two should not be conflated.

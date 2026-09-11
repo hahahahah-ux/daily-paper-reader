@@ -1,0 +1,2763 @@
+1
+VLA-Precision: Asymmetric Co-Bootstrapping for Efficient
+Real-World Online RL of Vision-Language-Action Models
+Chenyu Su1, Zhaolong Shen3,4, Yuan Qian1, Chen Qian1, Rui Zhang1,
+Feng Yan1, Weixing Chen1, Fei Zhang1,5, Jiamin Wang1, Shuang Cong1, and Weiwei Shang∗,1,2
+1University of Science and Technology of China
+2State Key Laboratory of Precision and Intelligent Chemistry
+3Beihang University
+4Zhongguancun Academy
+5Hefei SpinX Technology
+∗Corresponding author: wwshang@ustc.edu.cn
+Frozen VLM
+K Critics
+Advantage
+� �, � 
+State-Value
+� � 
+Action 
+Expert
+Frozen
+Reference
+Action Value � �, � 
+Relative Advantage
+Online Experience
+ℒAE = �BℒB+�relℒrel+����ℒ���
+ℒcritic = ℒTD+�rankℒrank
+vision
+vision
+UR5e-DexHand
+UR5e-Gripper
+Franka-Gripper
+Dual UR5e-Gripper
+Real-World Online RL of VLA Models
+Robots
+Experiments
+Relative Estimate  ∆��
+Policy
+Critic
+lang
+state
+state
+action
+Fig. 1. Framework overview. VLA-Precision combines rapid behavioral learning, progressive value calibration, and reference-regularized relative-advantage
+policy improvement within a closed-loop experience–policy architecture for stable, efficient real-world online RL of large VLAs. Across nine high-precision
+chemistry tasks and four robot embodiments, it outperforms baselines in success rate, episode time, critic-to-actor latency, and throughput.
+Abstract—Pretrained vision-language-action (VLA) models en-
+able broad manipulation but remain unreliable in tasks de-
+manding precision and repeatability. Applying real-world online
+reinforcement learning (RL) to VLA post-training enables au-
+tonomous trial-and-error improvement beyond demonstrations
+alone, but exposes two bottlenecks: 1) unreliable value signals
+can induce policy drift; 2) large-VLA overhead constrains
+throughput and sample efficiency. To address these challenges,
+we present VLA-Precision, an efficient real-world online RL
+framework featuring the Asymmetric Co-Bootstrapping (ACoB)
+algorithm and the ACoB-Stream architecture. Specifically, ACoB
+establishes asymmetric co-bootstrapping across timescales: early
+intervention-guided behavioral learning rapidly improves policy
+performance while enhancing online experience quality. As au-
+tonomous experience accumulates, global return propagation and
+local preference ranking progressively calibrate value estimates,
+yielding relative action advantages for reference-regularized pol-
+icy improvement while suppressing drift. To enable ACoB on
+large VLAs, we develop ACoB-Stream, a closed-loop experience–
+policy architecture that establishes invariant-state decoupling and
+on-demand streaming as design principles, delivering up to 10.9×
+improvements in throughput and computational efficiency. Ex-
+tensive evaluations on nine high-precision chemistry tasks across
+four categories and four robot embodiments show that VLA-
+Precision achieves 98.3% mean success rate in 45.8 min/task, with
+27.6 s episodes running at 1.2× and 1.8× the speeds of VLA and
+RL baselines. Resources are available at VLA-Precision.github.io.
+Index Terms—Vision-language-action models, real-world rein-
+forcement learning, high-precision manipulation, robot learning.
+I. INTRODUCTION
+R
+ECENT vision-language-action (VLA) models have ac-
+quired broadly transferable capabilities through large-
+scale pretraining on heterogeneous multimodal data [1]–[3].
+With only a few task-specific demonstrations, VLAs can
+perform diverse robotic manipulation tasks and generalize
+across environmental variations. However, broad adaptability
+cannot guarantee precise and repeatable task completion: small
+residual errors at critical stages still cause intermittent failures.
+arXiv:2609.04355v2  [cs.RO]  9 Sep 2026
+
+
+2
+Behavior cloning (BC) learns task behavior directly from
+dense action labels in demonstrations, but errors compound
+outside the demonstrated distribution and performance remains
+bounded by demonstration quality. In contrast, reinforcement
+learning (RL) uses temporal credit assignment to learn long-
+term action values from interaction. Therefore, applying RL
+to VLA post-training enables continual policy optimization
+through interaction-derived return signals, thereby mitigating
+compounding errors and surpassing the performance ceiling
+imposed by demonstration data.
+Toward this goal, existing work has explored simulation-
+based and real-world RL for VLA post-training [4]–[6].
+Simulation-based RL enables massively parallel and failure-
+tolerant interaction, supporting scalable and low-cost policy
+optimization without the physical constraints of real robots.
+However, the sim-to-real gap in visual observations and con-
+tact dynamics limits reliable transfer to physical robots [7],
+[8]. In contrast, real-world RL optimizes VLAs through direct
+physical interaction, enabling policy adaptation to real-world
+dynamics and sensor noise. Existing real-world RL methods
+fall into two groups by model scale: RL for large pretrained
+VLAs [9]–[11] and RL for compact robot policies [12]–[14].
+Despite these advances, real-world VLA-RL remains con-
+strained by two critical bottlenecks: 1) Algorithmic stability:
+unreliable value estimates can induce policy drift; and 2)
+System efficiency: large-VLA computational overhead limits
+training throughput and reduces overall online RL efficiency.
+To mitigate the algorithmic bottleneck, existing meth-
+ods [14]–[16] regularize RL updates with behavioral-cloning
+constraints from demonstrations or interventions. While these
+constraints preserve prior behaviors and stabilize exploration,
+they provide limited improvement in value estimation. Con-
+sequently, RL updates remain vulnerable to value errors and
+policy drift. For the systems bottleneck, existing methods [12],
+[14], [15] rely on replay-intensive optimization, whose compu-
+tational cost increases substantially with large VLAs, limiting
+training throughput. Real-world online interaction further am-
+plifies this computational burden. These limitations highlight
+the need for reliable RL algorithms and efficient training
+systems for real-world post-training of large VLAs.
+To address the first problem, we propose Asymmetric Co-
+Bootstrapping (ACoB), a real-world online RL algorithm that
+couples rapid behavioral learning with progressive value cali-
+bration across timescales. On the faster timescale, intervention-
+guided behavioral learning rapidly incorporates successful
+and human-executed actions, accelerating policy improvement
+while continually improving online experience quality. Mean-
+while, global return propagation and local preference ranking
+continuously calibrate value estimates as autonomous expe-
+rience accumulates. The resulting relative action advantages
+guide reference-regularized policy improvement, suppressing
+policy drift while preserving learned task-specific competence.
+These asymmetric interactions establish a cross-timescale co-
+bootstrapping loop: rapid behavioral learning continuously
+improves the experience underlying value estimation, while
+increasingly reliable value estimates guide the policy beyond
+the limits of direct supervision.
+To address the second problem, we propose ACoB-Stream,
+a closed-loop experience–policy architecture for real-world
+online RL of large VLAs. Guided by invariant-state de-
+coupling and on-demand streaming, ACoB-Stream jointly
+manages the lifecycles of experience-context state and pol-
+icy state across four stages: (1) Experience-context forma-
+tion: by retaining frozen VLM contexts across updates, it
+reduces redundant computation during policy updates; (2)
+Experience-context persistence: through context deduplica-
+tion and sliding-window sampling, it reduces storage redun-
+dancy and limits random-access overhead as experience accu-
+mulates; (3) Experience-context access: through objective-
+aligned context retrieval, it improves data-access efficiency
+during optimization; and (4) Policy-state synchronization:
+through trainable-subspace policy dissemination, it reduces
+synchronization overhead and accelerates policy deployment.
+Together, these stages form a closed-loop experience–policy
+stream, reducing end-to-end system overhead in real-world
+online RL under constrained compute and memory.
+The contributions of this work are summarized as follows:
+1) We propose Asymmetric Co-Bootstrapping (ACoB), a
+real-world online RL algorithm for VLA post-training
+that couples rapid behavioral learning with progres-
+sive value calibration across timescales, overcoming
+demonstration-based performance limits while suppress-
+ing value-induced policy drift.
+2) We develop ACoB-Stream, a closed-loop experience–
+policy architecture organized around state lifecycles,
+with invariant-state decoupling and on-demand stream-
+ing as the core design principles, delivering up to 10.9×
+improvements in throughput and efficiency.
+3) Through extensive evaluations on nine high-precision
+chemistry tasks across four categories and four robot
+embodiments, VLA-Precision achieves 98.3% average
+success in 45.8 min/task, with 27.6 s episodes running
+at 1.2× and 1.8× the speeds of VLA and RL baselines.
+The remainder of this paper is organized as follows: In
+Section II, we review related work on RL-based VLA post-
+training, including learning algorithms and system architec-
+tures. In Section III, we present the proposed ACoB algorithm
+and ACoB-Stream system architecture in detail. In Section IV,
+we evaluate the algorithmic effectiveness and system efficiency
+of VLA-Precision through extensive real-world experiments
+on high-precision chemistry tasks. In Section V, we discuss
+the limitations and future directions of this work. Finally, we
+conclude this paper in Section VI.
+II. RELATED WORK
+A. Simulation-Based RL for VLA Post-Training
+Reinforcement learning (RL) may break demonstration-
+imposed
+performance
+ceilings
+in
+vision–language–action
+(VLA) models through reward-driven exploration and tempo-
+ral credit assignment. Simulation-based RL enables efficient,
+high-throughput VLA exploration through large-scale parallel
+interaction without real-robot training costs and safety risks
+[17]–[19]. Among the first studies, RIPT-VLA [20] pairs dy-
+namic rollout sampling with leave-one-out advantages, raising
+
+
+3
+one-shot success from 4% to 97%, while VLA-RL [7] com-
+bines trajectory-level RL with process rewards to outperform
+fine-tuning by 4.5 points. A controlled VLA benchmark [21]
+shows that RL chiefly strengthens semantic generalization
+and execution robustness. Subsequent work broadens task
+and policy coverage. SimpleVLA-RL [22] combines VLA-
+specific sampling and parallel rendering, lifting LIBERO-Long
+[23] from 17.1% to 91.7%, while RLinf-VLA [8] coordinates
+heterogeneous workloads for up to 2.27× speedup. For flow-
+based policies, πRL [24] constructs tractable likelihoods, im-
+proving success by up to 31.0%. Recent work targets physical
+transfer. RL-Co [16] regularizes simulation-based RL with real
+demonstrations, raising real-world success by 24% and 20%,
+while WoVR [25] controls imagined dynamics to improve
+success across robot platforms. Although these methods reduce
+real-data demands, the sim-to-real gap still limits transfer
+reliability. Real-world RL grounds autonomous trial-and-error
+in real observations and dynamics, converting pretrained VLA
+competence into precise, reliable execution. This advantage
+motivates our focus on real-world VLA post-training.
+B. Real-World RL for VLA Post-Training
+By learning from physical interaction, real-world RL adapts
+policies to actual sensing and dynamics, improving relia-
+bility under deployment conditions. RL for compact robot
+policies has advanced contact-rich and dynamic manipulation
+[26]–[30]. HIL-SERL [12] reaches near-perfect success in 1-
+2.5 hours via intervention-guided online RL, but has lim-
+ited within-task generalization. ConRFT [14] reaches 96.3%
+mean success in 45–90 min with offline-to-online RL on
+Octo representations [31], but Q maximization sacrifices prior
+performance and permits policy drift. Robo-Dopamine [32]
+equips ConRFT with a large progress-based reward model,
+but OOD hallucinations can misguide optimization. RL-100
+[13] applies offline-to-online RL to diffusion policies, but
+converges slowly, requiring 12.1 hours of real-robot rollouts
+per task on average, with 6.8 hours offline and 5.3 hours
+online. These tradeoffs motivate RL for large pretrained VLAs,
+which retain broader action priors. π∗
+0.6 [9] exceeds 90%
+success on most tasks through batchwise value labeling and
+advantage-conditioned retraining, but requires over 1,000 real-
+robot rollouts per task on average, severely limiting feedback
+efficiency. RL Token [11] accelerates critical-phase throughput
+by up to 3×, but requires 400–1,000 online episodes per task,
+while externalized improvements and policy handoffs limit
+end-to-end adaptation. Distinct from prior methods, ACoB
+builds on large pretrained VLAs and couples rapid behavioral
+learning with progressive value calibration to suppress policy
+drift, with ACoB-Stream developed to establish an efficient
+continuous real-world online RL loop.
+C. Efficient Online RL Systems for VLA Models
+Efficient
+online
+RL
+must
+shorten
+the
+closed-loop
+experience–policy cycle. Simulation-based VLA-RL systems
+batch
+multimodal
+decoding,
+parallelize
+rendering,
+and
+coordinate heterogeneous workloads, achieving up to 2.27×
+speedup [7], [8], [22]. However, massively parallel, rapidly
+resettable simulators do not transfer directly to real-world
+online RL. For compact policies, asynchronous actor–learner
+systems overlap physical interaction with replay optimization
+to improve throughput [12], [33], [14]. This efficiency does
+not extend to large pretrained VLAs because optimization
+at scale imposes greater computational, state-management,
+and synchronization costs. EXPO-FT [10] and RL Token
+[11] avoid propagating RL gradients through the VLA by
+optimizing residual action edits and a lightweight token-
+conditioned policy, respectively. This confines reward-driven
+improvements to auxiliary policies, requiring separate editors
+or switching logic and preventing their accumulation within a
+unified policy as tasks expand. SOP [34] and USER [35] scale
+real-world online learning through fleet orchestration and
+heterogeneous cloud–edge infrastructure, respectively. Scale-
+out increases throughput with robots and accelerators without
+reducing per-update large-VLA computation. Departing from
+the methods above, we develop ACoB-Stream, a closed-
+loop experience–policy architecture organized around state
+lifecycles, with invariant-state decoupling and on-demand
+streaming as the core design principles, enabling efficient
+continuous real-world online RL of large VLAs.
+III. METHOD
+In this section, we first formulate real-world RL post-
+training of large VLAs under an asynchronous actor–learner
+process as a closed-loop experience–policy optimization
+problem. Subsequently, we present the Asymmetric Co-
+Bootstrapping (ACoB) algorithm to improve policy perfor-
+mance beyond demonstration-based limits while suppressing
+value-induced policy drift. Thereafter, we develop ACoB-
+Stream, which establishes a closed-loop experience–policy
+stream for large VLAs through experience-context formation,
+persistence, access, and policy-state synchronization. Finally,
+we specify the end-to-end online training and deployment pro-
+tocol for continuous real-world post-training of large VLAs.
+A. VLA-Precision Problem Formulation
+Initializing real-world online RL with demonstrations pro-
+vides task-relevant priors that reduce the burden of early ex-
+ploration and improve sample efficiency [12], [14]. For a large
+pretrained VLA, initialization must additionally establish task-
+specific competence while preserving pretrained manipulation
+priors and within-task generalization.
+To this end, Fig. 1 provides an overview of the VLA-
+Precision framework, while Fig. 2 details the two-stage post-
+training pipeline: Stage I performs full-parameter imitation
+learning on task demonstrations to obtain the task-specific
+policy prior ΘIL. Stage II then initializes real-world online
+RL from ΘIL and improves the action expert within this
+asynchronous actor–learner system. We formulate Stage II as
+a closed-loop experience–policy optimization problem.
+Specifically, we model physical interaction under task in-
+struction ℓas a standard Markov decision process (MDP),
+Mℓ= (S, A, P, r, ρ0, ¯γ) .
+(1)
+
+
+4
+VLM
+Action Expert
+Pred. Action Chunk
+Demo Action Chunk
+"Pick up the reagent bottle"
+Stage Ⅱ  Real-World Online RL 
+Deployed Policy 
+RollOut ��
+Acob-Stream
+Policy Stream
+Actor
+Full-Parameter IL
+Policy Prior ��� 
+Exp. Stream
+Training Batch ℬ�
+...
+...
+...
+Replay 
+Buffer
+Online Experience Pool ��
+Context 
+Buffer
+Policy ���   
+Action Expert ��
+VLM
+Visual 
+Encoder
+Action 
+Expert
+State
+Proj.
+A head
+V head
+ℒcritic = ℒTD+�rankℒrank
+ℒAE = �BCℒBC+�relℒrel+����ℒ���
+lang
+Learner
+Acob Algorithm
+state
+Stage Ⅰ Full-Parameter Finetuning
+Correction 
+Buffer
+Fig. 2. Two-stage post-training pipeline of VLA-Precision. In Stage I, full-parameter imitation learning on demonstrations establishes the task-specific policy
+prior ΘIL. Initialized from ΘIL, real-world online RL in Stage II is formulated as a closed-loop experience–policy optimization problem under an asynchronous
+actor–learner process, where rollouts generate online experience and learner optimization yields action-expert updates for redeployment.
+Here, S and A denote the state and action spaces, P the
+environment transition probability, r the reward function, ρ0
+the initial-state distribution, and ¯γ the discount factor. At
+decision step t, the state st = (ot, qt, ℓ) ∈S comprises
+visual observation ot, robot state qt, and task instruction
+ℓ. A VLA policy action is an H-step action chunk at =
+(ut,0, . . . , ut,H−1) ∈A ⊆RH×d, where H is the chunk
+horizon and d the single-step action dimension. Executing the
+chunk induces st+1 ∼P(· | st, at) and yields the cumulative
+reward R(H)
+t
+= PH−1
+h=0 γhrt,h, where γ is the primitive-step
+discount factor and ¯γ = γH. The task-conditioned policy
+π(· | st) maps each state to an action-chunk distribution and
+induces trajectory τ under Mℓ.
+To instantiate the task-conditioned policy π, we initialize
+the online policy from the task-finetuned π0.5 and optimize
+only the LoRA parameters [36] in the action expert. Under
+this parameterization, Θf denotes the frozen multimodal prefix
+parameters, ψ the frozen action-expert parameters inherited
+from Stage I, and θ ∈Rp the trainable LoRA parameters in the
+action expert. Action-chunk generation is compactly written as
+at = Gψ,θ(zt, ϵt) ∼πΘf ,ψ,θ(· | st),
+ϵt ∼N(0, I).
+(2)
+Here, zt = FΘf (ot, ℓ, qt) is the task-conditioned multimodal
+prefix context encoded from the visual observation, task in-
+struction, and robot state. ϵt is the initial Gaussian noise, I
+the identity covariance, and Gψ,θ the flow-based action expert.
+The corresponding online RL objective is
+θ⋆= arg max
+θ∈Rp J(θ),
+J(θ) = Eτ∼p(τ|πΘf ,ψ,θ,P,ρ0)
+"T −1
+X
+t=0
+¯γtR(H)
+t
+#
+.
+(3)
+Here, θ⋆denotes the return-maximizing parameters, and T is
+the episode horizon measured in action-chunk decision steps.
+To solve Eq. (3) through continuous real-world interaction,
+VLA-Precision constructs the closed-loop solution process
+illustrated in Fig. 2:
+Actor: ¯θn
+Rollout
+−−−−→τn
+experience
+−−−−−−→En ∋Bn,
+Learner: (θn, Bn)
+ACoB
+−−−−→θn+1
+policy
+−−−−→¯θn+1
+(4)
+Here, n denotes the online update cycle. θn and ¯θn denote
+the trainable action-expert state in the learner process and
+its deployed counterpart in the actor process, respectively,
+while τn, En, and Bn denote the real-world trajectory, online
+experience pool, and training batch. The online experience
+pool comprises the replay buffer R, the correction buffer C,
+and the context buffer K. The actor generates τn under ¯θn,
+storing all transitions in R, effective corrections in C, and
+multimodal prefix contexts in K. The learner optimizes θn
+with ACoB over Bn ⊆En, yielding θn+1 for deployment as
+¯θn+1. In this formulation, ACoB optimizes the action expert
+within the learner process, while ACoB-Stream closes the
+experience–policy loop between the two processes.
+B. Asymmetric Co-Bootstrapping for the Action Expert
+Reliable real-world RL post-training of large VLAs must
+improve the action expert beyond demonstration-based per-
+formance limits while preventing unreliable value estimates
+from inducing policy drift. To this end, ACoB establishes
+asymmetric co-bootstrapping within the learner process of
+Eq. (4): behavioral learning rapidly improves the action expert
+and continuously enhances online experience quality, while
+the critic continually calibrates value estimates as online
+experience accumulates, yielding increasingly reliable relative
+action advantages for further action-expert improvement.
+1) Progressive Value Calibration: Reliable value learning
+requires both long-horizon return estimation and fine-grained
+credit assignment. The former captures cumulative behavioral
+consequences, while the latter sharpens policy-improvement
+
+
+5
+signals. ACoB therefore establishes progressive value calibra-
+tion through global return propagation and local preference
+ranking for action-expert optimization.
+To jointly learn both signals, ACoB instantiates the value
+model as an ensemble of K task-specific critics. Each
+critic adopts the value–advantage decomposition Qϕk(ω, ba) =
+Vϕk(ω) + Aϕk(ω, ba), where ωt = (ot, qt) = projo,q(st) is the
+visual–proprioceptive component of the state and Q¯ϕk is the
+corresponding target critic. For any action chunk a ∈A, let
+ea = Tt(a) denote its OpenPI-normalized model representation
+and ba = C(ea) = vec(Pcea0:H) its flattened critic representation,
+where Pc excludes inactive action dimensions.
+Global Return Propagation. Based on the above critic
+formulation, ACoB propagates long-horizon returns through
+temporal-difference optimization. Let aexec
+t
+∈A denote the
+action chunk ultimately executed by the robot, resulting from
+either autonomous policy inference or human correction. It
+induces the transition
+ξt = (st, aexec
+t
+, rt, st+1, dt),
+rt = (rt,0, . . . , rt,H−1).
+(5)
+where ξt ∈En and dt is the terminal flag. Let BRL
+n
+⊆Bn ⊆En
+denote samples eligible for value learning. Let eGψ,θ denote the
+action-expert output in the normalized OpenPI action space.
+For each sampled transition ξt, the bootstrap action at st+1
+and its TD target are constructed as
+baθn
+t+1 = C
+
+eGψ,θn(zt+1, ϵ)
+
+,
+ϵ ∼N(0, I),
+yt = R(H)
+t
++ ¯γ(1 −dt) min
+k Q ¯ϕk(ωt+1, baθn
+t+1).
+(6)
+Global return propagation is realized by the ensemble TD
+objective defined as follows:
+LTD(ϕ) = EBRL
+n
+"
+1
+K
+X
+k
+(Qϕk(ωt, baexec
+t
+) −sg(yt))2
+#
+, (7)
+where sg denotes stop-gradient and ϕ = {ϕk}K
+k=1. Through
+recursive bootstrapping, this objective propagates long-horizon
+returns along executed trajectories.
+Local Preference Ranking. Although corrections can re-
+cover a rollout to success, TD over the executed trajectory
+cannot correct the value of the overwritten proposal. The
+proposal may thus remain overvalued and misguide action-
+expert optimization. ACoB addresses this limitation through
+state-matched local preference ranking, enforcing the cor-
+rection above the original proposal. Before intervention, the
+deployed VLA proposes aprop
+t
+∼πΘf ,ψ,¯θn(· | st). An effective
+intervention is marked by it = 1 and supplies a corrective
+chunk ahum
+t
+, giving
+acmd
+t
+=
+(
+aprop
+t
+,
+it = 0,
+ahum
+t
+,
+it = 1, ,
+aexec
+t
+= Exec(st, acmd
+t
+).
+(8)
+where it = 0 denotes autonomous execution and Exec denotes
+environment-side action resolution. Under intervention, the
+original proposal is retained for ranking. We set ct = 1 only
+when it = 1 and ∥baexec
+t
+−baprop
+t
+∥2 > εa, and ct = 0 otherwise,
+where εa > 0 is a small tolerance. Because aprop
+t
+has no
+observed successor, it is excluded from TD learning and used
+only in the state-matched ranking objective
+Lrank(ϕ) = Eξt∼BRL
+n |ct=1
+"
+1
+K
+K
+X
+k=1
+h
+mc −∆Apair
+t,k
+i2
++
+#
+,
+∆Apair
+t,k = Aϕk(ωt, baexec
+t
+) −Aϕk(ωt, baprop
+t
+),
+(9)
+where mc ≥0 is the ranking margin and [x]+ = max(x, 0).
+Together, global return propagation and local preference rank-
+ing define the ACoB critic objective
+Lcritic = LTD + λrankLrank.
+(10)
+where λrank ≥0 balances the two signals. TD grounds the
+critic in long-horizon returns, while local ranking directly
+calibrates the relative value of the correction and original
+proposal, resolving the local credit ambiguity that long-horizon
+TD propagation cannot address. Under the decomposition Q =
+V + A, V represents the state-only component shared across
+actions, whereas the ranking loss acts only on A. This isolates
+action-dependent differences from the state-only component
+and aligns the signal with action-expert optimization.
+2) Relative-Advantage Policy Improvement: Real-world on-
+line RL post-training of a large VLA must translate critic
+value estimates into reliable action-expert optimization signals.
+Direct maximization of absolute Q values can amplify early
+value-estimation errors and drive the policy toward spuri-
+ously high-value actions. ACoB therefore proposes relative-
+advantage policy improvement, replacing absolute-value pur-
+suit with paired advantage comparison. By focusing on im-
+provement between actions, this mechanism reduces sensitivity
+to value scale and optimistic estimation errors.
+However, value-signal reliability must be established grad-
+ually as online experience accumulates, so this indirect RL
+signal alone yields slow, unstable early action-expert updates.
+ACoB therefore couples relative-advantage improvement with
+flow-matching behavior cloning [37]. Unlike prior methods
+that primarily use behavior cloning to constrain the policy
+distribution [14], [16], ACoB uses critical-stage human cor-
+rections to drive behavior cloning early in training, rapidly
+absorbing high-quality corrections to improve the action expert
+and accelerate critic calibration through better experience.
+Long-horizon return propagation and local preference ranking
+then continually calibrate value estimates, providing increas-
+ingly reliable guidance for autonomous improvement as inter-
+vention recedes. This interaction establishes asymmetric co-
+bootstrapping between rapid behavior cloning and progressive
+value calibration. Meanwhile, the task-finetuned action expert
+is retained as a frozen reference. Reference regularization
+keeps online refinement focused on execution precision rather
+than reshaping behavior, preserving existing competence and
+suppressing value-induced policy drift.
+Relative-Advantage Improvement. Directly differencing in-
+dependently aggregated Q estimates can mix state value,
+critic-specific scales, and stochastic decoding variation, ob-
+scuring action improvement. ACoB instead computes paired
+advantage differences within each critic before pessimistic
+ensemble aggregation. Given a multimodal context zt, the
+current action expert and frozen reference decode action
+
+
+6
+Actor
+Frozen Policy
+Trainable State
+Replay ℛ
+Context �
+Window
+Independent
+data
+���+�
+...
+���+�
+���+�
+���
+���
+on-disk
+Transition N
+Correction 
+subset
+...
+Correction �
+data
+���+�
+...
+...
+Compact Context
+���
+���+�
+���
+���+�
+data
+���+�
+...
+...
+ ℛ Sample
+data
+���+�
+...
+...
+� Sample
+Merge Batch
+Merge � context by ids
+Critic:
+Successor ids
+Actor:
+Current ids
+Successor ids
+Async Prefetch to GPU
+Batch Queue
+...
+Prefetched Batch 
+...
+...
+...
+AcoB Update
+Critic
+Experience Stream
+Policy Stream
+Policy
+Trainable State
+��+�
+��
+Atomic Swap
+n→n+1
+Fig. 3. ACoB-Stream architecture. Through invariant-state decoupling and on-demand streaming, ACoB-Stream jointly manages the lifecycles of experience-
+context state and policy state across experience-context formation, persistence, objective-aligned access, and policy-state synchronization, thereby establishing
+a closed-loop experience–policy stream between the actor and learner.
+chunks using the same random sample ϵ: eaθ
+t = eGψ,θ(zt, ϵ)
+and earef
+t
+= eGψ,θ0(zt, ϵ), where θ0 denotes the frozen reference
+parameters. Their critic representations are baθ
+t = C(eaθ
+t ) and
+baref
+t
+= C(earef
+t ). For compactness, let Ax
+t,k = Aϕk(ωt, bax
+t )
+for x ∈{θ, ref, prop}. On this basis, ACoB defines the
+pessimistic relative advantage as the minimum current-to-
+baseline advantage gap across the K critics:
+bt,k = Aref
+t,k + ct
+
+Aprop
+t,k
+−Aref
+t,k
+
++,
+∆At = min
+k
+
+Aθ
+t,k −sg(bt,k)
+
+.
+(11)
+where [x]+ = max{x, 0}. Here, ct = 1 for a valid human
+correction, whereas ct = 0 otherwise. The term bt,k is the
+comparison baseline of critic k. It equals Aref
+t,k for ct = 0 and
+max{Aref
+t,k, Aprop
+t,k } for ct = 1. Taking the minimum over the
+K critics makes ∆At > 0 only when every critic favors the
+current action over its baseline. To prevent the action expert
+from pursuing critic scores after sufficient relative improve-
+ment, ACoB optimizes the smooth soft-margin objective
+Lrel(θ) = Eξt∼BRL
+n ,ϵ
+
+κ softplus
+mπ −∆At
+κ
+
+,
+(12)
+where softplus(x) = log(1 + ex), mπ ≥0 is the desired
+advantage margin, and κ > 0 controls its softness. Critic pa-
+rameters and comparator branches are held fixed, so gradients
+reach θ only through baθ
+t.
+Flow-Matching Behavior Cloning. ACoB optimizes flow-
+matching behavior cloning over task demonstrations, success-
+ful online executions, and effective human corrections. Its
+flow-matching objective is
+ℓFM
+t
+(θ) =
+1
+Hdm
+[vψ,θ(xη, zt, η) −uη]0:H
+2
+F ,
+LBC(θ) = Eξt∼Bn, ϵ,η
+
+ℓFM
+t
+(θ) | χbeh
+t
+= 1
+
+.
+(13)
+where vψ,θ is the velocity field underlying eGψ,θ, ϵ ∼N(0, I),
+η ∼pη, xη = ηϵ + (1 −η)eaexec
+t
+, uη = ϵ −eaexec
+t
+, and dm
+is the model action dimension. Here, ysuc
+t
+∈{0, 1} denotes
+the episode-success label of ξt. The behavioral mask χbeh
+t
+=
+max{ysuc
+t
+, ct} selects all chunks from successful trajectories
+and only effective corrections from failed ones.
+Reference Regularization. To retain the reference behavior
+during online refinement, ACoB regularizes body-action coor-
+dinates toward the corresponding frozen-reference action:
+Lref(θ) = Eξt∼Bn,ϵ
+ 1
+Hdb
+Pb(eaθ
+t,0:H −earef
+t,0:H)
+2
+F
+
+.
+(14)
+where Pb selects the body-action coordinates and db is their
+single-step dimension. The complete action-expert objective is
+LAE = wBCLBC + wrelLrel + wrefLref,
+(15)
+where the nonnegative weights sum to one. Here, Lrel, LBC,
+and Lref denote relative-advantage RL, behavior cloning, and
+reference regularization, respectively.
+Together, Eqs. (10) and (15) establish ACoB’s asymmetric
+co-bootstrapping across timescales: intervention-driven behav-
+ior cloning rapidly improves both the action expert and the
+experience underlying value calibration, while progressively
+calibrated value estimates provide relative-advantage guidance
+for stable autonomous improvement, with the frozen reference
+preserving existing competence.
+C. ACoB-Stream Architecture
+Real-world online RL relies on asynchronous actor–learner
+systems for efficient experience collection and policy up-
+dates. For compact policies, four scale-dependent costs remain
+manageable: inexpensive model forward passes, CPU-resident
+lightweight training samples, low-latency I/O at limited data
+scale, and rapid full-model transfer and deployment. By
+
+
+7
+J1-J2: XM540
+J3: XC430
+J4-J6: XC330
+Actuation
+J1
+J2
+J3
+J4
+J5
+J6
+Prototype
+J3 cutaway view
+High Torque
+Balanced
+Low Inertia
+Fig. 4. Active UR5e-isomorphic master: CAD model and prototype.
+contrast, large VLAs amplify these costs through expensive
+frozen-prefix forward, prefix KV accumulation beyond CPU
+RAM, high-latency large-context access, and lag-inducing full-
+model synchronization. Together, these costs prevent new
+experience from promptly affecting the deployed policy.
+To address this mismatch, ACoB-Stream introduces a
+closed-loop experience–policy architecture organized around
+state lifecycles, jointly managing experience-context state and
+policy state across four stages: experience-context formation,
+persistence, and access, followed by policy-state synchroniza-
+tion. The architecture follows two design principles: invariant-
+state decoupling avoids repeated computation, storage, and
+transfer, while on-demand streaming limits context access and
+policy synchronization to the state required by the current
+objective. Fig. 3 illustrates this four-stage architecture.
+1) Experience-Context Formation:
+Repeated model for-
+ward passes through the frozen prefix for every sampled
+item constitute a primary throughput bottleneck in large-VLA
+learner updates. In ACoB-Stream, the experience–context state
+comprises the data maintained in the replay buffer R, correc-
+tion buffer C, and context buffer K. Because the frozen prefix
+remains unchanged during online optimization, ACoB-Stream
+retains prefix KV caches generated during actor inference.
+Before persistence, observation-schema-aware compaction re-
+moves inactive prefix positions. At episode commitment, all
+transitions enter R, their effective-correction subset enters C,
+and compacted prefix contexts enter K. Transition records in R
+and C retain current and successor context identifiers that ref-
+erence K. These identifiers let the learner retrieve the required
+contexts and train the action expert without recomputing the
+frozen prefix. This reduces frozen-prefix computation from
+once per sampled item to once per new observation.
+2) Experience-Context Persistence: Within the experience–
+context state, the prefix contexts in K pose the primary per-
+sistence challenge: they must remain available across updates,
+yet their accumulated footprint outgrows CPU RAM even
+after compaction. ACoB-Stream therefore designs persistence
+around context deduplication and sliding-window sampling.
+Each cache is stored once in the disk-backed context buffer
+K. The replay and correction buffers retain only current and
+successor context identifiers for all online transitions and the
+effective-correction subset, respectively. For replay sampling,
+the sliding window bounds the active set according to the
+Linux page-cache capacity available in CPU RAM, improving
+page-cache reuse and reducing repeated disk-to-CPU data
+transfers, thereby accelerating data access without requiring
+explicit KV-cache residency. Correction sampling remains
+independent. Unlike a RAM-only sliding buffer, this design
+retains full history for checkpoint recovery while reducing
+duplicate storage and cold-disk access. Sampled transitions
+and identifiers then pass to the access stage.
+3) Experience-Context Access: Although the disk-backed
+context buffer K makes accumulated prefix contexts tractable,
+random I/O and unnecessary retrieval can still delay learner
+updates. ACoB-Stream therefore aligns experience–context
+access with each optimization objective: value optimization
+retrieves only successor contexts from K for its bootstrap
+targets, whereas action-expert optimization additionally re-
+trieves current contexts. Samples from R and C are merged
+before their required contexts are retrieved in batches from
+K by identifier. Background CPU workers sample transitions,
+retrieve contexts, and assemble host batches, while device
+workers transfer the completed batches to GPU and enqueue
+them after placement. Preparing the next GPU-ready batch
+during the current network update reduces learner idle time
+and improves GPU utilization. The learner uses these batches
+for ACoB optimization and passes the updated action-expert
+state to synchronization.
+4) Policy-State Synchronization: Completing learner opti-
+mization affects robot behavior only after the actor process
+deploys the updated policy. Full-VLA serialization, transfer,
+and loading delay deployment and increase policy-version
+lag. ACoB-Stream therefore designs synchronization around
+the trainable policy subspace. Invariant VLA state remains
+resident in both processes. The learner periodically publishes
+the complete trainable action-expert state instead of the full
+VLA or parameter deltas. Upon receipt, the actor process
+merges this state into its local VLA, completes device place-
+ment, and atomically replaces the active state under lock.
+Rollouts continue on the last valid version during preparation.
+Transmitting and loading only changed policy state reduces
+synchronization and deployment overhead, shortens policy-
+refresh latency, and brings behavior to the robot sooner.
+In summary, ACoB-Stream manages state lifecycles through
+cross-update reuse of frozen-prefix contexts, deduplicated
+disk-backed persistence and objective-aligned retrieval, and
+trainable policy-state dissemination instead of full-model syn-
+chronization. This reduces computation, memory, I/O, and
+policy-refresh overhead, allowing new experience to affect the
+deployed policy sooner.
+D. Real-World Training and Deployment
+Real-world training and deployment of VLA-Precision com-
+prise three components: teleoperation and data collection,
+two-stage algorithm training, and robot deployment, which
+respectively collect real-world experience, optimize the policy,
+and execute learned behaviors.
+1) Teleoperation and Data Collection: Task requirements
+for motion range, adjustment precision, and human–machine
+
+
+8
+Algorithm 1: Two-Stage Training of VLA-Precision
+Require: pretrained VLA π0.5; demonstrations D; trainable action-expert
+LoRA θ and frozen Stage-I reference θ0; critic and target ensembles
+{Qϕk, Q ¯ϕk}K
+k=1; replay buffer R, empty correction buffer C, and context
+buffer K; batch size B, update ratio Nc, critic warm-up steps Nw, and
+policy publication interval Npub.
+1: Stage I: Fully fine-tune π0.5 on D to obtain (Θf, ψ).
+2: Stage II: Freeze (Θf, ψ, θ0); launch actor and learner; publish θ.
+3: Actor:
+4:
+for each episode e do
+5:
+Set episode trajectory τe ←∅.
+6:
+for each interaction step t do
+7:
+(zt, aprop
+t
+) ←Infer(πΘf ,ψ,¯θn, st).
+8:
+Obtain ξt = (st, aexec
+t
+, rt, st+1, dt) from Eqs. (5) and (8).
+9:
+Append (ξt, aprop
+t
+, ct) to τe.
+10:
+end for
+11:
+Attach ysuc
+e
+to all transitions in τe.
+12:
+Append τe, τe[ct = 1], and {zt} to R, C, and K, respectively.
+13:
+end for
+14: Learner:
+15:
+wait until |R| ≥B and |C| ≥B.
+16:
+for w = 1, . . . , Nw do
+17:
+Sample B/2 from each of R and C, then retrieve contexts from K.
+18:
+Update critics Nc times by Eq. (10).
+19:
+end for
+20:
+for n = 1, 2, . . . do
+21:
+Sample B/2 from each of R and C, then retrieve contexts from K.
+22:
+Update critics Nc times by Eq. (10) and θ once by Eq. (15).
+23:
+if n mod Npub = 0 then
+24:
+Publish the updated θ to the actor.
+25:
+end if
+26:
+end for
+compliance motivate two distinct teleoperation schemes: iso-
+morphic master-based teleoperation for long sequences and
+compliant interaction, and keyboard-based teleoperation for
+tasks with limited orientation variation and fine adjustment.
+Active Isomorphic Master Interface. For the UR5e platform,
+we design and build the six-DoF active, kinematically iso-
+morphic master interface shown in Fig. 4. Its joint topology
+and axes match the UR5e, while parameterized links support
+an arbitrary task-specific scale factor and preserve direct
+joint-space mapping without online inverse kinematics. The
+structural parts can be 3D-printed directly from the design
+files and assembled with off-the-shelf components, enabling
+straightforward replication. To preserve the device and action
+distribution across demonstration collection and online correc-
+tion, the master follows the slave and maintains configuration
+alignment during policy execution, then maps operator input
+to the slave for immediate takeover upon intervention.
+This active master poses two hardware challenges. First,
+insufficient actuation prevents the master from following
+policy-driven slave motion, whereas high manual resistance
+impedes intervention, disrupting the transition from policy
+execution to operator takeover. Second, transmitting link loads
+through the servos increases drivetrain backlash and gear wear,
+degrading joint-mapping accuracy and long-term reliability. In
+GELLO [38], uniform low-torque servos cannot reliably drive
+the master to follow policy-controlled slave motion, while
+servo-borne link loads accumulate backlash and gear wear
+under repeated operation. In contrast, we address the former
+with load-aware graded actuation and the latter with a load-
+decoupled joint structure.
+In the graded actuation design, we match servo torque and
+mass to the load at each joint. Specifically, high-torque XM540
+servos at J1–J2 carry the dominant gravity loads, an XC430-
+T240BB balances torque and mass at J3, and lightweight
+XC330-T288 servos at J4–J6 reduce wrist inertia. Accordingly,
+the proximal joints provide the torque required for policy
+following and gravity compensation while distal inertia and
+manual resistance remain limited.
+However, torque alone cannot ensure structural stability over
+prolonged data collection. We therefore use an independent
+shaft, dual-bearing support, and coupling to decouple load
+bearing from actuation. In this structure, the support carries
+radial and bending loads, while the servo provides only actu-
+ation. Consequently, the resulting load path limits drivetrain
+backlash and gear wear while preserving joint stiffness and
+transmission consistency during long-term operation.
+Incremental Cartesian Keyboard Interface. For stages with
+limited orientation variation but high precision demands, con-
+tinuous teleoperation interfaces, including VR controllers and
+isomorphic masters, are ill-suited to sustained alignment at
+millimeter and submillimeter scales because hand tremor,
+device noise, and mapping error directly perturb control
+commands. To address this limitation, our keyboard interface
+maps keystrokes to predefined six-DoF translational or rota-
+tional increments in a fixed task frame and provides coarse
+and fine step sizes. Coarse steps accelerate target approach,
+whereas fine steps provide repeatable corrections at millimeter
+or submillimeter scales without requiring the operator to
+hold a precise pose. This discrete control improves precision
+and repeatability during final alignment. However, repeated
+keystrokes become cumbersome for long sequences or large
+reorientations, for which the isomorphic interface is preferred.
+State–Action Representation. We adopt a step-wise delta
+task-space action representation, whose bounded single-step
+end-effector increments facilitate stable optimization and fine-
+motion learning. Under this representation, the robot state and
+action are recorded as
+qt = [xrel
+0→t, ˙xt, ft, µt, gt] ∈R19,
+ut = [δxcmd
+t
+, gcmd
+t
+] ∈R7,
+(16)
+where xrel
+0→t ∈R6 represents the TCP pose relative to the
+episode start, ˙xt ∈R6 is the TCP twist, ft, µt ∈R3 are
+measured force and torque, and gt is the gripper state. The in-
+cremental end-effector command δxcmd
+t
+∈R6 is expressed in
+the configured frame relative to the preceding-step TCP pose.
+Joint-correspondence commands from the isomorphic master
+are converted to slave TCP increments before storage, thereby
+matching the keyboard interface. Across both interfaces, a
+unified pipeline records synchronized state–action pairs for
+training at a nominal 15 Hz.
+2) Two-Stage Real-World Training: VLA-Precision adopts
+two-stage post-training that combines demonstration-driven
+initialization with real-world online improvement. Stage I fully
+fine-tunes pretrained π0.5 on task demonstrations through flow-
+matching imitation learning. Stage II freezes the resulting
+base parameters (Θf, ψ), initializes zero-effect trainable LoRA
+parameters θ in the action expert, updates only θ, and retains
+the corresponding frozen LoRA parameters θ0 as the Stage-I
+reference. The complete procedure is shown in Algorithm 1.
+
+
+9
+Contact-Free
+Contact-Rich
+Contact-Light
+Bimanual Coordination
+01  Bulb Dropper Transfer
+02  Pipette Transfer and Ejection
+03  Pipette Tip Attachment
+04  Alcohol Lamp Extinguishing
+05  Rubber Stopper Insertion
+06  Tube Rack Loading
+07  2ml Vial Transfer
+08  Cuvette Transfer
+09  Tube Brushing
+|
+|
+|
+|
+|
+|
+|
+|
+|
+Fig. 5. Real-world chemistry manipulation task suite.
+3) Robot Deployment: To ensure safe, high-precision ex-
+ecution under physical contact, we implement robot-specific
+Cartesian impedance controllers: force-mode wrench control
+for UR5e and torque-level control for Franka.
+UR5e Force-Mode Impedance Control. At control frequency
+fc, we compute the following Cartesian PD wrench wB ∈R6
+and apply it through the UR forceMode interface:
+wB =
+fB
+µB
+
+=
+Kpep −Kv satδv(vt)
+f −1
+c
+(KReR −Kωωt)
+
+.
+(17)
+Here, (pd
+t , Rd
+t ) and (pt, Rt) denote the desired and measured
+end-effector poses, and (vt, ωt) the measured twist. With
+satb(x) = clip(x, −b, b), the upper row converts position error
+ep = satδp(pd
+t −pt) and linear velocity into force fB, whereas
+the lower converts rotation error eR = Log(Rd
+t R⊤
+t )∨and
+angular velocity into moment µB. The four gains specify the
+corresponding stiffness and damping.
+Franka Torque-Level Impedance Control. We realize the
+commanded pose with the following Cartesian impedance law,
+which produces the joint-torque command τt ∈R7:
+τt = (JC
+t )⊤(KpeC
+t −KdνC
+t )
++ Nt[KN(qJ
+0 −qJ
+t ) −DN ˙qJ
+t ] + τC.
+(18)
+Here, eC
+t
+= satc([(pd,C
+t
+−pC
+t )⊤, (eC
+R,t)⊤]⊤) and νC
+t
+=
+[(vC
+t )⊤, (ωC
+t )⊤]⊤denote the clipped pose error and twist
+in frame C. The first term maps the Cartesian PD wrench,
+with stiffness Kp and damping Kd, through JC
+t
+to the task
+torque. The second projects posture regulation toward qJ
+0
+through Nt = I −(JC
+t )⊤((JC
+t )⊤)+, stabilizing redundant
+joints without altering the end-effector task. The final term
+τC provides Polymetis Coriolis compensation. Together, these
+terms form the final torque command τt for all seven joints.
+IV. EXPERIMENTS
+In this section, we first detail the experimental setup.
+Subsequently, we evaluate the overall performance of VLA-
+Precision in real-world environments. Furthermore, we evalu-
+ate the throughput and efficiency of the ACoB-Stream system
+architecture. Finally, we validate the core mechanisms of the
+ACoB algorithm through ablation studies.
+A. Experimental Setup
+Hardware Configuration. As shown in Fig. 6, our real-
+world experiments are conducted on four robotic platforms:
+(1) a UR5e arm with a PGI-140-80 two-finger parallel gripper,
+(2) a UR5e arm with a LinkerHand L20 dexterous hand, (3)
+two UR5e arms, each equipped with a PGI-140-80 gripper,
+and (4) a Franka Research 3 arm with a PGI-140-80 gripper.
+Each single-arm platform is equipped with one wrist camera
+and one external camera, whereas the dual-arm platform is
+equipped with two wrist cameras and one external camera for
+arm-local and shared scene views.
+Baselines. We compare VLA-Precision with three real-
+world RL methods and two large VLA baselines. HIL-
+SERL [12] combines high-update-to-data off-policy RL with
+human corrections and reports near-perfect success on dex-
+terous tasks after 1–2.5 hours of real-world training. Con-
+RFT [14] fine-tunes the Octo VLA through offline-to-online
+RL with a consistency-policy action head, reporting 96.3%
+
+
+10
+(a) UR5e-DHGripper
+(b) UR5e-DexHand
+(c) Franka-DHGripper
+(d) Dual UR5e-DHGripper
+Fig. 6. Hardware platforms. Single-arm: one wrist camera and one external camera; dual-arm: two wrist cameras and one external camera.
+TABLE I
+REAL-WORLD PERFORMANCE ACROSS CHEMISTRY MANIPULATION TASKS.
+Task
+Ours
+Training
+(min)
+Success Rate (%)
+Average Episode Time (s)
+HIL-
+SERL ConRFT
+Robo-
+Dopamine
+π0
+π0.5
+Ours
+HIL-
+SERL
+ConRFT
+Robo-
+Dopamine
+π0
+π0.5
+Ours
+Tube Rack Loading
+27
+0
+5(+5%)
+10(+10%)
+75(+75%)
+85(+85%)
+100(+100%)
+N/S
+31.4(×0.8) 29.8(×0.9) 25.6(×1.0) 24.9(×1.0) 23.5(×1.1)
+2 mL Vial Transfer
+34
+0
+5(+5%)
+5(+5%)
+80(+80%)
+85(+85%)
+100(+100%)
+N/S
+49.2(×0.8) 46.8(×0.8) 37.1(×1.0) 33.6(×1.1) 33.3(×1.1)
+Cuvette Transfer
+65
+0
+0(+0%)
+0(+0%)
+35(+35%)
+40(+40%)
+90(+90%)
+N/S
+N/S
+N/S
+53.3(×1.0) 52.6(×1.0) 46.2(×1.2)
+Rubber Stopper Insertion
+52
+5
+10(+5%) 15(+10%)
+50(+45%)
+70(+65%)
+100(+95%)
+44.6(×0.6) 38.9(×0.7) 37.7(×0.7) 28.1(×1.0) 23.8(×1.2) 19.2(×1.5)
+Alcohol Lamp Extinguishing
+23
+0
+5(+5%)
+10(+10%)
+85(+85%)
+90(+90%)
+100(+100%)
+N/S
+29.4(×0.8) 27.8(×0.8) 22.4(×1.0) 21.1(×1.1) 21.0(×1.1)
+Pipette Tip Attachment
+44
+15
+35(+20%) 40(+25%)
+35(+20%)
+50(+35%)
+100(+85%)
+21.6(×0.8) 17.8(×0.9) 18.4(×0.9) 16.6(×1.0) 14.0(×1.2) 11.5(×1.4)
+Bulb Dropper Transfer
+28
+5
+10(+5%)
+10(+5%)
+90(+85%)
+90(+85%)
+100(+95%)
+32.7(×0.8) 30.8(×0.9) 29.6(×0.9) 26.4(×1.0) 24.7(×1.1) 24.4(×1.1)
+Pipette Transfer and Ejection
+51
+0
+0(+0%)
+0(+0%)
+80(+80%)
+90(+90%)
+100(+100%)
+N/S
+N/S
+N/S
+36.7(×1.0) 35.4(×1.0) 33.6(×1.1)
+Tube Brushing
+87
+0
+0(+0%)
+0(+0%)
+5(+5%)
+10(+10%)
+95(+95%)
+N/S
+N/S
+N/S
+41.7(×1.0) 39.7(×1.0) 35.6(×1.2)
+Average
+45.8
+2.8
+7.8(+5%) 10(+7.2%) 59.4(+56.7%) 67.8(+65%) 98.3(+95.6%) 50.4(×0.6) 45.3(×0.7) 44.5(×0.7) 32.0(×1.0) 30.0(×1.1) 27.6(×1.2)
+TABLE II
+TRAINING SETTINGS FOR VLA-PRECISION AND VLA BASELINES.
+Task
+π0 / π0.5
+Ours
+SFT Demos. SFT Steps
+Stage-I Demos. Stage-I Steps
+Max Horizon
+Variation Range
+Tube Rack Loading
+120
+25000
+80
+10000
+150
+40×40 cm
+2 mL Vial Transfer
+150
+25000
+80
+10000
+250
+40×40 cm
+Cuvette Transfer
+200
+30000
+120
+15000
+260
+25×25 cm
+Rubber Stopper Insertion
+150
+25000
+80
+5000
+140
+40×40 cm
+Alcohol Lamp Extinguishing
+120
+25000
+80
+10000
+120
+40×40 cm
+Pipette Tip Attachment
+120
+25000
+60
+5000
+90
+15 tip holes
+Bulb Dropper Transfer
+150
+25000
+80
+15000
+150
+40×20 cm
+Pipette Transfer and Ejection
+150
+25000
+120
+15000
+220
+2×4 holes
+Tube Brushing
+200
+30000
+120
+15000
+250
+L: 10×10 cm; R: 15×10 cm
+TABLE III
+SHARED HYPERPARAMETERS FOR REAL-WORLD ONLINE TRAINING.
+Hyperparameter
+Value
+λrank
+50
+(wBC, wrel, wref)
+(0.25, 0.50, 0.25)
+Initial reset range
+3 cm in x, y, and z
+Training GPUs
+4× NVIDIA A800 GPUs
+average success across eight real-world tasks within 45–90
+min. Robo-Dopamine [32] performs RL on the Octo VLA
+using dense rewards generated by a process reward model
+adapted with one demonstration, reporting 95.2% average
+success after 150 real-world rollouts. π0 [1] and π0.5 [2] are
+pretrained flow-based large VLAs that we fine-tune on each
+task without Stage-II online RL.
+Tasks and Metrics. We design nine high-precision ma-
+nipulation tasks in chemistry laboratories (Fig. 5) to evaluate
+performance across four task categories: contact-rich, contact-
+light, contact-free, and bimanual coordination. To rigorously
+evaluate generalization, we deliberately vary object poses and
+initial arm poses in every task, with the evaluated ranges for
+object poses and arm resets reported in the Variation Range
+column of Table II and Table III, respectively.
+1) High-Precision Contact-Rich Tasks. These tasks demand
+millimeter and submillimeter precision, since even slight pose
+errors can cause jamming or damage during insertion.
+Cuvette Transfer. The robot sequentially transfers two
+cuvettes from one rack to two designated diagonal slots in
+another rack. The fully transparent glass cuvettes and racks
+complicate visual perception, while their fragility demands
+precise pose and force control.
+2 mL Vial Transfer. The robot sequentially transfers two
+2 mL vials from one rack to diagonal slots in another. The
+
+
+11
+0
+10
+20
+30
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Auto. Success Rate
+2 mL Vial Transfer
+0
+15
+30
+45
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Auto. Success Rate
+Rubber Stopper Insertion
+0
+15
+30
+45
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Auto. Success Rate
+Pipette Tip Attachment
+0
+15
+30
+45
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Auto. Success Rate
+Pipette Transfer & Ejection
+0
+20
+40
+60
+80
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Auto. Success Rate
+Tube Brushing
+0
+10
+20
+30
+Training Time (Minutes)
+-1.0
+-0.5
+0.0
+0.5
+1.0
+Eff. Success Rate
+2 mL Vial Transfer
+0
+15
+30
+45
+Training Time (Minutes)
+-1.0
+-0.5
+0.0
+0.5
+1.0
+Eff. Success Rate
+Rubber Stopper Insertion
+0
+15
+30
+45
+Training Time (Minutes)
+-1.0
+-0.5
+0.0
+0.5
+1.0
+Eff. Success Rate
+Pipette Tip Attachment
+0
+15
+30
+45
+Training Time (Minutes)
+-1.0
+-0.5
+0.0
+0.5
+1.0
+Eff. Success Rate
+Pipette Transfer & Ejection
+0
+20
+40
+60
+80
+Training Time (Minutes)
+-1.0
+-0.5
+0.0
+0.5
+1.0
+Eff. Success Rate
+Tube Brushing
+0
+10
+20
+30
+Training Time (Minutes)
+0
+2500
+5000
+7500
+Interventions
+2 mL Vial Transfer
+0
+15
+30
+45
+Training Time (Minutes)
+0
+3000
+6000
+9000
+Interventions
+Rubber Stopper Insertion
+0
+15
+30
+45
+Training Time (Minutes)
+0
+2500
+5000
+7500
+Interventions
+Pipette Tip Attachment
+0
+15
+30
+45
+Training Time (Minutes)
+0
+4000
+8000
+12000
+Interventions
+Pipette Transfer & Ejection
+0
+20
+40
+60
+80
+Training Time (Minutes)
+0
+6000
+12000
+18000
+Interventions
+Tube Brushing
+0
+10
+20
+30
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Intervention Rate
+2 mL Vial Transfer
+0
+15
+30
+45
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Intervention Rate
+Rubber Stopper Insertion
+0
+15
+30
+45
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Intervention Rate
+Pipette Tip Attachment
+0
+15
+30
+45
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Intervention Rate
+Pipette Transfer & Ejection
+0
+20
+40
+60
+80
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Intervention Rate
+Tube Brushing
+VLA-Precision
+HIL-SERL
+ConRFT
+Robo-Dopamine
+Fig. 7. Real-world online RL training dynamics on five representative tasks. Autonomous success rate is the 20-episode rolling mean of autonomous task
+completion. Effective success rate is the 20-episode rolling mean of task completion, including assisted completion, minus the intervention rate. Interventions
+denote cumulative human-corrected low-level action steps, and intervention rate is the 20-episode rolling mean of their per-episode fraction.
+small vial diameter imposes tight alignment tolerances.
+Tube Rack Loading. The robot lifts a centrifuge-tube rack
+and inserts it into a loading slot. Insertion requires complete
+pose alignment with the slot and precise force control.
+2) High-Precision Contact-Light Tasks. Limited and intermit-
+tent contact demands stable action generation by coordinating
+visual and force feedback to prevent object instability.
+Rubber Stopper Insertion. The robot inserts a rubber
+stopper into a reagent-bottle opening. A high grasp can crush
+the stopper, whereas a low grasp leaves insufficient insertion
+clearance, and bottle motion demands stable control.
+Alcohol Lamp Extinguishing. The robot covers an alcohol-
+lamp wick with an extinguisher cap. Visual interference from
+the flame demands precise action generation through fused
+visual and force feedback.
+Pipette Tip Attachment. The robot aligns a pipette with a
+tip and presses it into place. The narrow tip aperture requires
+precise alignment and appropriate axial force.
+3) High-Precision Contact-Free Tasks. Without contact feed-
+back, these tasks rely on visual observations and robot state
+for action generation while limiting accumulated error.
+Bulb Dropper Transfer. The robot uses a flexible bulb
+dropper to aspirate and dispense liquid. Visual guidance must
+coordinate finger actuation with precise end-effector align-
+ment, leaving little tolerance for timing or pose errors.
+Pipette Transfer and Ejection. The robot transfers liquid
+and ejects the used pipette tip. The long sequence requires
+visually guided coordination of hand state and end-effector
+motion while limiting accumulated error.
+4) Bimanual High-Precision Coordination Task. This task
+demands high-precision bimanual coordination, since errors
+from either arm directly disrupt execution.
+Tube Brushing. One arm stabilizes a test tube while the
+other inserts and manipulates a brush. The transparent tube
+complicates visual localization, while brushing requires high-
+precision coordination between the two arms.
+B. Real-World Evaluation of VLA-Precision
+Overall Performance. Table I reports the real-world ex-
+perimental results across nine chemistry manipulation tasks.
+Compared with the baselines, VLA-Precision achieves the
+highest average success rate of 98.3% after an average of
+45.8 min of online training per task and completes successful
+trials in 27.6 s on average. It succeeds in 177 of 180 held-out
+trials, reaches 100% on seven tasks, and maintains at least 90%
+success on every task. Relative to π0.5 and π0, VLA-Precision
+
+
+12
+0
+50
+100
+Success Rate (%)
+20/20
+17/20
+16/20
+Ours
+¼0.5
+¼0
+2 mL Vial Transfer
+0
+50
+100
+Success Rate (%)
+20/20
+14/20
+10/20
+Ours
+¼0.5
+¼0
+Rubber Stopper Insertion
+0
+50
+100
+Success Rate (%)
+20/20
+10/20
+7/20
+Ours
+¼0.5
+¼0
+Pipette Tip Attachment
+0
+50
+100
+Success Rate (%)
+20/20
+18/20
+16/20
+Ours
+¼0.5
+¼0
+Pipette Transfer & Ejection
+0
+50
+100
+Success Rate (%)
+19/20
+2/20
+1/20
+Ours
+¼0.5
+¼0
+Tube Brushing
+0
+10
+20
+30
+40
+50
+Completion Time (s)
+Ours
+¼0.5
+¼0
+2 mL Vial Transfer
+33.3 s
+33.6 s
+37.1 s
+0
+10
+20
+30
+40
+50
+Completion Time (s)
+Ours
+¼0.5
+¼0
+Rubber Stopper Insertion
+19.2 s
+23.8 s
+28.1 s
+0
+10
+20
+30
+40
+50
+Completion Time (s)
+Ours
+¼0.5
+¼0
+Pipette Tip Attachment
+11.5 s
+14.0 s
+16.6 s
+0
+10
+20
+30
+40
+50
+Completion Time (s)
+Ours
+¼0.5
+¼0
+Pipette Transfer & Ejection
+33.6 s
+35.4 s
+36.7 s
+0
+10
+20
+30
+40
+50
+Completion Time (s)
+Ours
+¼0.5
+¼0
+Tube Brushing
+35.6 s
+39.7 s
+41.7 s
+VLA-Precision
+¼0.5
+¼0
+Fig. 8. Real-world test performance on five representative tasks. Each method–task pair comprises 20 trials. Top: success rates with two-sided Wilson 95%
+confidence intervals. Bottom: successful-trial completion times (open circles) and their means (filled markers).
+improves average success by 30.5% and 38.9% and improves
+average execution speed by 8.7% and 15.9%, respectively.
+Its worst-task success rate is 90%, compared with 10% for
+π0.5 and 5% for π0. Relative to the strongest real-world RL
+baseline, Robo-Dopamine, VLA-Precision improves average
+success by 88.3% and average execution speed by 61.2%.
+The results reveal the limitations of the baselines. HIL-
+SERL learns a compact task-specific policy but starts online
+RL with limited task-specific competence. Although effec-
+tive in shorter-horizon settings with limited task variation,
+it reaches only 2.8% average success on our longer-horizon,
+pose-randomized suite. ConRFT and Robo-Dopamine demon-
+strate online RL on the Octo VLA, with Robo-Dopamine pro-
+viding dense progress rewards. Although both enter online RL
+after task-specific offline training on Octo, direct maximization
+of absolute Q estimates remains vulnerable to optimistic value
+errors and policy drift. Their average success is limited to 7.8%
+and 10.0%. Full-parameter fine-tuning of π0 and π0.5 retains
+stronger pretrained VLA priors and improves average success
+to 59.4% and 67.8%, but remains bounded by demonstration-
+only adaptation. The 98.3% average success of VLA-Precision
+shows that ACoB breaks the demonstration-limited ceiling
+through online RL while preserving the generalization inher-
+ited from the task-finetuned large VLA.
+Online RL Training Performance. Fig. 7 shows four
+online RL metrics on five representative tasks. At the final
+task-specific comparison horizons, VLA-Precision leads all
+four metrics. Across the five tasks, autonomous success rate,
+effective success rate, interventions, and intervention rate
+average 98.0%, 99.0%, 2,517.4, and 0.024%, respectively.
+Relative to Robo-Dopamine, the strongest baseline, VLA-
+Precision raises autonomous and effective success rates by
+92.0 and 49.5 percentage points while reducing interventions
+by 66.9% and intervention rate by 40.46 percentage points.
+For the high-precision contact-rich 2 mL vial transfer
+task, successive pick-and-place operations form a multistep
+sequence. HIL-SERL begins with limited task-specific com-
+petence and never achieves autonomous success. Its effective
+success rate remains below zero because assisted success
+cannot offset the 91.95% final intervention rate. ConRFT
+and Robo-Dopamine enter with task-specific behavior learned
+offline and lower intervention rates to 49.70% and 42.84%, yet
+both end at only 5% autonomous success. Their BC regular-
+ization anchors the actor, but direct absolute-Q maximization
+remains vulnerable to optimistic value errors and policy drift,
+preventing reliable autonomous multistep behavior.
+For the high-precision contact-light rubber-stopper insertion
+and pipette-tip attachment tasks, HIL-SERL ends stopper in-
+sertion at 0% autonomous success and the 60.07% intervention
+rate. ConRFT and Robo-Dopamine end at only 5% and 10%,
+with rates of 48.08% and 45.63%, respectively. Offline-learned
+task behavior reduces intervention for the latter two, but
+unstable updates perturb the compliant stopper and easily
+displaced bottle, preventing stable behavior. Tip attachment
+is the only short-sequence task without gripper control. The
+three baselines peak at 15%, 35%, and 40% autonomous
+success but fall to 5%, 10%, and 15% across 15 randomized
+holes. The higher VLA peaks show faster local acquisition,
+but susceptibility to optimistic value errors and policy drift
+prevents robust pose generalization.
+For the high-precision contact-free pipette transfer and tip
+ejection task, the alignment demand of tip attachment expands
+into a long sequence. All three baselines remain at 0%
+autonomous success. Starting with weaker task-specific com-
+petence, HIL-SERL accumulates 13,512 interventions with a
+79.82% intervention rate, while ConRFT and Robo-Dopamine
+require 10,154 and 8,614 interventions at rates of 56.10%
+and 47.96%, respectively. Stable insertion into and withdrawal
+from narrow tube openings require precise actions conditioned
+on vision and robot state. Task-specific offline initialization
+reduces intervention, and Robo-Dopamine adds dense progress
+rewards. However, direct absolute-Q maximization leaves both
+methods vulnerable to accumulated value and motion errors,
+so alignment cannot remain stable over the full sequence.
+For the bimanual high-precision test-tube brushing task, the
+coupled dual-arm data distribution and long sequence leave
+
+
+13
+0
+30
+60
+90
+120
+150
+Effective learner time (min)
+0.0
+0.5
+1.0
+1.5
+CTA cycles / s
+M1
+M2
+M3
+M4
+Ours
+M1
+M2
+M3
+M4
+Ours
+0
+5000
+10000
+15000
+20000
+Cumulative CTA cycles
+1,431
+10,258
+8,707
+14,412
+15,666
+Ours: 10.95x vs M1 1.09x vs M4
+M1
+M2
+M3
+M4
+Ours
+0
+2
+4
+6
+8
+Mean CTA cycle time (s)
+6.284
+0.877
+1.034
+0.624
+0.574
+Ours: 90.9% lower vs M1 8.0% lower vs M4
+Median CTA cycle time (s)
+6.2
+6.3
+0
+30
+60
+90
+120
+150
+Effective learner time (min)
+0.5
+1.0
+1.5
+M1
+M2
+M3
+M4
+Ours
+No KV cache
+Disk full random
+Naive access
+CPU dynamic RAM
+ACoB-Stream
+Fig. 9. Training throughput and latency comparison. Top left: CTA throughput
+versus effective learner time. Top right: cumulative CTA cycles after 150 min.
+Bottom left: median CTA cycle time versus effective learner time. Bottom
+right: mean CTA cycle time. A CTA cycle comprises one critic-only update
+and one joint critic–actor update.
+all baselines at 0% autonomous success. Starting with weaker
+task-specific competence, HIL-SERL accumulates 19,196 in-
+terventions. ConRFT and Robo-Dopamine begin with task
+behavior learned offline and reduce the counts to 15,587
+and 13,322, yet neither succeeds autonomously. Their BC
+regularization anchors the actor, but absolute-Q policy drift
+compounds across both arms and destabilizes the sequence.
+ACoB instead rapidly absorbs online corrections through
+intervention-guided behavior cloning, continually calibrates
+value estimates through global returns and state-matched pref-
+erences, and stabilizes relative-advantage updates with a frozen
+reference. Together, these mechanisms raise the autonomous
+success rate and reduce the intervention rate across all five
+tasks, validating asymmetric co-bootstrapping.
+Offline VLA Test Performance. We further evaluate VLA-
+Precision, π0.5, and π0 offline on the same five representative
+tasks. As summarized in Table II, π0 and π0.5 receive 120–
+200 demonstrations and 25,000–30,000 SFT steps, whereas
+VLA-Precision uses 60–120 demonstrations and 5,000–15,000
+Stage-I steps before online RL.
+Fig. 8 reports 20 trials per method and task. Overall, VLA-
+Precision succeeds in 99 of 100 trials, compared with 61 for
+π0.5 and 50 for π0, improving average success by 38 and 49
+percentage points, respectively. Notably, it reaches 100% on
+all four single-arm tasks and 95% on bimanual tube brushing.
+Across the single-arm tasks, π0.5 ranges from 50–90% and
+π0 from 35–80%. On brushing, they fall to 10% and 5%.
+VLA-Precision also completes successful trials in 26.65 s on
+average, compared with 29.32 s for π0.5 and 32.05 s for π0.
+More importantly, the task-level gaps expose the limits of
+demonstration-only fine-tuning under pose randomization, pre-
+cision demands, and long-horizon coordination. Collectively,
+these results show that online RL strengthens the task-specific
+VLA policy beyond demonstration-only adaptation, yielding
+consistently robust execution across the five tasks.
+C. Throughput and Efficiency Evaluation of ACoB-Stream
+To quantify the system-level advantages of ACoB-Stream
+in large-VLA online RL, we compare it with four actor–
+learner system baselines in online RL update throughput and
+computational efficiency. These baselines extend the asyn-
+chronous actor–learner architecture. HIL-SERL [12] is the
+most representative real-world implementation of this architec-
+ture. It decouples robot interaction from policy optimization so
+that data collection and policy updates proceed without syn-
+chronous blocking. We adapt this architecture to large VLAs
+and construct three system-level ablations plus a competitive
+CPU-resident alternative.
+The first three baselines selectively remove ACoB-Stream
+mechanisms. M1: No KV Cache removes cross-update reuse
+of frozen-prefix contexts and recomputes the required contexts
+during every update. M2: Disk Full Random retains the disk-
+backed context store but replaces sliding-window sampling
+with uniform sampling over the full replay history. M3: Naive
+Context Access removes objective-aligned context retrieval
+by always loading both current and successor contexts, and
+disables on-demand context prefetch. M4: Dynamic CPU
+RAM is a competitive alternative that maintains a dynamically
+sized replay and KV active window in learner CPU RAM,
+applies FIFO eviction, and retains disk copies for persistence.
+M5: Disk ACoB-Stream is the full system, combining cross-
+update reuse of frozen-prefix contexts, context deduplication
+with disk-backed sliding-window sampling, and objective-
+aligned context retrieval with on-demand context prefetch.
+Fig. 9 reports the system evaluation. Disk ACoB-Stream
+achieves the highest update throughput and the lowest mean
+critic-to-actor (CTA) cycle latency, completing 15,666 CTA
+cycles in 150 min at 1.7407 CTA/s and 0.574 s per cy-
+cle. Compared with No KV Cache, it delivers 10.95× the
+throughput and reduces mean latency by 90.9%, demonstrating
+the computational value of cross-update frozen-prefix reuse.
+Against Disk Full Random, it provides 1.53× the throughput
+and 34.5% lower mean latency. Moreover, full-history random
+sampling begins to degrade at 43 min as the replay working set
+exceeds the Linux page-cache capacity, causing more frequent
+disk-to-CPU transfers, with its throughput eventually declining
+from 1.56 to 0.45 CTA/s, while Disk ACoB-Stream reaches
+1.74 CTA/s in the final 5-min bin, showing that sliding-
+window sampling preserves disk locality as replay grows.
+Objective-aligned retrieval and on-demand prefetch jointly
+provide 1.80× the throughput and 44.4% lower mean latency
+than Naive Context Access, confirming the benefit of loading
+and transferring only required contexts. Although Dynamic
+CPU RAM remains competitive, it requires a more complex
+memory hierarchy to manage dynamically sized CPU-resident
+replay and KV windows, coordinate FIFO eviction, and main-
+tain disk persistence. Disk ACoB-Stream delivers 1.09× the
+throughput and 8.0% lower latency while eliminating CPU–
+disk active-window coordination overhead.
+D. Ablation Experiments for the ACoB Algorithm
+To evaluate the contributions of the core mechanisms in
+ACoB, we compare the full algorithm with three ablated
+variants on four representative tasks. w/o critic preference
+removes the intervention-guided critic preference loss and
+computes the same paired action comparison through equiva-
+lent relative Q-value differences rather than relative advantage
+
+
+14
+0
+10
+20
+30
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Auto. Success Rate
+2 mL Vial Transfer
+0
+15
+30
+45
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Auto. Success Rate
+Rubber Stopper Insertion
+0
+15
+30
+45
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Auto. Success Rate
+Pipette Transfer & Ejection
+0
+25
+50
+75
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Auto. Success Rate
+Tube Brushing
+0
+10
+20
+30
+Training Time (Minutes)
+-1.0
+-0.5
+0.0
+0.5
+1.0
+Eff. Success Rate
+2 mL Vial Transfer
+0
+15
+30
+45
+Training Time (Minutes)
+-1.0
+-0.5
+0.0
+0.5
+1.0
+Eff. Success Rate
+Rubber Stopper Insertion
+0
+15
+30
+45
+Training Time (Minutes)
+-1.0
+-0.5
+0.0
+0.5
+1.0
+Eff. Success Rate
+Pipette Transfer & Ejection
+0
+25
+50
+75
+Training Time (Minutes)
+-1.0
+-0.5
+0.0
+0.5
+1.0
+Eff. Success Rate
+Tube Brushing
+0
+10
+20
+30
+Training Time (Minutes)
+0
+300
+600
+900
+Interventions
+2 mL Vial Transfer
+0
+15
+30
+45
+Training Time (Minutes)
+0
+2000
+4000
+6000
+Interventions
+Rubber Stopper Insertion
+0
+15
+30
+45
+Training Time (Minutes)
+0
+2000
+4000
+6000
+Interventions
+Pipette Transfer & Ejection
+0
+25
+50
+75
+Training Time (Minutes)
+0
+4000
+8000
+12000
+Interventions
+Tube Brushing
+0
+10
+20
+30
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Intervention Rate
+2 mL Vial Transfer
+0
+15
+30
+45
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Intervention Rate
+Rubber Stopper Insertion
+0
+15
+30
+45
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Intervention Rate
+Pipette Transfer & Ejection
+0
+25
+50
+75
+Training Time (Minutes)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Intervention Rate
+Tube Brushing
+Ours
+w/o Critic Preference
+w/o Actor BC
+w/o Relative Advantage
+Fig. 10. ACoB ablation training dynamics across four representative tasks. Columns denote tasks; rows show autonomous success rate, effective success rate,
+cumulative interventions, and intervention rate over training time. Rate metrics are 20-episode rolling means.
+differences. w/o actor BC removes intervention-guided behav-
+ior cloning and renormalizes the remaining actor-loss weights.
+w/o relative advantage replaces relative-advantage policy
+improvement with direct sampled-action Q maximization.
+Overall Results. Fig. 10 reports results at the per-task
+horizons shared by all four variants. Full ACoB reaches
+96.25% final autonomous success with a 0.03% intervention
+rate on average. Removing critic preference, actor BC, or
+relative advantage reduces autonomous success to 26.25%,
+20.00%, and 8.75%, while increasing intervention rates to
+10.57%, 9.24%, and 24.93%. Interventions across the four
+tasks also rise from 10,080 to 16,580, 19,581, and 28,806.
+These degradations demonstrate that the evaluated mechanisms
+are required for reliable autonomous improvement.
+w/o critic preference. Without state-matched preference
+ranking, TD observes only executed actions and cannot correct
+the value of overwritten policy proposals. Returns obtained
+after human correction can therefore leave failed proposals
+overvalued, weakening subsequent action comparisons. The
+70.00-point success drop demonstrates that critic preference
+resolves this local credit ambiguity and progressively cali-
+brates action-dependent value estimates.
+w/o actor BC. Removing actor BC prevents successful
+and human-corrected actions from being directly absorbed by
+the action expert. Behavioral improvement must then rely on
+slower, indirect critic guidance, increasing intervention and
+degrading the online experience underlying value calibration.
+The 76.25-point success drop confirms that actor BC rapidly
+converts corrections into stable behavior and improves the
+experience supporting subsequent value learning.
+w/o relative advantage. Replacing relative-advantage im-
+provement with direct Q maximization produces the largest
+degradation: an 87.50-point success drop and 24.93% inter-
+vention rate. Direct maximization exposes the action expert to
+absolute value scale and optimistic critic errors, favoring high
+predicted Q values over reliable local improvement. Relative
+
+
+15
+3
+4
+5
+6
+Action Horizon
+0
+20
+40
+60
+80
+100
+Success Rate (%)
+Overall average: 58% to 7%
+1
+2
+3
+4
+5
+6
+Action Horizon
+-40
+-20
+0
+20
+40
+Relative RMSE (%)
+Overall average: -30% to +29%
+¢H1
+¢H2
+¢H3
+¢H4
+¢H5
+Extension Step
+0
+2
+4
+6
+8
+Critical Excess RMSE
+10-3
+Overall average: All means > 0.6
+¢H1
+¢H2
+¢H3
+¢H4
+¢H5
+Extension Step
+0
+2
+4
+6
+8
+Marginal RMSE
+10-3
+Overall average: 4.2 to 1.9
+Pipette tip
+Cuvette
+Dual bottle
+Overall average
+Fig. 11.
+Action-horizon analysis of π0.5 on three representative precision-
+insertion tasks. Top left: autonomous success rate versus executed action
+horizon He. Top right: relative action-prediction RMSE, measuring predicted–
+demonstration action discrepancy as the percentage change from He = 3.
+Bottom left: excess marginal RMSE in interaction-critical phases relative to
+normal motion. Bottom right: marginal RMSE increase for each extension
+∆Hi, where ∆Hi denotes increasing He from i to i + 1. Colored markers
+denote task means, red diamonds their equal-task-weighted mean, and bottom-
+left whiskers 95% episode-bootstrap confidence intervals.
+advantage is therefore essential for translating value estimates
+into stable policy improvement while suppressing policy drift.
+In
+summary,
+the
+ablations
+validate
+asymmetric
+co-
+bootstrapping in ACoB: actor BC rapidly improves behavior
+and online experience quality, while critic preference pro-
+gressively calibrates value estimates, yielding reliable relative
+advantages for stable policy improvement.
+V. DISCUSSION
+Our results indicate that reliable real-world RL of large
+VLAs depends on resolving an early temporal asymmetry: task
+fine-tuning yields a capable policy before online experience
+can adequately calibrate the critic. Consequently, conserva-
+tive value-guided updates learn slowly, whereas aggressive
+updates risk policy drift. ACoB closes this gap by rapidly
+improving behavior from successful and corrected actions
+while progressively calibrating value estimates, creating a
+positive feedback loop that advances the policy beyond direct
+supervision without eroding task-specific competence.
+Practical real-world RL of large VLAs also depends on how
+efficiently new experience is converted into policy updates.
+As data accumulate, redundant computation, transfer, and
+random access increase update latency. ACoB-Stream shows
+that jointly managing reusable computation, experience, and
+policy state can sustain this experience–policy loop under finite
+compute and memory during continuous online training.
+More broadly, our findings show that real-world RL can
+improve an already capable VLA while preserving its task-
+specific competence. In high-precision tasks, small value-
+induced policy shifts can destabilize objects, damage equip-
+ment, or cause unsafe interaction. Maintaining behavioral
+stability during improvement is therefore central to extending
+online RL to higher-risk precision tasks.
+Building on these findings, we discuss two broader research
+directions that warrant further investigation:
+1) Long-Horizon Bimanual Real-World RL for VLAs. The
+evaluation includes one bimanual precision task but not longer
+sequences with multiple precision-critical stages, where local
+errors accumulate and degrade later operations. Longer se-
+quences make the reference scheme for delta actions increas-
+ingly important. Let xref
+t
+denote the TCP pose at the start of
+the current action horizon. Step-wise and chunk-wise forms
+decode as
+exstep
+t+k = xref
+t
++
+k
+X
+j=1
+zstep
+t,j ,
+exchunk
+t+k
+= xref
+t
++ zchunk
+t,k
+,
+k = 1, . . . , He,
+(19)
+where step-wise deltas reference the preceding TCP pose,
+keeping the target distribution compact and bounded but
+recursively accumulating prediction errors. Chunk-wise deltas
+reference the horizon-start pose and avoid recursive accu-
+mulation, although their target distribution broadens as He
+increases. We therefore use step-wise deltas with He = 3
+to preserve frequent closed-loop correction while limiting
+recursive accumulation in the current precision setting.
+To quantify this horizon-dependent error accumulation, we
+evaluate the π0.5 fine-tuned on task demonstrations using
+step-wise deltas at different executed action horizons on
+three representative high-precision insertion tasks, as shown
+in Fig. 11. Specifically, increasing He from 3 to 6 reduces
+average autonomous success from 58.3% to 6.7% and in-
+creases relative action-prediction RMSE by 29.3%. Although
+the marginal RMSE introduced by each horizon extension
+decreases, it remains positive and is consistently higher during
+interaction-critical phases than during normal motion. These
+results expose the limitation of step-wise deltas as the ex-
+ecution horizon grows and motivate chunk-wise deltas for
+long-horizon bimanual manipulation. Feng et al. [39] provide
+complementary theoretical and empirical support by deriving
+O(He) and O(1) worst-case error growth for step-wise and
+chunk-wise deltas, respectively, and reporting superior chunk-
+wise performance in long-horizon imitation learning.
+2) Multi-Task Real-World RL for Large VLAs. An important
+extension beyond current task-specific training is to apply
+ACoB to joint multi-task optimization of a shared large
+VLA, enabling interaction experience to transfer across related
+skills while reducing per-task data collection. Task-conditioned
+value learning with balanced interaction data and retained
+demonstrations provides a feasible path to limiting interference
+and catastrophic forgetting, as supported by recent multi-task
+real-world VLA post-training [34].
+VI. CONCLUSION
+In this work, we present VLA-Precision, an efficient frame-
+work for real-world online RL of large VLAs. Within this
+framework, ACoB couples rapid behavioral learning with pro-
+gressive value calibration across timescales, improving high-
+precision policies beyond demonstration-based limits while
+suppressing drift. To make this optimization efficient for large
+VLAs, ACoB-Stream establishes invariant-state decoupling
+
+
+16
+and on-demand streaming as design principles, delivering up
+to 10.9× improvements in throughput and computational effi-
+ciency. Extensive evaluations across nine high-precision chem-
+istry tasks and four robot embodiments demonstrate 98.3%
+average success in 45.8 min/task, with 27.6 s episodes running
+at 1.2× and 1.8× the speeds of VLA and RL baselines.
+REFERENCES
+[1] K. Black, N. Brown, D. Driess, A. Esmail, M. R. Equi, C. Finn, N. Fusai,
+L. Groom, K. Hausman, B. Ichter, S. Jakubczak, T. Jones, L. Ke,
+S. Levine, A. Li-Bell, M. Mothukuri, S. Nair, K. Pertsch, L. X. Shi,
+L. Smith, J. Tanner, Q. Vuong, A. Walling, H. Wang, and U. Zhilinsky,
+“π0: A vision-language-action flow model for general robot control,” in
+Proceedings of RSS, 2025.
+[2] K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail,
+M. R. Equi, C. Finn, N. Fusai, M. Y. Galliker, D. Ghosh, L. Groom,
+K. Hausman, B. Ichter, S. Jakubczak, T. Jones, L. Ke, D. LeBlanc,
+S. Levine, A. Li-Bell, M. Mothukuri, S. Nair, K. Pertsch, A. Z. Ren,
+L. X. Shi, L. Smith, J. T. Springenberg, K. Stachowicz, J. Tanner,
+Q. Vuong, H. Walke, A. Walling, H. Wang, L. Yu, and U. Zhilinsky,
+“π0.5: A vision-language-action model with open-world generalization,”
+in Proceedings of CoRL, vol. 305, pp. 17–40, 2025.
+[3] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair,
+R. Rafailov, E. P. Foster, P. R. Sanketi, Q. Vuong, T. Kollar, B. Burchfiel,
+R. Tedrake, D. Sadigh, S. Levine, P. Liang, and C. Finn, “OpenVLA:
+An open-source vision-language-action model,” in Proceedings of CoRL,
+vol. 270, pp. 2679–2713, 2025.
+[4] Y. Guo, J. Zhang, X. Chen, X. Ji, Y.-J. Wang, Y. Hu, and J. Chen,
+“Improving vision-language-action model with online reinforcement
+learning,” in Proceedings of ICRA, pp. 15665–15672, 2025.
+[5] W. Xiao, H. Lin, A. Peng, H. Xue, T. He, Y. Xie, F. Hu, J. Wu, Z. Luo,
+L. Fan, G. Shi, and Y. Zhu, “Self-improving vision-language-action
+models with data generation via residual RL,” in Proceedings of ICLR,
+2026.
+[6] F. Zhu, Z. Yan, Z. Hong, Q. Shou, X. Ma, and S. Guo, “WMPO: World
+model-based policy optimization for vision-language-action models,” in
+Proceedings of ICLR, 2026.
+[7] G. Lu, W. Guo, C. Zhang, Y. Zhou, H. Jiang, Z. Gao, Y. Tang,
+and Z. Wang, “VLA-RL: Towards masterful and general robotic
+manipulation with scalable reinforcement learning,” arXiv preprint
+arXiv:2505.18719, 2025.
+[8] H. Zang, M. Wei, S. Xu, Y. Wu, Z. Guo, Y. Wang, H. Lin, P. Wang,
+H. Yuan, Y. Zhang, L. Shi, Y. Xie, Z. Xu, Z. Liu, K. Chen, W. Tang,
+Q. Zhang, W. Zhang, C. Yu, and Y. Wang, “RLux-VLA: A unified and
+efficient framework for reinforcement learning of vision-language-action
+models,” in Proceedings of RSS, 2026.
+[9] A. Amin, R. Aniceto, A. Balakrishna, K. Black, K. Conley, G. B.
+Connors, J. Darpinian, K. Dhabalia, J. Di Carlo, D. Driess, M. R.
+Equi, A. Esmail, Y. Fang, C. Finn, C. Glossop, T. Godden, I. Gory-
+achev, L. Groom, H. Hancock, K. Hausman, G. Hussein, B. Ichter,
+S. Jakubczak, R. Jen, T. Jones, B. Katz, L. Ke, C. Kuchi, M. Lamb,
+D. Leblanc, S. Levine, A. Li-Bell, Y. Lu, V. Mano, M. Mothukuri,
+S. Nair, K. Pertsch, A. Z. Ren, C. Sharma, L. X. Shi, L. Smith, J. T.
+Springenberg, K. Stachowicz, W. Stoeckle, A. Swerdlow, J. Tanner,
+M. Torne, Q. Vuong, A. Walling, H. Wang, B. Williams, S. Yoo, L. Yu,
+U. Zhilinsky, and Z. Zhou, “π∗
+0.6: A VLA that learns from experience,”
+in Proceedings of RSS, 2026.
+[10] P. Dong, K.-H. Hung, T. Gao, D. Sadigh, and C. Finn, “EXPO-FT:
+Sample-efficient reinforcement learning finetuning for vision-language-
+action models,” arXiv preprint arXiv:2605.25477, 2026.
+[11] C. Xu, J. T. Springenberg, M. Equi, A. Amin, A. Esmail, S. Levine, and
+L. Ke, “RL Token: Bootstrapping online RL with vision-language-action
+models,” arXiv preprint arXiv:2604.23073, 2026.
+[12] J. Luo, C. Xu, J. Wu, and S. Levine, “Precise and dexterous robotic ma-
+nipulation via human-in-the-loop reinforcement learning,” Sci. Robot.,
+vol. 10, no. 105, p. eads5033, 2025.
+[13] K. Lei, H. Li, D. Yu, Z. Wei, L. Guo, Z. Jiang, Z. Wang, S. Liang, and
+H. Xu, “Performant robotic manipulation with real-world reinforcement
+learning,” Sci. Robot., vol. 11, no. 116, p. eaed6267, 2026.
+[14] Y. Chen, S. Tian, S. Liu, Y. Zhou, H. Li, and D. Zhao, “ConRFT: A
+reinforced fine-tuning method for VLA models via consistency policy,”
+in Proceedings of RSS, 2025.
+[15] Y. Zhao, H. Jin, L. Jiang, X. Zhang, K. Wu, P. Ren, Z. Xu, Z. Che,
+L. Sun, D. Wu, C. H. Liu, and J. Tang, “Real-world reinforcement learn-
+ing from suboptimal interventions,” arXiv preprint arXiv:2512.24288,
+2025.
+[16] L. Shi, S. Chen, F. Gao, Y. Chen, K. Chen, T. Zhang, H. Zang, J. Zhou,
+W. Zhang, C. Yu, and Y. Wang, “Beyond imitation: Reinforcement
+learning-based sim–real co-training for VLA models,” arXiv preprint
+arXiv:2602.12628, 2026.
+[17] Y. Ma, Z. Song, Y. Zhuang, J. Hao, and I. King, “A survey on vision-
+language-action models for embodied AI,” IEEE Trans. Neural Netw.
+Learn. Syst., vol. 37, no. 7, pp. 3031–3051, 2026.
+[18] V. Makoviychuk, L. Wawrzyniak, Y. Guo, M. Lu, K. Storey, M. Macklin,
+D. Hoeller, N. Rudin, A. Allshire, A. Handa, and G. State, “Isaac gym:
+High performance GPU based physics simulation for robot learning,” in
+Proceedings of NeurIPS, vol. 1, 2021.
+[19] J. Gu, F. Xiang, X. Li, Z. Ling, X. Liu, T. Mu, Y. Tang, S. Tao, X. Wei,
+Y. Yao, X. Yuan, P. Xie, Z. Huang, R. Chen, and H. Su, “ManiSkill2: A
+unified benchmark for generalizable manipulation skills,” in Proceedings
+of ICLR, 2023.
+[20] S. Tan, K. Dou, Y. Zhao, and P. Kr¨ahenb¨uhl, “Interactive post-training
+for vision-language-action models,” arXiv preprint arXiv:2505.17016,
+2025.
+[21] J. Liu, F. Gao, B. Wei, X. Chen, Q. Liao, Y. Wu, C. Yu, and Y. Wang,
+“What can RL bring to VLA generalization? an empirical study,” in
+Proceedings of NeurIPS, vol. 38, 2025.
+[22] H. Li, Y. Zuo, J. Yu, Y. Zhang, Z. Yang, K. Zhang, X. Zhu, Y. Zhang,
+T. Chen, G. Cui, D. Wang, D. Luo, Y. Fan, Y. Sun, J. Zeng, J. Pang,
+S. Zhang, Y. Wang, Y. Mu, B. Zhou, and N. Ding, “SimpleVLA-RL:
+Scaling VLA training via reinforcement learning,” in Proceedings of
+ICLR, 2026.
+[23] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone, “LIBERO:
+Benchmarking knowledge transfer for lifelong robot learning,” in Pro-
+ceedings of NeurIPS, vol. 36, pp. 44776–44791, 2023.
+[24] K. Chen, Z. Liu, T. Zhang, Z. Guo, S. Xu, H. Lin, H. Zang, X. Li,
+Q. Zhang, Z. Yu, G. Fan, T. Huang, Y. Wang, and C. Yu, “πRL: Online
+RL fine-tuning for flow-based vision-language-action models,” arXiv
+preprint arXiv:2510.25889, 2025.
+[25] Z. Jiang, S. Zhou, Y. Jiang, Z. Huang, M. Wei, Y. Chen, T. Zhou, Z. Guo,
+H. Lin, Q. Zhang, Y. Wang, H. Li, C. Yu, and D. Zhao, “WoVR: World
+models as reliable simulators for post-training VLA policies with RL,”
+arXiv preprint arXiv:2602.13977, 2026.
+[26] D. Kalashnikov, A. Irpan, P. Pastor, J. Ibarz, A. Herzog, E. Jang,
+D. Quillen, E. Holly, M. Kalakrishnan, V. Vanhoucke, and S. Levine,
+“Scalable deep reinforcement learning for vision-based robotic manipu-
+lation,” in Proceedings of CoRL, vol. 87, pp. 651–673, 2018.
+[27] Y. Zheng, F. F. Veiga, J. Peters, and V. J. Santos, “Autonomous learning
+of page flipping movements via tactile feedback,” IEEE Trans. Robot.,
+vol. 38, no. 5, pp. 2734–2749, 2022.
+[28] C. Zhao, C. Jiang, L. Luo, S. Yuan, Q. Chen, and H. Yu, “Learning
+thin deformable object manipulation with a multisensory integrated soft
+hand,” IEEE Trans. Robot., vol. 41, pp. 4606–4621, 2025.
+[29] S. Aslam, K. Kumar, P. Zhou, H. Yu, M. Y. Wang, and Y. She,
+“DartBot: Overhand throwing of deformable objects with tactile sensing
+and reinforcement learning,” IEEE Trans. Autom. Sci. Eng., vol. 22,
+pp. 13644–13661, 2025.
+[30] P. Liu, H. Bou-Ammar, J. Peters, and D. Tateo, “Safe reinforcement
+learning on the constraint manifold: Theory and applications,” IEEE
+Trans. Robot., vol. 41, pp. 3442–3461, 2025.
+[31] D. Ghosh, H. Walke, K. Pertsch, K. Black, O. Mees, S. Dasari, J. Hejna,
+T. Kreiman, C. Xu, J. Luo, Y. L. Tan, L. Y. Chen, Q. Vuong, T. Xiao,
+P. R. Sanketi, D. Sadigh, C. Finn, and S. Levine, “Octo: An open-source
+generalist robot policy,” in Proceedings of RSS, 2024.
+[32] H. Tan, S. Chen, Y. Xu, Z. Wang, C. Chi, Y. Ji, Y. Lyu, Z. Zhao, X. Chen,
+P. Co, S. Xie, G. Yao, P. Wang, Z. Wang, and S. Zhang, “General process
+reward modeling for robotic reinforcement learning,” in Proceedings of
+CVPR, pp. 22412–22422, 2026.
+[33] J. Luo, Z. Hu, C. Xu, Y. L. Tan, J. Berg, A. Sharma, S. Schaal, C. Finn,
+A. Gupta, and S. Levine, “SERL: A software suite for sample-efficient
+robotic reinforcement learning,” in Proceedings of ICRA, pp. 16961–
+16969, 2024.
+[34] M. Pan, S. Feng, Q. Zhang, X. Li, J. Song, C. Qu, Y. Wang, C. Li,
+Z. Xiong, Z. Chen, Y. Liu, and J. Luo, “SOP: A scalable online
+post-training system for vision-language-action models,” arXiv preprint
+arXiv:2601.03044, 2026.
+[35] H. Zang, S. Yu, H. Lin, T. Zhou, Z. Huang, Z. Guo, X. Xu, Y. Sheng,
+J. Zhou, S. Zhang, F. Gao, W. Tang, Y. Yue, Q. Zhang, X. Chen, C. Yu,
+
+
+17
+and Y. Wang, “USER: A unified and extensible system for online real-
+world policy learning in embodied AI,” in Proceedings of RSS, 2026.
+[36] E. J. Hu, Y. Shen, P. Wallis, Z. Allen-Zhu, Y. Li, S. Wang, L. Wang,
+and W. Chen, “LoRA: Low-rank adaptation of large language models,”
+in Proceedings of ICLR, 2022.
+[37] Y. Lipman, R. T. Q. Chen, H. Ben-Hamu, M. Nickel, and M. Le, “Flow
+matching for generative modeling,” in Proceedings of ICLR, 2023.
+[38] P. Wu, Y. Shentu, Z. Yi, X. Lin, and P. Abbeel, “GELLO: A general,
+low-cost, and intuitive teleoperation framework for robot manipulators,”
+in Proceedings of IROS, pp. 12156–12163, 2024.
+[39] Y. Feng, J. Zheng, Z. Wang, D. Liu, J. Li, J. Pang, T. Wang, and X. Zhan,
+“Demystifying action space design for robotic manipulation policies,” in
+Proceedings of ICML, 2026.
