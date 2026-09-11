@@ -1,0 +1,1173 @@
+TrAct: Bridging Robot Control and Visual Prediction
+with Visual Tracks
+Zhi Cao1,2,*
+Howard Ji2,*
+Kevin Zhang2,*
+Kuangzhi Ge2
+Li Fei-Fei2
+Jiajun Wu2,†
+Huang Huang2,†
+1University of Michigan
+2Stanford University
+*Equal contribution.
+†Equal advising.
+https://lol-png.github.io/tract/
+Figure 1:
+Overview of TrAct. TrAct uses VLAT (left, purple), pretrained on large-scale cross-
+embodiment data, to propose candidate action–track pairs. TWM (middle, gray) rolls out the visual
+outcome for each candidate conditioned on the tracks, and VLAC (middle, green) selects the highest-
+reward rollout; the robot executes the paired action. Visual tracks thus serve as an intermediate
+interface between future prediction and robot control. We evaluate TrAct on diverse simulation and
+physical robot tasks (right).
+Abstract: Robot actions are inherently embodiment-specific and only weakly
+aligned with image-space visual changes, limiting their effectiveness as condi-
+tioning signals for robot world models.
+In contrast, visual tracks provide an
+embodiment-agnostic representation of how task-relevant points move through
+a scene, offering dense image-space guidance for accurate and spatially precise
+future video prediction. Building on this observation, we propose TrAct, a world-
+model-based robot decision-making framework that uses visual tracks as an inter-
+mediate interface between control and prediction. TrAct consists of three compo-
+nents: a Vision-Language-Action-and-Track model (VLAT) that jointly predicts
+candidate actions and corresponding visual tracks from the current observation
+and language instruction; a track-conditioned world model (TWM) that predicts
+future visual outcomes conditioned on the proposed tracks; and a vision-language
+reward model (VLAC) that scores the predicted outcomes. At inference time,
+VLAT generates candidate action–track pairs, TWM rolls out their visual conse-
+quences conditioned on the tracks, and VLAC selects the track whose predicted
+outcome best satisfies the instruction; the action paired with the selected track is
+then executed by the robot. Experiments on the proposed LIBERO-INTEGRAL
+benchmark and real-world Franka manipulation show that TrAct improves success
+from 27% to 55% in simulation and 49% to 76% on real-world tasks compared
+to the strong VLA baseline π0.5. Furthermore, TWM consistently improves video
+prediction quality over AWM. These results suggest that visual tracks provide an
+effective shared interface between robot control and visual prediction, enabling
+more accurate world modeling and stronger robot generalization.
+arXiv:2608.24101v3  [cs.RO]  1 Sep 2026
+
+
+Keywords: Robot World Model, Robot Learning with Tracks
+1
+Introduction
+Robot world models predict scene evolution under candidate decisions [1, 2, 3], while policies pro-
+duce executable actions. Recent work combines them by using a world model to evaluate candidate
+actions and select the predicted outcome that best satisfies the task objective [4]. However, robot
+actions, which are typically used to connect the policy and the world model, are a weak interface
+between control and prediction: actions are embodiment-specific, and their visual effects depend
+strongly on scene geometry, object configuration, and contact dynamics. Thus, action-conditioned
+world models must infer dense visual futures from sparse, robot-specific commands. Visual tracks
+provide a natural alternative. They describe how task-relevant points move through image space,
+capturing object motion, contact regions, and interaction geometry, encouraging generalization. Be-
+cause different robots can induce similar scene-point motion with different commands, tracks offer a
+compact, largely embodiment-agnostic representation for both policy learning and visual prediction.
+We propose TrAct (Track & Act), a framework that uses visual tracks as a shared interface between
+policy learning and world-model-based decision making. TrAct consists of three components: (1) a
+Vision-Language-Action-and-Track model (VLAT) that predicts candidate actions and correspond-
+ing visual tracks from the current observation and language instruction; (2) a track-conditioned
+world model (TWM) that predicts future visual outcomes from proposed tracks; and (3) a vision-
+language reward model (VLAC) that scores predicted outcomes against the task instruction. During
+inference, VLAT proposes multiple paired action–track candidates, TWM predicts the visual out-
+come induced by each track, and VLAC evaluates these outcomes with respect to the task goal.
+TrAct then selects the highest-scoring predicted track outcome and executes its paired robot action.
+We evaluate TrAct on LIBERO-INTEGRAL, which combines task variations from LIBERO-PRO
+and LIBERO-Plus and includes UR5 cross-embodiment transfer tasks, as well as on a physical
+Franka Panda robot.
+TrAct’s track-conditioned world model (TWM) consistently outperforms
+action-conditioned world model baselines (AWM) for future prediction in both settings. This im-
+proved prediction translates into more effective world-model-based action selection, improving suc-
+cess from 49% to 55% on LIBERO-INTEGRAL and from 66% to 76% on real-world tasks compared
+to AWM-based selection. Compared with the strong VLA baseline π0.5 [5], TrAct improves success
+from 27% to 55% on LIBERO-INTEGRAL and from 49% to 76% on real-world tasks. These re-
+sults show that visual tracks provide an effective intermediate representation between planning and
+execution, improving both future prediction and task completion.
+Our contributions are:
+• We propose 2D point tracks as an intermediate representation between robot policies and
+world models, improving both planning and future prediction.
+• We introduce TrAct, a framework that uses a VLAT policy to jointly predict visual tracks
+and actions, and conditions a world model on tracks for reward-guided action selection.
+• We validate TrAct in simulation and on physical robots, showing that TWM improves
+future prediction over action-conditioned alternatives and that TWM-based action selection
+increases downstream task success.
+2
+Related Work
+Embodied Video Generation World Models. Video-generation world models learn neural simu-
+lators of physical interaction from visual data. Internet-scale models such as Sora [6, 7] and Ge-
+nie [8] exhibit emergent physical understanding, but lack the controllability needed for precise robot
+control. Embodied world models improve robotic motion consistency by conditioning video predic-
+tion on language, actions, proprioception, multimodal inputs, hand-centric priors, or visual action
+prompts [3, 9, 10, 11, 12, 13, 14]. Yet action conditioning remains poorly aligned with image-space
+2
+
+
+Figure 2: Overview of the TrAct framework. Given an observation ot and language instruction l,
+the VLAT model jointly predicts K candidate actions and corresponding visual tracks. Each set of
+predicted tracks conditions a world model to generate future video frames. A VLM-based reward
+model scores the predicted outcomes and selects the action whose rollout best fits the instruction.
+change: actions are low-dimensional and embodiment-specific, while their visual effects depend on
+geometry, object state, and contact. This underdetermined action-to-pixel mapping causes poor ac-
+tion following; Liu et al. [15] find that such models often ignore erroneous actions and hallucinate
+success from visual priors. In contrast, TrAct conditions on visual tracks, which directly specify
+point motion and provide dense spatial guidance for video prediction.
+Visual Tracks and Embodiment-Agnostic Action Representations. Structured motion represen-
+tations such as 2D point tracks and optical flow separate motion from visual rendering, reducing
+the complexity of both prediction and control. Enabled by long-horizon trackers [16, 17], one line
+of work treats such motion as an intermediate policy representation, decoding predicted tracks or
+flow into executable actions and thereby transferring across embodiments and from human video
+to robots [18, 19, 20, 21]; related work instead consumes predicted visual representations for pol-
+icy learning or supplies trajectory-like prompts to video generators [22, 23, 24, 25]. A parallel line
+replaces embodiment-specific commands with embodiment-agnostic motion as the conditioning sig-
+nal of a world model, on the premise that low-dimensional robot commands underdetermine visual
+change [26, 27]. Together, these establish visual motion as an effective interface on both sides of
+the control–prediction loop. Across both lines, however, motion is used to produce or condition
+a prediction, while the predicted future itself is evaluated in latent or geometric space, if at all.
+TrAct instead uses tracks as the interface that renders a predicted future assessable against the task
+instruction.
+Vision-Language-Action Models and Closed-Loop Control.
+Vision-Language-Action (VLA)
+models combine semantic reasoning with visual-motor control and have become a central paradigm
+for generalist robot policies. Representative models span discretized action tokens and continu-
+ous action decoders [28, 29, 30], with π0 [31] introducing flow matching for continuous action
+generation. Despite strong priors, open-loop VLAs remain brittle under distribution shift, moti-
+vating closed-loop extensions such as VLMPC [32], VLAC [33], and RT-Trajectory [34]. TrAct
+extends this direction by augmenting a flow-matching VLA with track prediction and using a track-
+conditioned world model for reward-guided action selection, leveraging video-model priors while
+grounding selection in predicted image-space dynamics.
+3
+Methods
+Given observation ot and language instruction l, our goal is to select action at that maximizes task
+success rate. As illustrated in Figure 2, TrAct decomposes this into three stages: (1) generating
+candidate action–track pairs, (2) rolling out their visual consequences via a track-conditioned world
+3
+
+
+model, and (3) scoring the predicted outcome proposals with a vision-language reward model. We
+employ InternVL2 [35] as a reward model following the VLAC framework [33].
+3.1
+Policy Architecture
+Vision-Language-Action-and-Track Policy. We build our Vision Language Action and Track
+model (VLAT) on top of the pre-trained flow-matching VLA policy π0.5 [5]. We modify its ac-
+tion head to jointly output executable robot actions and 2D point tracks:
+πθ(ot, l) −→
+
+(ai, τi)
+	K
+i=1,
+(1)
+where ai ∈RH×da is a predicted action chunk of horizon H and action dimension da, and τi ∈
+RN×H×2 is a set of N predicted 2D point tracks over the same horizon.
+The VLAT policy is optimized using a joint flow-matching objective:
+LVLAT = Lflow(a, a∗) + λLflow(τ, τ ∗),
+(2)
+where a∗and τ ∗denote the ground-truth actions and tracks. We predict tracks for two types of
+points: (1) key mesh vertices of the robotic gripper, and (2) uniformly sampled background and
+object points on a 5×5 grid. We employ an asymmetric strategy across camera views: the agent-
+view head outputs only gripper mesh vertices (focusing on end-effector motion), while the wrist-
+view head outputs both gripper vertices and grid-sampled scene points (capturing the wrist camera’s
+motion relative to the environment).
+Track-Conditioned World Model. We adopt Stable Video Diffusion (SVD) [36] as the video
+generation backbone. To condition generation on the predicted tracks, we augment SVD with a
+ControlNet branch [37] that encodes track coordinates as spatial control maps. Given observation
+ot and predicted tracks τi, the world model generates a future video:
+ˆvi = pϕ(ot, τi) ∈RH×C×Wimg×Himg,
+(3)
+where ˆvi is the predicted video rollout for candidate i. To support multi-view observations, we
+render view-specific tracks into separate ControlNet channels: agent-view tracks in red and wrist-
+view tracks in blue. This lets the world model distinguish view-specific motion while maintaining
+cross-view temporal consistency. This provides denser spatial guidance than raw action vectors.
+Action-Conditioned World Model. For baseline comparison, we also train an action-conditioned
+variant that replaces track conditioning with action conditioning. Given a predicted action chunk
+ai, we first encode it using an MLP into the CLIP-L/14 feature space [38]. To support multi-view
+observations, we introduce a learnable camera-view embedding indicating agent-view or wrist-view
+actions. The view embedding is concatenated to the encoded action latent. The resulting view-
+aware action representation is then injected into SVD’s UNet layers via cross-attention. This design
+provides the action-conditioned world model baseline with the same multi-view information.
+3.2
+Pretraining
+VLAT.
+VLAT is pretrained on large-scale real-world robot datasets, including 76K DROID [39]
+trajectories and 150K EgoDex [40] trajectories (sampled from approximately half of the full EgoDex
+dataset) using a 1:2 dataset mixing ratio. For track supervision, we use seven predefined gripper
+points corresponding to fixed 3D offsets on the end-effector mesh. These points are projected into
+each frame using robot poses and camera calibration, providing ground-truth gripper tracks across all
+views. To capture scene dynamics, we additionally sample a uniform 5×5 grid of background points
+and track them over time using CoTracker [16]. Pretraining on diverse real-world manipulation
+data encourages the model to learn embodiment-agnostic visual motion representations that transfer
+across robot embodiments, camera viewpoints, and environments. All results in this paper use the
+DROID+EgoDex pretrained model trained for 30K steps with a batch size of 64 on 4 H100 GPUs.
+4
+
+
+World Model.
+Both the track-conditioned (TWM) and action-conditioned (AWM) world models
+are pretrained on 76K DROID trajectories for 30K steps with a batch size of 64. During finetuning,
+both variants are trained on the same LIBERO and real-world datasets to ensure a fair comparison.
+Additional dataset statistics, training details, and ablations, including experiments using a larger
+DROID+BridgeData V2 [41]+EgoDex pretraining mixture, are provided in the appendix.
+3.3
+Inference
+At inference, TrAct runs the three stages of Figure 2. First, VLAT proposes K candidate action–
+track pairs {(ai, τi)}K
+i=1. To make these candidates diverse, we apply Temperature-Scaled Resam-
+pling (TSR) during flow-matching sampling: we scale the initial noise magnitude to control diversity
+and resample from the learned policy distribution. Second, the track-conditioned world model rolls
+out a predicted video ˆvi for each of the K candidates, conditioned on its track τi. Third, VLAC
+scores the K rollouts and selects the best:
+i∗= arg
+max
+i∈{1,...,K} Rψ(ˆvi, l),
+(4)
+where Rψ denotes the reward model. The action of the selected pair is executed by the robot.
+4
+Simulation Experiments
+We compare four policy variants. π0.5 is the vanilla π0.5 baseline policy. VLAT jointly predicts
+visual tracks and executable actions without action selection. TrAct further incorporates track-
+conditioned world-model action selection, while VLAT+AWM replaces track conditioning with
+action conditioning.
+4.1
+LIBERO-INTEGRAL Benchmark
+Since standard LIBERO benchmarks are nearly saturated, we introduce LIBERO-INTEGRAL to
+evaluate policy generalization under distribution and embodiment shifts. LIBERO-INTEGRAL in-
+cludes 20 tasks: 10 robustness tasks and 10 cross-embodiment tasks. The robustness suite combines
+object, position, and task generalization from LIBERO-PRO [42] with the Different 3D Camera
+Viewpoints and Robot Initialization settings from LIBERO-Plus [43]. We select two representative
+tasks per variation category and use the hardest available difficulty level for each LIBERO-Plus task.
+For cross-embodiment evaluation, we replace the default Franka Panda with a UR5 while keeping
+task specifications and scene configurations fixed. We construct UR5 variants of the 10 LIBERO-10
+tasks and evaluate performance under this embodiment shift.
+Model Finetuning.
+For track supervision, we use seven predefined gripper points defined by fixed
+3D offsets on the end-effector mesh. Robot poses and camera calibration project these points into
+each frame to obtain ground-truth gripper tracks. To capture scene dynamics, we also sample a
+uniform 5×5 grid of wrist-view background points and track them with CoTracker [16]. All models
+are finetuned on 2K LIBERO episodes. VLAT is trained for 5K steps to jointly predict 16-step action
+and track chunks. The track and action-conditioned world models are each finetuned for 25K steps
+with batch size 16. Following VLAC [33], we finetune the reward model on the same data using
+predicted rollouts and task completion rewards for 5K steps with a batch size of 16.
+4.2
+Video Generation Results
+To assess the future prediction quality, we compare the track-conditioned world model (TWM)
+against the action-conditioned baseline (AWM). As shown in Figure 3, TWM produces more spa-
+tially accurate and temporally coherent predictions across both agent-view and wrist-view observa-
+tions, while AWM often exhibits incorrect gripper poses, disappearing objects, and cross-view ob-
+ject position inconsistencies. We evaluate generated videos from both cameras using standard video
+5
+
+
+Table 1: Video generation quality of action-conditioned and track-conditioned world models. Re-
+sults are reported for real-world and simulation scenes under agent-view and wrist-view cameras.
+Act. denotes action-conditioned world model, and Track denotes track-conditioned world model. ↑
+indicates higher is better and ↓indicates lower is better. Best results for each scene are in bold.
+Metric
+Real / Agent
+Real / Wrist
+Sim / Agent
+Sim / Wrist
+Act.
+Track
+Act.
+Track
+Act.
+Track
+Act.
+Track
+PSNR ↑
+20.70
+21.27
+16.89
+20.62
+15.12
+24.51
+16.25
+22.71
+SSIM ↑
+0.767
+0.802
+0.621
+0.738
+0.482
+0.843
+0.668
+0.822
+LPIPS ↓
+0.126
+0.111
+0.372
+0.225
+0.438
+0.106
+0.452
+0.182
+FID ↓
+105
+95
+176
+130
+248
+156
+222
+92
+FVD ↓
+148
+105
+246
+140
+129
+38
+207
+162
+Figure 3: Qualitative video comparison. TWM produces more spatially accurate and motion-
+coherent frames than AWM across both agent-view and wrist-view cameras.
+quality metrics. We use 100 generated videos from evaluation tasks on LIBERO-INTEGRAL. Re-
+sults are shown in Table 1. TWM outperforms AWM on all five metrics across both camera views.
+The gap is large in simulation, where TWM achieves a PSNR of 24.51 vs. 15.12 on agent view and
+reduces LPIPS from 0.438 to 0.106, suggesting that track conditioning provides substantially richer
+spatial guidance than action conditioning for video generation across domains.
+4.3
+Robot Experiment Results
+We first evaluate TrAct on the four standard LIBERO benchmark suites and then on LIBERO-
+INTEGRAL to evaluate robustness under distribution shifts and cross-embodiment transfer. Stan-
+dard LIBERO consists of four suites with 10 tasks each. For all simulation experiments, each task
+is evaluated using 10 rollout episodes, and success rates are averaged across rollouts. All policies
+predict and execute action chunks with a horizon of 16 steps during evaluation.
+Standard LIBERO Suites.
+Table 2 reports results on the four standard LIBERO suites, where
+all methods achieve strong performance. Compared with π0.5 (96.8% average success rate), VLAT
+improves the average success rate to 98.0%, demonstrating that jointly predicting visual tracks and
+actions preserves policy performance on the original benchmark. Incorporating world-model-based
+action selection further improves performance, with TrAct achieving the best overall result of 98.3%
+and VLAT+AWM achieving 98.0%. The relatively small gains are expected given the near-saturated
+performance of existing methods on these tasks, which motivates the harder LIBERO-INTEGRAL
+evaluation below.
+LIBERO-INTEGRAL.
+Table 3 reports results on the proposed LIBERO-INTEGRAL bench-
+mark, while the complete per-task list is provided in Table 5. Compared with π0.5, all proposed
+variants substantially improve generalization. VLAT raises the overall average success rate from
+0.27 to 0.44, suggesting that jointly predicting visual tracks and robot actions improves robustness
+6
+
+
+Table 2: Success rates (%) on four standard LIBERO benchmark suites. Each suite contains 100
+evaluation episodes. The best result in each column is shown in bold.
+Method
+LIBERO-10
+Goal
+Object
+Spatial
+Avg.
+π0.5
+94.0
+96.0
+98.0
+99.0
+96.8
+VLAT
+94.0
+98.0
+100.0
+100.0
+98.0
+VLAT+AWM
+94.0
+98.0
+100.0
+100.0
+98.0
+TrAct
+94.0
+100.0
+99.0
+100.0
+98.3
+Table 3:
+Results on LIBERO-INTEGRAL. Scores denote average task success rates. LIBERO-
+INTEGRAL combines robustness variations from LIBERO-PRO and LIBERO-Plus, and cross-
+embodiment transfer with a UR5 robot. Best results in each column are bolded.
+Method
+Swap
+Object
+Task
+Camera
+RobotInit
+Cross-Emb.
+Avg.
+π0.5
+0.40
+0.35
+0.15
+0.45
+0.45
+0.17
+0.27
+VLAT
+0.50
+0.40
+0.35
+0.45
+0.55
+0.42
+0.44
+VLAT+AWM
+0.65
+0.50
+0.50
+0.45
+0.55
+0.44
+0.49
+TrAct
+0.65
+0.60
+0.50
+0.60
+0.65
+0.50
+0.55
+under distribution shifts. Adding world-model-based action selection further improves performance:
+VLAT+AWM reaches 0.49, while TrAct achieves the best overall result of 0.55.
+TrAct performs best across individual variations, achieving the highest success rates on Object
+(0.60), Camera (0.60), RobotInit (0.65), and Cross-Embodiment (0.50) benchmarks. Compared
+with VLAT, both VLAT+AWM and TrAct improve performance across all categories, showing the
+value of predictive evaluation during decision making. Replacing action conditioning with track
+conditioning yields consistent gains, especially under Object (0.60 vs. 0.50), Camera (0.60 vs. 0.45),
+RobotInit (0.65 vs. 0.55), and Cross-Embodiment (0.50 vs. 0.44) shifts. These results support the
+central hypothesis that visual tracks provide a robust interface between robot control and visual
+prediction, improving generalization under observation, environment, and embodiment changes.
+5
+Physical Robot Experiments
+For physical experiments, we compare the same model variants as in the simulation experiments,
+and π0.5 + VLAC, which use VLAC to select candidate actions from π0.5.
+5.1
+Physical Setup
+We used a Franka Emika Panda equipped with two RGB cameras (one agent-view and one wrist-
+view camera). The workspace is a blank tabletop with objects placed as needed. We collected 400
+demonstrations at 15 Hz for four tasks: put the pink noodle in the bowl, put the bread in the bowl,
+close the fully open right cabinet door, and pour the pasta into the pan with a fixed background.
+Figure 4: Rollout Demonstrations of two tasks: put the half-length pink noodle in the bowl (left)
+and close the right cabinet door (right). Each step is overlaid with track predictions.
+7
+
+
+Table 4: Success rates on five unseen physical robot manipulation tasks, each evaluated under a
+regular training background (R) and a visually different non-training background (D). We compare
+five models. The best result for each row is shown in bold.
+Task
+Bg.
+π0.5
+π0.5+VLAC
+VLAT
+VLAT+AWM
+TrAct
+Put the green block in the bowl
+R
+0.5
+0.7
+0.6
+0.7
+0.7
+D
+0.4
+0.5
+0.4
+0.5
+0.7
+Put the half pink noodle in the bowl
+R
+0.6
+0.9
+0.8
+1.0
+1.0
+D
+0.6
+0.8
+0.6
+0.8
+0.8
+Put the hotdog bun in the bowl
+R
+0.6
+0.8
+0.6
+0.8
+0.8
+D
+0.4
+0.6
+0.5
+0.6
+0.6
+Close the cabinet door
+R
+0.5
+0.6
+0.5
+0.6
+0.8
+D
+0.3
+0.4
+0.4
+0.4
+0.7
+Pour the pasta into the pan
+R
+0.5
+0.7
+0.6
+0.7
+0.8
+D
+0.5
+0.5
+0.5
+0.5
+0.7
+Average
+0.49
+0.65
+0.55
+0.66
+0.76
+We evaluated five manipulation tasks that are unseen during training: put the half-length pink noodle
+in the bowl, put the hotdog bun in the bowl, put the green brick in the bowl, close the partially open
+right cabinet door, and pour the angled scooper’s pasta into the pan. Each task is tested under
+two background conditions: the original training background (reg. back) and a visually distinct
+background (diff back), allowing us to measure robustness to visual domain shift on top of task-
+level generalization. The full setup and task selection are detailed in the Appendix.
+5.2
+Model Finetuning.
+The training data is preprocessed following the same method as sim. All policies are finetuned on
+the 400 demonstrations we collected. π0.5 and VLAT are finetuned for 50k steps at batch size 32.
+For both action-conditioned and track-conditioned world models, we finetune for 25k steps with a
+batch size of 16. The base VLAC model from [33] is finetuned for 4k steps at batch size 16.
+5.3
+Video Generation Results
+Similar to the simulation environment, we assess the future prediction quality between the track-
+conditioned world model (TWM) and the action-conditioned world model (AWM). We evaluate
+generated videos from both cameras using standard video quality metrics. We use 100 generated
+videos from evaluation rollout. Results are shown in Table 1. Consistent with the simulation experi-
+ments, TWM outperforms AWM on all five metrics across both camera views. On real-world tasks,
+the improvement is especially large on wrist view, where LPIPS improves from 0.372 to 0.225 and
+FVD from 246 to 140. Figure 3 shows this qualitatively, where action-conditioned predictions are
+visibly less spatially accurate than track-conditioned ones.
+5.4
+Robot Experiment Results
+During physical evaluation, each policy call generates a 16-step action chunk, and we execute all 16
+steps. In baselines with action selection, we use 16 candidates, generating diverse samples using the
+same strategy as sim. Each task is evaluated over 10 episodes. Table 4 reports success rates on all
+five OOD unseen tasks under both background conditions.
+Example rollouts and VLAT track predictions are shown in Figure 4. Both world-model variants
+improve over VLAT alone (0.55), confirming the value of VLM-based action selection. Track con-
+ditioning is consistently stronger: TrAct averages 0.76 versus 0.66 for VLAT+AWM. The gap ap-
+pears even without domain shift on contact-rich tasks, such as cabinet closing, where TrAct scores
+0.8 versus 0.6. Under the unseen background, the gap widens: VLAT+AWM drops to 0.4, matching
+VLAT without reranking, while TrAct remains at 0.7; similar +20 pp gains appear on the green-
+block and pouring tasks. These results suggest that action-conditioned video generation degrades
+8
+
+
+under visual shift, whereas track conditioning anchors the world model to image-space motion that
+remains robust to background changes, consistent with Table 1 and Figure 3.
+6
+Conclusion
+We presented TrAct, a framework that uses visual tracks as a shared interface between robot policy
+learning and world-model-based decision making. By jointly predicting actions and visual tracks,
+and conditioning a world model on the predicted tracks rather than on raw actions, TrAct enables
+reward-guided action selection grounded in image-space dynamics. Experiments on the LIBERO
+benchmark and on a physical Franka Panda robot show that track-conditioned world modeling con-
+sistently outperforms action-conditioned alternatives, with the largest gains under visual domain
+shift. These results demonstrate that visual tracks provide a practical and effective bridge between
+embodiment-specific control and embodiment-agnostic visual prediction.
+9
+
+
+References
+[1] F. Ebert, C. Finn, S. Dasari, A. Xie, A. Lee, and S. Levine. Visual foresight: Model-based
+deep reinforcement learning for vision-based robotic control, 2018. URL https://arxiv.
+org/abs/1812.00568.
+[2] Y. Du, S. Yang, B. Dai, H. Dai, O. Nachum, J. Tenenbaum, D. Schuurmans, and P. Abbeel.
+Learning universal policies via text-guided video generation. NeurIPS, 36:9156–9172, 2023.
+[3] S. Yang, Y. Du, K. Ghasemipour, J. Tompson, L. Kaelbling, D. Schuurmans, and P. Abbeel.
+Learning interactive real-world simulators, 2024.
+URL https://arxiv.org/abs/2310.
+06114.
+[4] H. Qi, H. Yin, A. Zhu, Y. Du, and H. Yang. Inference-time enhancement of generative robot
+policies via predictive world modeling. IEEE Robotics and Automation Letters, 2026.
+[5] P. Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail, M. Equi,
+C. Finn, N. Fusai, M. Y. Galliker, D. Ghosh, L. Groom, K. Hausman, B. Ichter, S. Jakubczak,
+T. Jones, L. Ke, D. LeBlanc, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair, K. Pertsch, A. Z.
+Ren, L. X. Shi, L. Smith, J. T. Springenberg, K. Stachowicz, J. Tanner, Q. Vuong, H. Walke,
+A. Walling, H. Wang, L. Yu, and U. Zhilinsky. π0.5: a vision-language-action model with
+open-world generalization, 2025. URL https://arxiv.org/abs/2504.16054.
+[6] OpenAI.
+Sora system card.
+https://openai.com/index/sora-system-card/, Dec.
+2024. Accessed: 2026-01-31.
+[7] OpenAI. Sora 2 system card. https://openai.com/index/sora-2-system-card/, Sept.
+2025. Accessed: 2026-01-31.
+[8] J. Bruce, M. Dennis, A. Edwards, J. Parker-Holder, Y. Shi, E. Hughes, M. Lai, A. Mavalankar,
+R. Steigerwald, C. Apps, Y. Aytar, S. Bechtle, F. Behbahani, S. Chan, N. Heess, L. Gonzalez,
+S. Osindero, S. Ozair, S. Reed, J. Zhang, K. Zolna, J. Clune, N. de Freitas, S. Singh, and
+T. Rockt¨aschel. Genie: Generative interactive environments, 2024. URL https://arxiv.
+org/abs/2402.15391.
+[9] J. Xiang, G. Liu, Y. Gu, Q. Gao, Y. Ning, Y. Zha, Z. Feng, T. Tao, S. Hao, Y. Shi, Z. Liu, E. P.
+Xing, and Z. Hu. Pandora: Towards general world model with natural language actions and
+video states, 2024. URL https://arxiv.org/abs/2406.09455.
+[10] L. Smith, N. Dhawan, M. Zhang, P. Abbeel, and S. Levine. Avid: Learning multi-stage tasks
+via pixel-level translation of human videos, 2020. URL https://arxiv.org/abs/1912.
+04443.
+[11] X. Chi, P. Jia, C.-K. Fan, X. Ju, W. Mi, K. Zhang, Z. Qin, W. Tian, K. Ge, H. Li, Z. Qian,
+A. Chen, Q. Zhou, Y. Jia, J. Liu, Y. Dai, Q. Wuwu, C. Bai, Y.-K. Wang, Y. Li, L. Chen, Y. Bao,
+Z. Jiang, J. Zhu, K. Tang, R. An, Y. Luo, Q. Feng, S. Zhou, C. min Chan, C. Hou, W. Xue,
+S. Han, Y. Guo, S. Zhang, and J. Tang. Wow: Towards a world omniscient world model
+through embodied interaction, 2025. URL https://arxiv.org/abs/2509.22642.
+[12] Y. Li and A. Torralba. Multimodal action conditioned video generation, 2025. URL https:
+//arxiv.org/abs/2510.02287.
+[13] Y. Li, Z. Cao, and J. J. Corso. Handi: Hand-centric text-and-image conditioned video genera-
+tion, 2025. URL https://arxiv.org/abs/2412.04189.
+[14] Y. Wang, C. Wen, H. Guo, S. Peng, M. Qin, H. Bao, X. Zhou, and R. Hu. Precise action-
+to-video generation through visual action prompts, 2025. URL https://arxiv.org/abs/
+2508.13104.
+10
+
+
+[15] X. Liu, Z. Bai, H. Ci, K. Y. Ma, and M. Z. Shou. World-vla-loop: Closed-loop learning of
+video world model and vla policy, 2026. URL https://arxiv.org/abs/2602.06508.
+[16] N. Karaev, I. Rocco, B. Graham, N. Neverova, A. Vedaldi, and C. Rupprecht. Cotracker: It is
+better to track together, 2024. URL https://arxiv.org/abs/2307.07635.
+[17] C. Doersch, Y. Yang, M. Vecerik, D. Gokay, A. Gupta, Y. Aytar, J. Carreira, and A. Zisserman.
+Tapir: Tracking any point with per-frame initialization and temporal refinement, 2023. URL
+https://arxiv.org/abs/2306.08637.
+[18] C. Wen, X. Lin, J. So, K. Chen, Q. Dou, Y. Gao, and P. Abbeel. Any-point trajectory modeling
+for policy learning, 2023.
+[19] M. Xu, Z. Xu, Y. Xu, C. Chi, G. Wetzstein, M. Veloso, and S. Song. Flow as the cross-domain
+manipulation interface. In CoRL, 2024.
+[20] H. Bharadhwaj, R. Mottaghi, A. Gupta, and S. Tulsiani. Track2act: Predicting point tracks
+from internet videos enables generalizable robot manipulation. In European Conference on
+Computer Vision (ECCV), 2024. URL https://arxiv.org/abs/2405.01527.
+[21] C. Yuan, C. Wen, T. Zhang, and Y. Gao. General flow as foundation affordance for scalable
+robot learning. In Conference on Robot Learning (CoRL), 2025. URL https://arxiv.org/
+abs/2401.11439.
+[22] Y. Hu, Y. Guo, P. Wang, X. Chen, Y.-J. Wang, J. Zhang, K. Sreenath, C. Lu, and J. Chen. Video
+prediction policy: A generalist robot policy with predictive visual representations, 2025. URL
+https://arxiv.org/abs/2412.14803.
+[23] X. Chi, K. Ge, J. Liu, S. Zhou, P. Jia, Z. He, Y. Liu, T. Li, L. Han, S. Han, S. Zhang, and
+Y. Guo. Mind: Learning a dual-system world model for real-time planning and implicit risk
+analysis, 2025. URL https://arxiv.org/abs/2506.18897.
+[24] D. Geng, C. Herrmann, J. Hur, F. Cole, S. Zhang, T. Pfaff, T. Lopez-Guevara, C. Doersch,
+Y. Aytar, M. Rubinstein, C. Sun, O. Wang, A. Owens, and D. Sun. Motion prompting: Con-
+trolling video generation with motion trajectories, 2025. URL https://arxiv.org/abs/
+2412.02700.
+[25] R. Zheng, Y. Liang, S. Huang, J. Gao, H. D. III, A. Kolobov, F. Huang, and J. Yang. Tracevla:
+Visual trace prompting enhances spatial-temporal awareness for generalist robotic policies,
+2025. URL https://arxiv.org/abs/2412.10345.
+[26] Y. Wang, M. Verghese, and J. Schneider. Latent policy steering with embodiment-agnostic
+pretrained world models, 2025. URL https://arxiv.org/abs/2507.13340.
+[27] W. Huang, Y.-W. Chao, A. Mousavian, M.-Y. Liu, D. Fox, K. Mo, and L. Fei-Fei. Pointworld:
+Scaling 3d world models for in-the-wild robotic manipulation, 2026. URL https://arxiv.
+org/abs/2601.03782.
+[28] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, X. Chen, K. Choromanski, T. Ding, D. Driess,
+A. Dubey, C. Finn, P. Florence, C. Fu, M. G. Arenas, K. Gopalakrishnan, K. Han, K. Hausman,
+A. Herzog, J. Hsu, B. Ichter, A. Irpan, N. Joshi, R. Julian, D. Kalashnikov, Y. Kuang, I. Leal,
+L. Lee, T.-W. E. Lee, S. Levine, Y. Lu, H. Michalewski, I. Mordatch, K. Pertsch, K. Rao,
+K. Reymann, M. Ryoo, G. Salazar, P. Sanketi, P. Sermanet, J. Singh, A. Singh, R. Soricut,
+H. Tran, V. Vanhoucke, Q. Vuong, A. Wahid, S. Welker, P. Wohlhart, J. Wu, F. Xia, T. Xiao,
+P. Xu, S. Xu, T. Yu, and B. Zitkovich. Rt-2: Vision-language-action models transfer web
+knowledge to robotic control, 2023. URL https://arxiv.org/abs/2307.15818.
+11
+
+
+[29] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair, R. Rafailov, E. Foster,
+G. Lam, P. Sanketi, Q. Vuong, T. Kollar, B. Burchfiel, R. Tedrake, D. Sadigh, S. Levine,
+P. Liang, and C. Finn. Openvla: An open-source vision-language-action model, 2024. URL
+https://arxiv.org/abs/2406.09246.
+[30] Octo Model Team, D. Ghosh, H. Walke, K. Pertsch, K. Black, O. Mees, S. Dasari, J. Hejna,
+T. Kreiman, C. Xu, J. Luo, Y. L. Tan, L. Y. Chen, P. Sanketi, Q. Vuong, T. Xiao, D. Sadigh,
+C. Finn, and S. Levine.
+Octo: An open-source generalist robot policy.
+arXiv preprint
+arXiv:2405.12213, 2024.
+[31] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, L. Groom, K. Haus-
+man, B. Ichter, S. Jakubczak, T. Jones, L. Ke, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair,
+K. Pertsch, L. X. Shi, J. Tanner, Q. Vuong, A. Walling, H. Wang, and U. Zhilinsky. π0: A
+vision-language-action flow model for general robot control, 2026. URL https://arxiv.
+org/abs/2410.24164.
+[32] W. Zhao, J. Chen, Z. Meng, D. Mao, R. Song, and W. Zhang. Vlmpc: Vision-language model
+predictive control for robotic manipulation, 2024. URL https://arxiv.org/abs/2407.
+09829.
+[33] S. Zhai, Q. Zhang, T. Zhang, F. Huang, H. Zhang, M. Zhou, S. Zhang, L. Liu, S. Lin, and
+J. Pang. A vision-language-action-critic model for robotic real-world reinforcement learning,
+2025. URL https://arxiv.org/abs/2509.15937.
+[34] J. Gu, S. Kirmani, P. Wohlhart, Y. Lu, M. G. Arenas, K. Rao, W. Yu, C. Fu, K. Gopalakrishnan,
+Z. Xu, P. Sundaresan, P. Xu, H. Su, K. Hausman, C. Finn, Q. Vuong, and T. Xiao. Rt-trajectory:
+Robotic task generalization via hindsight trajectory sketches, 2023. URL https://arxiv.
+org/abs/2311.01977.
+[35] Z. Chen, J. Wu, W. Wang, W. Su, G. Chen, S. Xing, M. Zhong, Q. Zhang, X. Zhu, L. Lu, B. Li,
+P. Luo, T. Lu, Y. Qiao, and J. Dai. Internvl: Scaling up vision foundation models and aligning
+for generic visual-linguistic tasks, 2024. URL https://arxiv.org/abs/2312.14238.
+[36] A. Blattmann, T. Dockhorn, S. Kulal, D. Mendelevitch, M. Kilian, D. Lorenz, Y. Levi, Z. En-
+glish, V. Voleti, A. Letts, V. Jampani, and R. Rombach. Stable video diffusion: Scaling la-
+tent video diffusion models to large datasets, 2023. URL https://arxiv.org/abs/2311.
+15127.
+[37] L. Zhang, A. Rao, and M. Agrawala. Adding conditional control to text-to-image diffusion
+models, 2023. URL https://arxiv.org/abs/2302.05543.
+[38] A. Radford, J. W. Kim, C. Hallacy, A. Ramesh, G. Goh, S. Agarwal, G. Sastry, A. Askell,
+P. Mishkin, J. Clark, G. Krueger, and I. Sutskever. Learning transferable visual models from
+natural language supervision, 2021. URL https://arxiv.org/abs/2103.00020.
+[39] A. Khazatsky, K. Pertsch, S. Nair, A. Balakrishna, S. Dasari, S. Karamcheti, S. Nasiriany,
+M. K. Srirama, L. Y. Chen, K. Ellis, P. D. Fagan, J. Hejna, M. Itkina, M. Lepert, Y. J. Ma,
+P. T. Miller, J. Wu, S. Belkhale, S. Dass, H. Ha, A. Jain, A. Lee, Y. Lee, M. Memmel, S. Park,
+I. Radosavovic, K. Wang, A. Zhan, K. Black, C. Chi, K. B. Hatch, S. Lin, J. Lu, J. Mercat,
+A. Rehman, P. R. Sanketi, A. Sharma, C. Simpson, Q. Vuong, H. R. Walke, B. Wulfe, T. Xiao,
+J. H. Yang, A. Yavary, T. Z. Zhao, C. Agia, R. Baijal, M. G. Castro, D. Chen, Q. Chen,
+T. Chung, J. Drake, E. P. Foster, J. Gao, V. Guizilini, D. A. Herrera, M. Heo, K. Hsu, J. Hu,
+M. Z. Irshad, D. Jackson, C. Le, Y. Li, K. Lin, R. Lin, Z. Ma, A. Maddukuri, S. Mirchandani,
+D. Morton, T. Nguyen, A. O’Neill, R. Scalise, D. Seale, V. Son, S. Tian, E. Tran, A. E. Wang,
+Y. Wu, A. Xie, J. Yang, P. Yin, Y. Zhang, O. Bastani, G. Berseth, J. Bohg, K. Goldberg,
+A. Gupta, A. Gupta, D. Jayaraman, J. J. Lim, J. Malik, R. Mart´ın-Mart´ın, S. Ramamoorthy,
+D. Sadigh, S. Song, J. Wu, M. C. Yip, Y. Zhu, T. Kollar, S. Levine, and C. Finn. Droid: A
+large-scale in-the-wild robot manipulation dataset, 2025. URL https://arxiv.org/abs/
+2403.12945.
+12
+
+
+[40] R. Hoque, P. Huang, D. J. Yoon, M. Sivapurapu, and J. Zhang. Egodex: Learning dexter-
+ous manipulation from large-scale egocentric video, 2026. URL https://arxiv.org/abs/
+2505.11709.
+[41] H. Walke, K. Black, A. Lee, M. J. Kim, M. Du, C. Zheng, T. Zhao, P. Hansen-Estruch,
+Q. Vuong, A. He, V. Myers, K. Fang, C. Finn, and S. Levine.
+Bridgedata v2: A dataset
+for robot learning at scale, 2024. URL https://arxiv.org/abs/2308.12952.
+[42] X. Zhou, Y. Xu, G. Tie, Y. Chen, G. Zhang, D. Chu, P. Zhou, and L. Sun. Libero-pro: To-
+wards robust and fair evaluation of vision-language-action models beyond memorization. arXiv
+preprint arXiv:2510.03827, 2025.
+[43] S. Fei, S. Wang, J. Shi, Z. Dai, J. Cai, P. Qian, L. Ji, X. He, S. Zhang, Z. Fei, et al.
+Libero-plus: In-depth robustness analysis of vision-language-action models. arXiv preprint
+arXiv:2510.13626, 2025.
+13
+
+
+A
+Pseudo-code for TrAct Inference Procedure
+Algorithm 1 summarizes the inference procedure of TrAct. At each decision step, VLAT proposes
+K diverse action–track candidates, the track-conditioned world model imagines their visual conse-
+quences, and VLAC selects the action chunk whose predicted rollout best satisfies the instruction.
+Algorithm 1 TrAct Inference for WM-Guided Action Selection
+Require: Observation ot, language instruction l, number of candidates K
+Require: VLAT policy πθ, track-conditioned world model pϕ, VLAC scorer Rψ
+1: while task not finished do
+2:
+{(ai, τi)}K
+i=1 ←PROPOSE(πθ, ot, l, K)
+▷sample candidate action–track pairs
+3:
+for i = 1 to K do
+4:
+ˆvi ←pϕ(ot, τi)
+▷roll out future video with predicted tracks
+5:
+si ←Rψ(ˆvi, l)
+▷score predicted outcome
+6:
+end for
+7:
+i⋆←arg maxi si
+8:
+Execute selected action chunk ai⋆
+9:
+Observe new state ot+H
+10:
+t ←t + H
+11: end while
+B
+Pretraining Data and Unified Track Representation
+Unified Track Slot Layout.
+To enable joint pretraining on both robot and human manipulation
+datasets, we adopt a unified embodiment-agnostic track representation. We use slot to denote a fixed
+index in a view-specific track-token layout, rather than a learned object slot. Each slot corresponds to
+a possible track type, such as a gripper/hand keypoint or a grid-sampled scene point. If a dataset does
+not provide the corresponding track type or camera stream, the slot is masked out. This fixed slot
+layout makes tracks a common interface across heterogeneous dataflows, where robot demonstra-
+tions with executable actions, human egocentric demonstrations without robot actions, and datasets
+with different camera configurations can all supervise the same track-prediction target.
+For DROID [39], each agent-view camera contains 7 gripper-associated track points, while the
+wrist-view camera contains 7 gripper-associated track points together with 25 uniformly sampled
+background points. For EgoDex [40], only a single egocentric-view camera is available, which con-
+tains 14 hand-associated track points (7 points per hand) together with 25 background points. Robot
+datasets activate only the subset of slots corresponding to the observed gripper or end-effector tracks,
+while the remaining slots are masked. This design allows observations from human demonstrations,
+single-arm robots, and future multi-manipulator embodiments with different camera-view setups to
+be represented within a shared token space. The two track groups provide complementary motion
+cues. Gripper- or hand-associated tracks capture EEF manipulator-centric motion, while uniformly
+sampled grid tracks provide scene and camera motion reference. Together, they help the model dis-
+tinguish motion caused by the robot or hand from apparent motion induced by camera movement.
+The main TrAct model is pretrained on DROID and EgoDex. In the appendix, we additionally study
+a larger pretraining mixture that includes BridgeData V2 [41]. For BridgeData V2, each agent-view
+camera contains 7 gripper-associated track points, while the wrist-view camera contains 7 gripper-
+associated track points together with 25 background points. Since camera extrinsics are not available
+in BridgeData V2, we follow the same track extraction procedure used for DROID and obtain visual
+tracks directly from image observations via CoTracker. The resulting tracks are represented using the
+same slot allocation and masking strategy as the rest of the pretraining mixtures, enabling seamless
+integration with both DROID and EgoDex data.
+Track Tokenization and Masked Objective
+Formally, each track token is represented as
+14
+
+
+zt,v,i = ϕ(τt,v,i) + eview(v) + eslot(i) + etime(t),
+where τt,v,i denotes the track coordinate of slot i from camera view v at time t. We introduce
+view-specific learnable embeddings to distinguish observations from different camera streams, while
+no embodiment-specific embeddings are used and the embeddings do not impose an embodiment-
+specific semantic meaning.
+Missing manipulators, inactive track slots, unavailable camera streams, and unavailable action di-
+mensions are handled through binary masks during attention and loss computation. Consequently,
+the model is encouraged to organize observations according to interaction dynamics rather than
+robot morphology or dataset-specific action formats, leading to embodiment-agnostic visual motion
+representations that transfer across embodiments and viewpoints.
+For action prediction, we follow the same pretraining strategy while retaining embodiment-specific
+supervision. Since executable robot actions and human hand motions do not share a common con-
+trol parameterization, EgoDex is used only to supervise the track prediction head during pretraining.
+Robot datasets additionally supervise both the track head and the action head using the correspond-
+ing robot action labels. The overall training objective is
+L = Ltrack + ⊮robotLaction,
+where ⊮robot indicates whether robot action annotations are available. Thus, tracks serve as a con-
+sistent supervision signal across all datasets, whereas actions are supervised only when their control
+format is valid and executable. This design allows TrAct to leverage large-scale human manipula-
+tion data to learn transferable visual motion representations while preserving robot-specific action
+supervision for downstream control.
+C
+Inference Hyperparameters
+We sample K = 20 (simulation) and K = 16 (real-world) candidates from TrAct at every infer-
+ence step. These candidates are fed into the track-conditioned world model for action selection by
+VLAC. To maintain diverse candidates sampled from TrAct, we increase the noise scale and use
+temperature-scaled resampling (TSR). Our simulation experiments use a noise scale value of 2 and
+TSR k-value of 3. In our physical experiments, we use a noise scale of 2 and a TSR k-value of 4.
+D
+Additional Qualitative Video Comparison
+We provide additional qualitative comparisons between the track-conditioned world model (TWM)
+and the action-conditioned world model (AWM) in Figure 5. Consistent with the results in the main
+paper, TWM produces more spatially accurate and motion-coherent predictions across both agent-
+view and wrist-view cameras. By contrast, AWM more often exhibits spatial drift, distorted object
+shapes, and less coherent motion, especially in wrist view. These results further support that visual
+tracks provide a stronger conditioning signal than robot actions alone for future video prediction.
+E
+Physical Experiment Setup
+We collected 400 demonstrations at 15 Hz for four tasks: put the pink noodle in the bowl, put the
+bread in the bowl, close the fully open right cabinet door, and pour the pasta into the pan with a
+fixed background. We evaluated five manipulation tasks that are unseen during training: put the
+half-length pink noodle in the bowl, put the hotdog bun in the bowl, put the green brick in the bowl,
+close the partially open right cabinet door, and pour the angled scooper’s pasta into the pan. Each
+task is tested under two background conditions: the original training background (reg. back) and
+a visually distinct background (diff back), allowing us to measure robustness to visual domain
+15
+
+
+Figure 5: Additional Qualitative video comparison. TWM continues to produce more spatially
+accurate and motion-coherent frames than AWM across both agent-view and wrist-view cameras.
+Figure 6: Overview of the physical experiments. We use a base and wrist-view camera and fine-
+tune the model on four training tasks. We then test five out-of-distribution tasks, as well as an unseen
+background for each task.
+shift on top of task-level generalization. The full setup is in Figure 6, and rollout examples with
+both background conditions are shown in Figure 7.
+F
+Simulation Results
+F.1
+Simulation Experiment Setup
+Since standard LIBERO benchmarks are nearly saturated, we introduce LIBERO-INTEGRAL to
+evaluate policy generalization under distribution and embodiment shifts. LIBERO-INTEGRAL in-
+cludes 20 tasks: 10 robustness tasks and 10 cross-embodiment tasks. The robustness suite combines
+object, position, and task generalization from LIBERO-PRO [42] with the Different 3D Camera
+Viewpoints and Robot Initialization settings from LIBERO-Plus [43]. We select two representative
+tasks per variation category and use the hardest available difficulty level for each LIBERO-Plus task.
+For cross-embodiment evaluation, we replace the default Franka Panda with a UR5 while keeping
+task specifications and scene configurations fixed. We construct UR5 variants of the 10 LIBERO-10
+tasks and evaluate performance under this embodiment shift. We detail the full task selection in
+Figure 8 and Figure 9.
+F.2
+Per-Task LIBERO-INTEGRAL Results
+To provide a more fine-grained view of the aggregate results in Table 3, Table 5 reports the success
+rate of each individual task in LIBERO-INTEGRAL, including object swaps, object/task/camera
+variations, robot-initialization changes, and UR5 cross-embodiment transfer. TrAct achieves the
+highest average success rate of 0.55, improving over π0.5, VLAT, and VLAT+AWM by 0.28, 0.11,
+and 0.06 absolute points, respectively. Moreover, TrAct achieves the best or tied-best performance
+16
+
+
+Table 5: Results on the LIBERO-INTEGRAL benchmark. The benchmark includes robustness
+variations from LIBERO-PRO and LIBERO-Plus, and the last ten tasks evaluate cross-embodiment
+generalization by replacing the Franka Panda with a UR5 robot. Scores denote task success rates.
+The best result for each row is shown in bold.
+Task
+Var.
+π0.5
+VLAT
+VLAT+AWM
+TrAct
+Pick the alphabet soup and place it in the basket
+Swap
+0.4
+0.5
+0.7
+0.7
+Put both the cream cheese box and the butter in the
+basket
+Swap
+0.4
+0.5
+0.6
+0.6
+Put both moka pots on the stove
+Object
+0.5
+0.5
+0.6
+0.7
+Put the yellow and white mug in the microwave and
+close it
+Object
+0.2
+0.3
+0.4
+0.5
+Pick the akita black bowl next to the ramekin and
+place it on the plate
+Task
+0.1
+0.3
+0.5
+0.5
+Put the plate on the stove
+Task
+0.2
+0.4
+0.5
+0.5
+Put the white mug on the left plate and put the
+yellow and white mug on the right plate
+Camera
+0.4
+0.3
+0.3
+0.5
+Put the wine bottle on the top of the drawer
+Camera
+0.5
+0.6
+0.6
+0.7
+Put both the cream cheese box and the butter in the
+basket
+RobotInit
+0.4
+0.5
+0.5
+0.6
+Pick up the book and place it in the back
+compartment of the caddy
+RobotInit
+0.5
+0.6
+0.6
+0.7
+Put both the alphabet soup and the cream cheese
+box in the basket
+UR5
+0.1
+0.2
+0.2
+0.3
+Put both the alphabet soup and the tomato sauce in
+the basket
+UR5
+0.3
+0.6
+0.6
+0.7
+Put the bowl on the stove
+UR5
+0.2
+0.3
+0.3
+0.5
+Pick the orange juice and place it in the basket
+UR5
+0.0
+0.3
+0.4
+0.5
+Pick the akita black bowl between the plate and the
+ramekin and place it on the plate
+UR5
+0.1
+0.5
+0.5
+0.6
+Pick the akita black bowl next to the plate and place
+it on the plate
+UR5
+0.1
+0.3
+0.3
+0.5
+Pick the ketchup and place it in the basket
+UR5
+0.0
+0.1
+0.2
+0.1
+Pick the tomato sauce and place it in the basket
+UR5
+0.0
+0.2
+0.2
+0.2
+Pick the akita black bowl on the cookies box and
+place it on the plate
+UR5
+0.5
+0.9
+0.9
+0.8
+Put the bowl on the plate
+UR5
+0.4
+0.8
+0.8
+0.8
+Average
+–
+0.27
+0.44
+0.49
+0.55
+on 18 out of 20 tasks, showing its consistent gains across diverse robustness and embodiment-shift
+settings.
+17
+
+
+F.3
+Statistical Robustness and Candidate Scaling
+Multiple Seeds.
+The simulation results in the main paper are reported for a single evaluation seed.
+To verify that the gain of track conditioning over action conditioning is not an artifact of evaluation
+noise, we re-evaluate VLAT+AWM and TrAct on the full LIBERO-INTEGRAL benchmark across
+three independent seeds, keeping all checkpoints, candidate counts, and selection hyperparameters
+fixed. Table 6 reports the mean success rate, standard error, and 95% confidence interval. The two
+intervals do not overlap, indicating that the improvement from track conditioning is consistent across
+runs rather than within-seed variance.
+Table 6: LIBERO-INTEGRAL success rates across three independent evaluation seeds. SE denotes
+the standard error over seeds and CI the corresponding 95% confidence interval.
+Method
+Mean Success
+SE
+95% CI
+VLAT+AWM
+0.490
+0.006
+[0.47, 0.51]
+TrAct
+0.547
+0.003
+[0.53, 0.56]
+Number of Sampled Candidates.
+TrAct selects among K candidate action–track pairs at each
+planning step, so K trades off compute against the quality of the best available candidate. We vary
+K ∈{5, 10, 20} on LIBERO-INTEGRAL while holding the policy, world model, and critic fixed.
+As shown in Table 7, success improves monotonically with K but with diminishing returns, rising
+by 2 points from K=5 to K=10 and by a further 1 point from K=10 to K=20. Since world-model
+rollout cost grows with K (Section 6), K=5 already recovers most of the benefit of selection and is
+a reasonable operating point when inference latency matters; we use K=20 in the main simulation
+results to report the strongest achievable setting.
+Table 7: Effect of the number of sampled candidates K on LIBERO-INTEGRAL average success
+rate, using VLAC selection over track-conditioned world model rollouts.
+Selection Method
+K = 5
+K = 10
+K = 20
+VLAC selection
+0.52
+0.54
+0.55
+G
+Larger Pretraining Mixture Experiments
+Table 8: Additional results on the five most difficult UR5 cross-embodiment tasks from LIBERO-
+INTEGRAL. TrAct+ denotes TrAct pretrained with the larger DROID+BridgeData V2+EgoDex
+mixture. Scores denote task success rates. The best result in each row is shown in bold.
+Task
+π0.5
+TrAct
+TrAct+
+Put both the alphabet soup and the cream cheese box in the basket (UR5)
+0.1
+0.3
+0.3
+Pick the ketchup and place it in the basket (UR5)
+0.0
+0.1
+0.2
+Put the bowl on the stove (UR5)
+0.2
+0.5
+0.6
+Pick the orange juice and place it in the basket (UR5)
+0.0
+0.5
+0.5
+Pick the tomato sauce and place it in the basket (UR5)
+0.0
+0.2
+0.3
+Average
+0.06
+0.32
+0.38
+Larger Pretraining Mixture.
+We further evaluate whether TrAct benefits from scaling the real-
+world pretraining mixture beyond the DROID+EgoDex datasets used in the main paper. Specifically,
+we pretrain a stronger variant, denoted as TrAct+, on a mixture of 76K DROID [39] trajectories, 60K
+BridgeData V2 [41] trajectories, and the full EgoDex [40] dataset, which contains approximately
+300K processed egocentric dexterous manipulation clips. Compared with the main model, which
+uses 76K DROID trajectories and a 150K subset of EgoDex, this setting substantially increases both
+the diversity of robot embodiments and the coverage of human dexterous manipulation data.
+18
+
+
+We train TrAct+ for 60K steps with a global batch size of 128 on 8 H100 GPUs.1 For evaluation, we
+select the five most challenging UR5 cross-embodiment tasks from LIBERO-INTEGRAL, where
+TrAct obtains the lowest success rates, and compare π0.5 [5], TrAct, and TrAct+ under the same
+evaluation protocol. As shown in Table 8, TrAct+ improves the average success rate from 0.32 to
+0.38, demonstrating that TrAct benefits from scaling both embodiment diversity and manipulation
+data coverage during pretraining.
+1Unless otherwise specified, all batch sizes reported in this paper refer to the global batch size aggregated
+across all GPUs.
+19
+
+
+Figure 7: Rollout examples Rollout with four key frames showing 16-horizon track predictions
+under the training background (left) and unseen background (right). Task list from top row to bottom
+row: put the half-length pink noodle in the bowl (1), put the hotdog bun in the bowl (2), put the green
+brick in the bowl (3), pour the angled scooper’s pasta into the pan (4), and close the partially open
+right cabinet door (5).
+20
+
+
+Figure 8: Rollout examples Rollout with four key frames. Task list from top row to bottom row,
+left to right column: pick the alphabet soup and place it in the basket (1), put both the cream cheese
+box and the butter in the basket (2), put both moka pots on the stove (3), put the yellow and white
+mug in the microwave and close it (4), pick the akita black bowl next to the ramekin and place it on
+the plate (5), put the plate on the stove (6), put the white mug on the left plate and put the yellow
+and white mug on the right plate (7), put the wine bottle on the top of the drawer (8), put both the
+cream cheese box and the butter in the basket (9), and pick up the book and place it in the back
+compartment of the caddy (10).
+21
+
+
+Figure 9: UR5 Rollout examples Rollout with four key frames. Task list from top row to bottom
+row, left to right column: put both the alphabet soup and the cream cheese box in the basket (1), put
+both the alphabet soup and the tomato sauce in the basket (2), put the bowl on the stove (3), pick
+the orange juice and place it in the basket (4), pick the akita black bowl between the plate and the
+ramekin and place it on the plate (5), pick the akita black bowl next to the plate and place it on the
+plate (6), pick the ketchup and place it in the basket (7), pick the tomato sauce and place it in the
+basket (8), pick the akita black bowl on the cookies box and place it on the plate (9), and put the
+bowl on the plate (10).
+22

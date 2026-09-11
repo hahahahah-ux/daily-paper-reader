@@ -1,0 +1,826 @@
+Title: Learning to Act While Waiting: RL Finetuning of Generalist Robot Policies Under Inference Latency
+
+URL Source: https://arxiv.org/pdf/2608.23831v2
+
+Published Time: Thu, 27 Aug 2026 01:24:33 GMT
+
+Number of Pages: 25
+
+Markdown Content:
+# Learning to Act While Waiting: RL Finetuning of Generalist Robot Policies Under Inference Latency 
+
+Brian Zhu ∗1 Momen Khalil ∗1 E Harrison ∗2 Emanuele Poggi ∗1 Philipp Schmitt 1 Bernd Kast 1 Philine Meister 1 Pranav Atreya 2 Qiyang Li 2 Finn Ferchau 1 Cesar Colmenero 1
+
+Yash Shahapurkar 1 Gokul Narayanan 1 Melih Erdogan 1 Kai Wurm 1 Georg von Wichert 1
+
+Oier Mees 3,4,2 Eugen Solowjow 1 Andrew Wagenmaker 2 Sergey Levine 21 Siemens 2 UC Berkeley 3 Microsoft 4 ETH Zurich 
+
+Abstract: While reinforcement learning (RL) allows generalist robot policies to continually improve during deployment, the large model size of modern gener-alist policies, such as VLAs, poses a fundamental obstacle to effective RL im-provement. In particular, their severe inference latency—which can lead to pauses or jerky movements—can alter the effective environment dynamics and, if not correctly accounted for, break the Markov assumption that RL relies on, causing standard RL algorithms to fail completely. In this work, we introduce a latency-aware framework, Asynchronous RL with Intermediate Information (A RLI ), that enables RL-based improvement of generalist policies under inference delays. Our framework builds on asynchronous inference approaches, which interleave ac-tion generation with execution to hide latency, and addresses its incompatibil-ity with RL by providing a low-latency RL policy design that maximizes reac-tivity within the inference window through two contributions: state augmenta-tions that restore near-Markovian structure by incorporating committed actions and a mid-inference observation. We evaluate our approach across simulated and real-world manipulation tasks, and find that it enables effective finetuning un-der inference delays where standard RL fails entirely, even matching or exceed-ing the performance of standard RL in idealized no-latency settings. Website: 
+
+https://async-rl-intermediate-information.github.io/ 
+
+Keywords: RL Steering, Inference Latencies, Real-time Control 
+
+Figure 1: Enabling RL improvement of generalist robot policies under inference latency: Gen-eralist policies incur significant action inference latency delays, either forcing pauses during in-ference or relying on stale observations, making RL improvement brittle. A RLI uses intermediate actions and updated asynchronous observations to steer the next action chunk, enabling effective real-world improvement under asynchronous inference, and real-world VLA improvement. 
+
+> ∗
+
+Equal Contribution arXiv:2608.23831v2 [cs.RO] 26 Aug 2026 1 Introduction 
+
+Enabling robots to learn and improve through experience collected in deployment has proven a critical step in achieving highly performant robotic behaviors. In particular, with the advent of 
+
+generalist robot policies—policies trained on diverse, large-scale datasets to perform a variety of tasks [1–11]—online improvement and adaptation approaches have enabled significantly more reli-able and high-precision behaviors than are typically achievable via offline training alone [12–17]. While significant progress has been made developing RL-based approaches for improving generalist policies, the most promising results remain limited to constrained, lab-like settings. As generalist policies are increasingly deployed in real-world settings, enabling RL improvement under practical deployment constraints is critical to achieving effective real-world robotic control. A key constraint present in the deployment of generalist policies is inference latency . General-ist policies, such as vision-language-action models (VLAs), are typically very large—commonly billions of parameters [5–7, 11]—and generating an action with a generalist policy can take a non-trivial amount of time. For example, on a standard consumer-grade GPU, running a single action generation step on π0, a commonly used open-source VLA, takes approximately 100 milliseconds [6], while other open-source models can take over 300 milliseconds per action generation [5, 18]. Such inference delays can lead to pauses or jerky movements in deployment, altering the effective dynamics of the environment and leading to poor policy performance, especially in settings that require high reactivity. While a growing body of work has sought to address challenges introduced by policy latency [19–21], these works typically focus simply on policy deployment , and do not investigate how latency affects the ability of RL-based approaches to learn effectively. In this work we seek to close this gap and enable effective RL improvement of generalist policies under inference latency constraints. As a starting point, we build on several recent works that pro-pose asynchronous inference strategies, where the generalist policy begins computing the next action while the current action is still being executed [20, 21]. While asynchronous inference, if correctly instantiated, has been shown to significantly mitigate the effects of inference latency, it comes at a cost: if we begin policy inference while the previous action is being executed, we cannot condition on the actual environment state we will be at when we play this action, since we have not yet reached this state. As a result, naively combining RL improvement with asynchronous inference leads to a 
+
+non-Markovian effective state , and causes standard RL approaches to fail to learn. To address this challenge and enable RL finetuning with asynchronous inference, we develop A RLI ,or Asynchronous RL with Intermediate Information , that overcomes the non-Markovian state with careful state augmentation. In particular, A RLI is inspired by two key insights. First, by including the 
+
+intermediate actions in the state, we can give the RL policy significantly more predictive information about future states, allowing it to more accurately finetune the generalist policy’s actions. Second, in many cases, RL inference is required at a later stage than generalist policy inference , and we can thus integrate the RL corrections at a later time than when we begin generalist policy inference. Given this, the RL policy can be conditioned on a more up-to-date intermediate state than what the generalist policy has access to, mitigating the effect of the asynchronous inference delay. We show that A RLI leads to effective improvement of generalist policies under practical latency con-straints. In particular, we evaluate A RLI on several simulated tasks where high reactivity is required, and find that it yields significantly more efficient RL improvement, in many cases enabling improve-ment when naive approaches to combining RL with asynchronous inference fail. We then show that this holds in three challenging real-world tasks on a bimanual UR5e robot, finding that A RLI en-ables real-world policy improvement under asynchronous inference in regimes where both naively combining RL with asynchronous inference, and attempting to use synchronous inference, fail. 
+
+2 Related Work 
+
+Robot policy deployment under latency constraints. With the advent of “generalist” robotic foundation models, inference delays have become a central concern in policy deployment, as the forward passes of such policies routinely exceed the controller’s sampling period [5, 6, 22–25]. 2Action chunking [26] amortizes inference cost by producing k actions per forward pass, and is now standard in modern robot policies [3, 6, 10, 27–29]. Action chunking only partially addresses the latency problem, however, as synchronous execution incurs periodic pauses between chunks, yet naive asynchronous execution introduces discontinuities at chunk boundaries [19, 21]. Recent work mitigates these discontinuities through temporal ensembling [26], rejection sampling [30], or diffusion inpainting [21]. A separate line of sim-to-real work injects delays into simulation during training to obtain delay-robust policies [31, 32]. All of these methods, however, target deployment of a fixed pretrained policy and do not consider online adaptation. 
+
+RL under latency constraints. Prior work has studied reinforcement learning and control under delayed information, actions, and rewards, from early formulations of delayed closed-loop control and delayed-state/action MDPs [33–36] to more recent methods for stochastic delays and real-time decision making [37, 38]. Closely related work also considers concurrent control, where agents continue acting while new decisions are being computed [39]. These works largely consider generic RL settings or train policies from scratch, and do not address the action-chunked asynchronous regime of modern diffusion and VLA policies, the setting we target in this work. 
+
+RL for robotics. Reinforcement learning has played a key role enabling highly performant poli-cies for robotic control, spanning domains from locomotion [40, 41] to manipulation [42–46]. A common strategy to improve the sample efficiency of RL is to rely on simulators, transferring sim-learned policies to the real world [47–53], yet such approaches are often limited by the sim-to-real gap [54]. With the advent of generalist robot policies, significant focus has been devoted to enabling improvement and adaptation of such policies [12–15, 55–68]. In this work we build on [12], which enables RL improvement of pretrained policies by steering the input noise to the policy’s denoising process (in the case when the pretrained policy is a diffusion or flow model). However, none of these works explicitly deal with enabling RL finetuning under latency constraints. 
+
+3 Preliminaries 
+
+We consider decision-making in Markov decision processes (MDPs). An MDP is denoted by a tuple 
+
+M = ( S, A, P, P init , r, γ ) where S is the state space, A the action space, P : S × A → △ S the transition kernel, Pinit ∈ △ S the initial state distribution, r : S → R the reward, and γ ∈ [0 , 1] 
+
+the discount factor. Interaction with the MDP proceeds in episodes. First the environment samples an initial state s1 ∼ Pinit , the agent then selects some action a1 ∈ A , the environment transitions to state s2 ∼ P (s1, a 1), and so forth, proceeding until the episode terminates. A policy denotes a mapping from states to actions, π : S → △ A. For a policy π and state s ∈ S , the value function quantifies the expected discounted reward, V π (s) := Eπ [P∞ 
+
+> t=1
+
+γt−1r(st) | s1 = s], where Eπ [·]
+
+denotes the expectation over trajectories induced by executing π on M. The value of a policy, 
+
+V (π) := Es1∼Pinit [V π (s1)] , denotes its expected reward over trajectories. The typical goal of RL, and the goal we consider in this work, is to learn a policy that maximizes V (π).
+
+Pretrained policies and inference delays. In this work, we assume we are given an initial pre-trained policy πpt , for example, a policy trained via behavioral cloning on human demonstrations. We make several assumptions on πpt . First, we assume that instead of predicting a single action at each step, πpt predicts an action chunk , a sequence of k actions, A = ( a1, . . . , a k). Typically, after producing A the policy executes the first n steps in the chunk before recomputing a new chunk. Second, we assume that πpt is a diffusion or flow policy [27]. As such, πpt not only takes a state s
+
+as input, but a random noise w, typically sampled from N (0 , I ). We note that both of these assump-tions are standard design choices in modern robot learning, so this is not a major restriction [3, 6–11]. When πpt is a VLA or other large model, simply computing At = πpt (st, w t) for wt ∼ N (0 , I ) can take a significant amount of time. Formally, we assume that we can generate an action from πpt but that this generation will require tdelay steps (for simplicity, we assume tdelay < k · ∆a, where ∆a is the time interval we execute each action). We will overload notation somewhat and let tdelay refer to both the inference delay (in seconds) as well as the number of environment “steps” it occupies (where each environment step is an interval of length ∆a). 3Figure 2: An overview of our approach, A RLI . Inference begins tdelay steps before the next action chunk is required, in which the VLM backbone πvlm pt takes state st−tdelay as input. At step t − trl delay ,RL policy πrl must be run to ensure that the action expert πae pt is provided a noise input w once VLM inference finishes. πrl is conditioned on (a) the initial state st−tdelay , (b) intermediate actions a−9:0 ,and (c) intermediate state st−trl delay . Once the action expert’s inference is complete, the next action played, a0, starts at step ndelay within the newly-generated chunk At.
+
+Asynchronous inference. To reduce effective latency, recent works have suggested computing fresh actions asynchronously while executing previous action chunks [20, 21]. For example, assume at step t − k we have computed action chunk At−k, and are beginning to take these actions in our environment. Instead of waiting until step t to compute At, we can begin inference at some step 
+
+t′ < t − tdelay , such that the next action chunk At′ will be ready to execute as soon as At−k has been executed. When step t is reached and the action chunk At−k has finished, we execute At′
+
+starting at step tdelay —the step in At′ that would correspond to timestep t. The challenge, of course, is that at step t′ we have access only to state st′ , and so must produce actions based on st′ , leading to potentially out-of-date information and poor action predictions. 
+
+Real-Time Chunking (R TC ). To mitigate the effects of this inference delay, [21] proposes real-time chunking (R TC ), which seeks to ensure continuity between each generated action chunk. Specifi-cally, R TC incorporates actions [At−k]t−t′:k, the actions from At−k that will be played after time t′,into the inference call at step t′ to improve temporal consistency between chunks. This is achieved via diffusion inpainting and results in action predictions that mitigate potentially jerky movements between chunks, improving overall performance. Notably, however, R TC still only relies on state information available at the start of the inference call, and is not able to update its generation if the environment changes during inference. Furthermore, R TC utilizes intermediate actions solely to ensure temporal consistency, and is not able to update current predictions based on these actions. 
+
+Diffusion Steering via Reinforcement Learning (D SRL ). We will consider D SRL [12] as our base RL finetuning algorithm. D SRL is an approach for RL improvement of diffusion or flow policies and operates by tuning the denoising process of πpt . As noted, if πpt is a diffusion or flow policy, in standard deployment it generates actions by first sampling “noise” vector w ∼ N (0 , I ), and then denoising w to a robot action. D SRL trains a lightweight policy, πrl , that instead selects the input noise to be denoised by πpt , allowing the actions produced by πpt to be “steered” to desired behaviors. Formally, if at step t we wish to generate At = πpt (st, w t), instead of wt ∼ N (0 , I )
+
+we would sample wt ∼ πrl (st), then pass wt to πpt to be denoised. By observing the response and updating πrl accordingly, we can improve action generation, enabling more effective policy performance. As we will see in the following, D SRL enables significantly faster improvement in our setting than other RL approaches such as residual RL [60, 69–71]. 
+
+4 Efficient RL Finetuning Under Inference Delays 
+
+As we will see, in our real-world settings of interest, synchronous inference—where the policy pauses between action chunks to compute the next chunk—introduces problematic delays, and 4asynchronous inference, as outlined in Section 3, is required to enable effective performance. We therefore focus on the asynchronous inference setting, and how we can enable efficient online improvement under asynchronous inference. In the following, we outline our proposed approach, asynchronous RL with intermediate information (A RLI ); see Figure 2 for an overview. 
+
+4.1 Enabling D SRL Finetuning with Inference Latency 
+
+To enable efficient finetuning of πpt , we consider D SRL as our core RL algorithm. Assume that we begin the inference of πpt at step t − tdelay and condition it on state st−tdelay . Naive application of DSRL to finetune πpt would condition the noise policy πrl on the state that πpt is conditioned on—in this case st−tdelay —and generate an initial noise to steer the action generation of πpt based on this state. In the asynchronous inference setting, however, the computed action is not played until step 
+
+t—there is a delay of tdelay steps between when the RL policy computes an action and this action is played—and, as we will see in Section 5, naive application of D SRL in the asynchronous inference setting therefore does not lead to effective finetuning. To enable effective RL improvement under asynchronous inference, we consider three key modifications, outlined below. 
+
+ARLI actions: Conditioning πrl on intermediate actions. Even though the most current state we have access to when inference begins is st−tdelay , we also have access to the intermediate actions ,
+
+at−tdelay :t := ( at−tdelay , a t−tdelay +1 , . . . , a t−1)—the actions from the previously computed action chunk that will be executed during inference. While not fully predictive of the state at time t in general, knowing st−tdelay and at−tdelay , a t−tdelay +1 , . . . , a t−1 gives significant information about where we will be at time t, as we can then estimate how the environment evolves from st−tdelay .Our first modification is to condition πrl not just on st−tdelay , but also the intermediate actions 
+
+at−tdelay :t (see part (a) of Figure 2). That is, denoting the “RL state”—the state we condition the RL policy on—as srl  
+
+> t
+
+, we set srl  
+
+> t
+
+← (st−tdelay , a t−tdelay :t). Note that while it is not straightforward to condition πpt on intermediate actions (since πpt is a frozen policy that cannot easily incorporate additional conditioning information), πrl can learn to utilize such information as needed, adapting its behavior as it learns how at−tdelay :t affects the future state. 
+
+Figure 3: The benefit of intermediate state conditioning: In naive asynchronous inference, the initial state does not capture stochastic events (e.g., moving obstacles). By having the ability to condition on an intermediate state, our policy is capable of reacting to disturbances. 
+
+ARLI state: Conditioning πrl on in-termediate state by decomposing infer-ence delays. While incorporating the in-termediate actions into the RL state en-ables more effective action selection to be played at a future state, it does not ac-count for potential disturbances that may occur between t − tdelay and t; see Fig-ure 3 for an example of this scenario. To allow for reactivity to such perturba-tions, we note that most VLAs are de-composed into two components: the VLM backbone (πvlm pt ) which takes as input im-ages and language and outputs a sequence of embeddings, and the action expert (πae pt ) which instantiates the denoising process, taking as input the embeddings produced by πvlm pt and producing the final action. In many cases, πvlm pt is signifi-cantly larger and takes longer to run inference for than πae pt ; the VLA π0 spends approximately 2/3 of each inference call on inference of πvlm pt , and only the last 1/3 on πae pt inference [6]. Since D SRL modifies the behavior of πpt by selecting the input noise for the denoising process (which is only initialized once πae pt is called), we can begin inference on πrl right before πae pt is called to gain access to a more recent state. If we denote the combined inference time of πrl and πae pt as 
+
+trl delay , the latest we can call πrl is at timestep t − trl delay without incurring additional inference delay. Therefore, we propose further conditioning πrl on the state at this timestep (see part (b) of Figure 2), 5transforming our RL state to be srl  
+
+> t
+
+← (st−tdelay , a t−tdelay , s t−trl delay ). Although this intermediate state is still slightly delayed, the dominant latency comes from the VLM backbone, making srl 
+
+> t
+
+substantially more predictive of st compared to using only the initial state and intermediate actions. 
+
+RL with R TC . Although asynchronous inference does not require R TC , prior work has shown that RTC improves zero-shot policy deployment by encouraging temporal consistency between predicted action chunks and reducing discontinuities across inference calls. While such behavior could in principle be learned by πrl , explicitly enforcing it through R TC ensures this behavior is reliably executed without affecting the learning speed. Specifically, R TC freezes the noise for the first tdelay 
+
+denoising steps and applies an inpainting guidance term to maintain continuity in later steps. In our approach, we select the initial noise using D SRL while still incorporating R TC ’s inpainting guidance during denoising. We emphasize that, while R TC incorporates intermediate actions in the VLA’s inference, it is only to preserve continuity between action chunks; in contrast, πrl can leverage them to learn substantially richer behaviors. 
+
+4.2 RL Under Inference Delays Provably Succeeds 
+
+While A RLI seeks to condition the RL policy on as up-to-date state information as possible, we must still plan based on a state delayed by tdelay steps. We next show that, under certain environment conditions, this will not result in significant policy suboptimality: 
+
+Definition 1 (Delayed Oracle Optimality Gap) . An MDP M exhibits ωd-delayed optimality gap if for any st, a t:t+k,
+
+Q⋆
+
+> ac
+
+(st, a t:t+k)
+
+| {z }
+
+> (a)
+
+− EP (·| st,a t:t+k )[Rt:t+k−d + γk−dV ⋆
+
+> ac
+
+(st+k−d, a t+k−d:t+k)] 
+
+| {z }
+
+> (b)
+
+≤ ωd, (1) 
+
+where Q⋆ 
+
+> ac
+
+denotes the optimal Q-function for action chunk k policies, and we define 
+
+V ⋆
+
+> ac
+
+(st, a t:t+d) = max at+d:t+k Q⋆
+
+> ac
+
+(st, a t:t+k).
+
+This quantifies the difference in performance between the optimal achievable performance playing 
+
+k-step action chunks At given the current observation st (term (a)), and the performance if we fully commit to the same action chunk as (a), but then make a decision for the next action chunk d-steps early, based on the delayed observation at that step (term (b)). The following result shows that we can apply standard Q-learning approaches to learn effective policies despite our tdelay observation delay. 
+
+Proposition 1 (Informal) . Consider applying standard Q-learning to observations delayed by tdelay 
+
+steps and action chunks of length k. Then the policy learned through this, bπtdelay , satisfies: V ⋆ 
+
+> ac
+
+−
+
+V (bπtdelay ) ≤ 11−γk−tdelay · ωtdelay for V ⋆ 
+
+> ac
+
+the optimal value of a policy that places action chunks of length k with no delay, and ωtdelay the oracle optimality gap of M under delay d ← tdelay .
+
+Proposition 1 shows that, as long as observation delays do not significantly impact the performance of the oracle action chunking policy, we can apply standard Q-learning approaches (in particular, the action chunking Q-learning approach of [72]) to learn a policy that will converge to approximately the loss in performance the oracle policy incurs. As A RLI adopts a Q-learning approach analogous to [72], this shows that, while A RLI may incur some suboptimality from delayed observations, this suboptimality can be effectively bounded. Furthermore, by mitigating the delay with intermediate states, A RLI can reduce the delayed oracle optimality gap, leading to more effective performance than can be achieved without this. We present the full version of Proposition 1 in Section D. 
+
+5 Experimental Results 
+
+We next test whether A RLI enables effective improvement of generalist policies in practice. We aim to evaluate whether standard RL approaches enable effective improvement under asynchronous VLA inference and whether A RLI is able to improve on these approaches, leading to both faster learning and higher final success rate. We evaluate A RLI on several simulated tasks that require high reactivity, as well as on three real-world tasks. 60 2 4 6                                
+
+> Env Steps ×10 4
+> 0.00.51.0
+> Success Rate
+> Kinetix mjc swimmer ( tdelay = 4 )
+> 0246
+> Env Steps ×10 4
+> 0.00.51.0Kinetix mjc walker ( tdelay = 4 )
+> 0246
+> Env Steps ×10 4
+> 0.00.51.0Kinetix car launch ( tdelay = 4 )
+> 0246
+> Env Steps ×10 5
+> 0.00.51.0Aloha Transfer Cube ( tdelay = 20 )
+> Arli Arli Arli Arli (No Rtc )Dsrl (Rtc )Dsrl (No Rtc )Residual RL Pretrained Policy (No Rtc )Pretrained Policy ( Rtc )
+
+Figure 4: Comparison of A RLI and D SRL on simulation tasks with and without R TC .
+
+Baseline methods. We compare A RLI to several other approaches that integrate RL into asyn-chronous VLA inference. First, we consider the most straightforward application of asynchronous DSRL , where we condition the RL policy on st−tdelay . We then consider variants of D SRL with all possible state augmentations introduced in Section 4, including intermediate actions, intermediate states, R TC , and different combinations thereof. For our main simulation results, we consider the direct application of D SRL with and without R TC and A RLI with and without R TC ; we leave other comparisons for the ablations (Section 5.3). For real-world experiments, we compare against a syn-chronous inference approach which simply pauses to compute each new action. We run A RLI as described in Section 4. In addition to variants of D SRL , we also compare A RLI to residual RL [60, 69–71]. Residual RL op-erates by training an RL policy πrl to output a residual correction a∆ 
+
+> t
+
+, and then executing the action 
+
+at + a∆ 
+
+> t
+
+, for at the action produced by the base policy. Unlike D SRL which must be incorporated into the inference process of the base policy, residual RL can be run independently of this inference. As πrl is often parameterized as a small MLP that has minimal inference cost, we can compute a fresh residual correction at each step based on the current state, effectively mitigating the effect of the inference delay. For our experiments, we utilize the instantiation of residual RL proposed in [71], which conditions πrl on st and at, and computes a residual correction at each step. For all simulation results, we average results across 3 seeds and report error bars denoting 1 standard error. Please see the Appendix for additional experimental details. 
+
+5.1 Simulated Experiments 
+
+We first evaluate A RLI on several simulated tasks. We consider the Kinetix benchmark [21], which contains dynamic environments, requiring high reactivity. For our pretrained policy πpt we utilize the publicly available flow policy checkpoints considered in [21]. For our comparison, we select the mjc swimmer , mjc walker , and car launch tasks, which have lower pretrained policy success rates, and show significant degradation in zero-shot performance over increasing inference latencies. For each task, we set tdelay = 4 and trl delay = 1 . We also consider the AlohaTransferCube task [73], which simulates VLA inference with larger latencies and tests A RLI ’s ability to scale to more challenging bimanual manipulation tasks. For πpt we utilize the publicly available Aloha finetune of π0 [6], a 3.3B-parameter VLA. We set tdelay = 20 and trl delay = 10 .Figure 4 plots policy success rate over time for the 4 simulated tasks, and shows that A RLI signif-icantly outperforms naive application of D SRL under asynchronous inference, converging to both a higher final success rate and requiring less training time. While running D SRL with R TC does improve the finetuning performance on some tasks, we find that this is insufficient to fully learn the desired behavior, and that the state augmentations incorporated in A RLI are required. Furthermore, we see that, while in many cases A RLI is able to perform effectively without R TC , R TC does improve the efficiency and reliability of A RLI . We see as well that A RLI enables significant improvements over residual RL—despite the higher reactivity residual RL enables, incorporating D SRL ’s ability to steer the denoising process enables significantly higher final success once we incorporate A RLI ’s state augmentations. These results illustrate that A RLI is able to effectively handle the asynchronous 7Assembly Start Intermediate Success                              
+
+> 020 40 60 80 100 120 140 0.00.51.0Success Rate
+> Training Curve
+> 050 100 150 Successes/hour
+> Estimated Throughput
+> Shoe-in-Bag
+> 025 50 75 100 125 150 175 200 0.00.51.0Success Rate
+> 0200 400 Successes/hour
+> Bag-Placement
+> 025 50 75 100 125 150 175 200 Episode 0.00.51.0Success Rate
+> 0100 200 Successes/hour
+> Arli Arli Arli Arli (Actions Only) DSRL (Sync) DSRL (RTC) Pretrained Policy (Sync) Pretrained Policy (RTC)
+
+Figure 5: Comparison of A RLI against other RL finetuning methods on real-world tasks. Left :task images. Middle : training success curves corresponding to average success rate in the last 10 episodes. Right : estimated throughput in successes/hour computed based on the duration of each success in the last 20 episodes and assuming failure is declared after 2x average success duration. inference delays, and still enable highly effective finetuning, both in high reactivity settings, as well as with large-scale VLAs. 
+
+5.2 Real-World Experiments 
+
+We next test whether A RLI allows for effective RL finetuning in real-world robotic deployment. We consider the following real-world tasks (see Figure 5 for visualization): • Assembly . Insert a power connector into an inverter box by aligning it with two pins. • Shoe-in-Bag . Pick up a shoe and place it into a narrow bag. • Bag-Placement . With both arms, pick up a lying bag and position it parallel to the front. We run all tasks on a bimanual UR5e robot cell. Each robot is equipped with a wrist camera and a base camera is installed at the front of the cell. For all experiments, we initialize the base policy with π0.5 [10] finetuned on a small dataset of human demonstrations on the target task at 60hz and action chunk length 50. On an NVIDIA GeForce RTX 5090 GPU, we find tdelay = 10 , trl delay = 7 ,and action horizon n = 20 to be optimal for both sync and RTC policies. Note that with RTC, inference time needed for πae pt increases, and we find that πvlm pt inference takes up only 40% of the total inference time. Figure 5 shows the results of training on these three tasks. Starting from a base policy success rate of around 40%, A RLI is capable of achieving near 100% success on all tasks after 100 to 125 episodes of training. This is a significant improvement over D SRL (synchronous) and D SRL (R TC ), which struggle to reach 80% in the same amount of time on the Assembly and Bag-Placement tasks, and take nearly double the time to match A RLI in the Shoe-in-Bag task. Interestingly, A RLI (Actions Only) performs comparably to A RLI with the exception of the Bag-Placement task, where it fails to converge to a high success rate. We highlight that without asynchronous inference, both the base policy exhibits poor success and RL training is significantly slower, or does not learn at all. In other words, asynchronous inference is required to learn on these tasks, and A RLI is capable of facilitating RL finetuning with asynchronous inference, allowing for online VLA improvement in settings where this would previously have not been possible. We also estimate policy throughput in successes/hour and find that A RLI shows significantly higher throughput across all tasks. 
+
+5.3 Ablations 
+
+We next investigate the efficacy of our design choices through a series of ablation studies. 80 2 4 6              
+
+> Env Steps ×10 4
+> 0.00.51.0
+> Success Rate
+> Kinetix mjc swimmer ( tdelay = 4 )
+> 0246
+> Env Steps ×10 5
+> 0.00.51.0Aloha Transfer Cube ( tdelay = 20 )
+> Arli (State Only) Pretrained Policy (No Rtc )
+> Arli Arli Dsrl Arli (Actions Only)
+
+Figure 6: Variants of A RLI (no R TC ) with one of intermediate state or actions on mjc swimmer 
+
+and AlohaTransferCube .2 3 4Inference Delay           
+
+> 0.00 0.25 0.50 0.75 1.00
+> Final Success Rate
+> Kinetix mjc_swimmer
+> 10 20 Inference Delay
+> 0.00 0.25 0.50 0.75 1.00 Aloha Transfer Cube
+> Arli Arli Arli Arli (No Rtc )Dsrl (Rtc )Dsrl (No Rtc )
+
+Figure 7: Comparison of ARLI and DSRL 
+
+across inference delays on mjc swimmer and 
+
+AlohaTransferCube .
+
+How critical is it that we condition πrl on the intermediate state and actions? We evaluate the importance of including intermediate state and actions by running the experiment of Section 5.1 on the mjc swimmer and AlohaTransferCube tasks, isolating the usage of the intermediate state and actions. We run these experiments without RTC to minimize the temporal information utilized by de-fault. Figure 6 shows that conditioning πrl on both intermediate states and actions yields significantly better results than conditioning on one of the two, highlighting the importance of our choice of srl  
+
+> t
+
+.
+
+How sensitive is A RLI to tdelay ? We evaluate the sensitivity of A RLI to tdelay by running the same experiment in Section 5.1 for the mjc swimmer and AlohaTransferCube tasks, setting tdelay =[2 , 3, 4] for Kinetix and tdelay = [10 , 20] for AlohaTransferCube . We accordingly adjust the length of the intermediate actions to tdelay and set trl delay = tdelay − 1 for Kinetix and trl delay =
+
+tdelay /2 for AlohaTransferCube . See Figure 7 for plots of final success rate of A RLI against the baselines. Across both tasks, we see that with R TC the performance of A RLI decays slower than DSRL as tdelay increases, indicating that A RLI is more robust to inference delay. 0 2 4 6   
+
+> Env Steps ×10 4
+> 0.00.51.0
+> Success Rate
+> Kinetix mjc swimmer ( tdelay = 4 )
+> trl delay =4
+> trl delay =3
+> trl delay =2
+> trl delay =1
+> trl delay =0
+> Rtc Baseline
+
+Figure 8: A RLI performance at varying RL inference delays on mjc swimmer .
+
+How sensitive is A RLI to trl delay ? We evaluate the sen-sitivity of A RLI against RL inference latency by running the same experiment in Section 5.1 for the mjc swimmer 
+
+task, setting tdelay = 4 and ablating trl delay from 0 (most up-to-date) to 4 (no additional information). For these experiments we run A RLI with R TC . See Figure 8 for results, which show that having more up-to-date informa-tion is better, and that when trl delay is greater than half of 
+
+tdelay , learning significantly improves. 
+
+6 Conclusion and Limitations 
+
+In this work, we have proposed A RLI , an approach to enable effective RL improvement of generalist robot policies under practical inference constraints. In particular, we have shown that, by properly augmenting the observations the RL policy is conditioned on, we can enable effective RL improve-ment with asynchronous policy inference, enabling learning while mitigating the effects of latency. While A RLI has shown effective performance on our simulated and real-world tasks, it does possess a number of limitations. A key assumption we make for our pretrained policy is that it can be split up into VLM backbone and action expert components, where the action expert is the only part of the policy that requires a noise input. While this is true for many popular VLAs, for policies that do not satisfy this constraint, we cannot utilize intermediate states to improve performance (though A RLI 
+
+can still take advantage of intermediate actions in this case, as our experimental results demonstrate). While introducing R TC to our method shows performance gains, utilizing R TC might in fact hurt the reactivity of our policy, as it forces old actions to be played, making the RL policy less expressive. Lastly, while D SRL is capable of learning in many tasks, previous works have observed that D SRL 
+
+can struggle to learn on certain tasks. Given A RLI ’s reliance on D SRL , A RLI will likely also struggle to learn on such tasks. 9Acknowledgments 
+
+This research was partially supported by Siemens and ONR N00014-25-1-2060. 
+
+References 
+
+[1] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, J. Dabis, C. Finn, K. Gopalakrishnan, K. Haus-man, A. Herzog, J. Hsu, et al. Rt-1: Robotics transformer for real-world control at scale. arXiv preprint arXiv:2212.06817 , 2022. [2] J. Gu, S. Kirmani, P. Wohlhart, Y. Lu, M. G. Arenas, K. Rao, W. Yu, C. Fu, K. Gopalakrishnan, Z. Xu, et al. Rt-trajectory: Robotic task generalization via hindsight trajectory sketches. arXiv preprint arXiv:2311.01977 , 2023. [3] Octo Model Team, D. Ghosh, H. Walke, K. Pertsch, K. Black, O. Mees, S. Dasari, J. Hejna, C. Xu, J. Luo, T. Kreiman, Y. Tan, P. Sanketi, Q. Vuong, T. Xiao, D. Sadigh, C. Finn, and S. Levine. Octo: An open-source generalist robot policy. In Proceedings of Robotics: Science and Systems , Delft, Netherlands, 2024. [4] R. Doshi, H. Walke, O. Mees, S. Dasari, and S. Levine. Scaling cross-embodied learning: One policy for manipulation, navigation, locomotion and aviation. In Conference on Robot Learning , 2024. [5] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair, R. Rafailov, E. Foster, G. Lam, P. Sanketi, et al. Openvla: An open-source vision-language-action model. arXiv preprint arXiv:2406.09246 , 2024. [6] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, L. Groom, K. Hausman, B. Ichter, et al. π0: A vision-language-action flow model for general robot control. arXiv preprint arXiv:2410.24164 , 2024. [7] J. Bjorck, F. Casta˜ neda, N. Cherniadev, X. Da, R. Ding, L. Fan, Y. Fang, D. Fox, F. Hu, S. Huang, et al. Gr00t n1: An open foundation model for generalist humanoid robots. arXiv preprint arXiv:2503.14734 , 2025. [8] G. R. Team, S. Abeyruwan, J. Ainslie, J.-B. Alayrac, M. G. Arenas, T. Armstrong, A. Balakr-ishna, R. Baruch, M. Bauza, M. Blokzijl, et al. Gemini robotics: Bringing ai into the physical world. arXiv preprint arXiv:2503.20020 , 2025. [9] S. Liu, L. Wu, B. Li, H. Tan, H. Chen, Z. Wang, K. Xu, H. Su, and J. Zhu. Rdt-1b: a diffu-sion foundation model for bimanual manipulation. In International Conference on Learning Representations , volume 2025, pages 29982–30009, 2025. [10] P. Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, et al. π0.5: a vision-language-action model with open-world generalization. 
+
+arXiv preprint arXiv:2504.16054 , 2025. [11] L. Zha, A. J. Hancock, M. Zhang, T. Yin, Y. Huang, D. Shah, A. Z. Ren, and A. Majum-dar. Lap: Language-action pre-training enables zero-shot cross-embodiment transfer. arXiv preprint arXiv:2602.10556 , 2026. [12] A. Wagenmaker, M. Nakamoto, Y. Zhang, S. Park, W. Yagoub, A. Nagabandi, A. Gupta, and S. Levine. Steering your diffusion policy with latent space reinforcement learning. arXiv preprint arXiv:2506.15799 , 2025. [13] A. Amin, R. Aniceto, A. Balakrishna, K. Black, K. Conley, G. Connors, J. Darpinian, K. Dha-balia, J. DiCarlo, D. Driess, et al. π∗
+
+> 0.6
+
+: a vla that learns from experience. arXiv preprint arXiv:2511.14759 , 2025. 10 [14] Y. Li, X. Ma, J. Xu, Y. Cui, Z. Cui, Z. Han, L. Huang, T. Kong, Y. Liu, H. Niu, et al. Gr-rl: Going dexterous and precise for long-horizon robotic manipulation. arXiv preprint arXiv:2512.01801 , 2025. [15] Z. Sun and S. Song. From prior to pro: Efficient skill mastery via distribution contractive rl finetuning. arXiv preprint arXiv:2603.10263 , 2026. [16] M. Murray, D. Chen, S. Bagaria, D. Fortier, T. Hellebrekers, G. Mullins, H. Gajarla, O. Mees, M. Cakmak, and A. Kolobov. Flowdagger: Human-in-the-loop adaptation of generative robot policies in latent space. arXiv preprint arXiv:2607.08877 , 2026. [17] H. Chen, A. Zhang, S. Schaefer, K. Chen, S. Chen, D. Cremers, O. Mees, and S. Leutenegger. Robot self-improvement via human-video dynamics models. arXiv preprint arXiv:2606.21406 ,2026. [18] M. J. Kim, C. Finn, and P. Liang. Fine-tuning vision-language-action models: Optimizing speed and success. arXiv preprint arXiv:2502.19645 , 2025. [19] K. Black, A. Z. Ren, M. Equi, and S. Levine. Training-time action conditioning for efficient real-time chunking. arXiv preprint arXiv:2512.05964 , 2025. [20] M. Shukor, D. Aubakirova, F. Capuano, P. Kooijmans, S. Palma, A. Zouitine, M. Aractingi, C. Pascal, M. Russi, A. Marafioti, et al. Smolvla: A vision-language-action model for afford-able and efficient robotics. arXiv preprint arXiv:2506.01844 , 2025. [21] K. Black, M. Galliker, and S. Levine. Real-time execution of action chunking flow policies. 
+
+Advances in Neural Information Processing Systems , 38:33383–33407, 2026. [22] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, X. Chen, K. Choromanski, T. Ding, D. Driess, A. Dubey, C. Finn, P. Florence, C. Fu, M. G. Arenas, K. Gopalakrishnan, K. Han, K. Hausman, A. Herzog, J. Hsu, B. Ichter, A. Irpan, N. Joshi, R. Julian, D. Kalashnikov, Y. Kuang, I. Leal, L. Lee, T.-W. E. Lee, S. Levine, Y. Lu, H. Michalewski, I. Mordatch, K. Pertsch, K. Rao, K. Reymann, M. Ryoo, G. Salazar, P. Sanketi, P. Sermanet, J. Singh, A. Singh, R. Soricut, H. Tran, V. Vanhoucke, Q. Vuong, A. Wahid, S. Welker, P. Wohlhart, J. Wu, F. Xia, T. Xiao, P. Xu, S. Xu, T. Yu, and B. Zitkovich. Rt-2: Vision-language-action models transfer web knowledge to robotic control. In arXiv preprint arXiv:2307.15818 , 2023. [23] J. Pai, L. Achenbach, V. Montesinos, B. Forrai, O. Mees, and E. Nava. mimic-video: Video-action models for generalizable robot control beyond vlas. In Proceedings of Robotics: Science and Systems , Sydney, Australia, 2026. [24] S. Ye, Y. Ge, K. Zheng, S. Gao, S. Yu, G. Kurian, S. Indupuru, Y. L. Tan, C. Zhu, J. Xiang, et al. World action models are zero-shot policies. arXiv preprint arXiv:2602.15922 , 2026. [25] B. Hou, G. Li, J. Jia, T. An, X. Guo, S. Leng, H. Geng, Y. Ze, T. Harada, P. Torr, O. Mees, M. Pollefeys, Z. Liu, J. Wu, P. Abbeel, J. Malik, Y. Du, and J. Yang. World model for robot learning: A comprehensive survey. The International Journal of Robotics Research , 2026. [26] T. Z. Zhao, V. Kumar, S. Levine, and C. Finn. Learning fine-grained bimanual manipulation with low-cost hardware. arXiv preprint arXiv:2304.13705 , 2023. [27] C. Chi, Z. Xu, S. Feng, E. Cousineau, Y. Du, B. Burchfiel, R. Tedrake, and S. Song. Diffusion policy: Visuomotor policy learning via action diffusion. The International Journal of Robotics Research , page 02783649241273668, 2023. [28] S. Dasari, O. Mees, S. Zhao, M. K. Srirama, and S. Levine. The ingredients for robotic dif-fusion transformers. In Proceedings of the IEEE International Conference on Robotics and Automation (ICRA) , Atlanta, USA, 2025. 11 [29] K. Pertsch, K. Stachowicz, B. Ichter, D. Driess, S. Nair, Q. Vuong, O. Mees, C. Finn, and S. Levine. Fast: Efficient action tokenization for vision-language-action models. In Proceed-ings of Robotics: Science and Systems , Los Angeles, USA, 2025. [30] Y. Liu, J. Hamid, A. Xie, Y. Lee, M. Du, and C. Finn. Bidirectional decoding: Improving action chunking via guided test-time sampling. In International Conference on Learning Rep-resentations , volume 2025, pages 4594–4627, 2025. [31] J. Tan, T. Zhang, E. Coumans, A. Iscen, Y. Bai, D. Hafner, S. Bohez, and V. Vanhoucke. Sim-to-real: Learning agile locomotion for quadruped robots. In Robotics: Science and Systems ,2018. [32] J. Hwangbo, J. Lee, A. Dosovitskiy, D. Bellicoso, V. Tsounis, V. Koltun, and M. Hutter. Learn-ing agile and dynamic motor skills for legged robots. Science Robotics , 4(26):eaau5872, 2019. [33] E. Altman and P. Nain. Closed-loop control with delayed information. IEEE Transactions on Automatic Control , 48(4):553–558, 2003. [34] K. V. Katsikopoulos and S. E. Engelbrecht. Markov decision processes with delays and asyn-chronous cost collection. IEEE Transactions on Automatic Control , 48(4):568–574, 2003. [35] T. J. Walsh, A. Nouri, L. Li, and M. L. Littman. Planning and learning in environments with delayed feedback. Autonomous Agents and Multi-Agent Systems , 18(1):83–105, 2009. [36] E. Schuitema, L. Busoniu, R. Babuska, and P. Jonker. Control delay in reinforcement learning for real-time dynamic systems: A memoryless approach. In 2010 IEEE/RSJ International Conference on Intelligent Robots and Systems , pages 3226–3231. IEEE, 2010. [37] V. Firoiu, T. Ju, and J. B. Tenenbaum. At human speed: Deep reinforcement learning with action delay. arXiv preprint arXiv:1810.07286 , 2018. [38] Y. Bouteiller, S. Ramstedt, G. Beltrame, C. J. Pal, and J. Binas. Reinforcement learning with random delays. In International Conference on Learning Representations , 2021. [39] T. Xiao, J. Ibarz, D. Kalashnikov, S. Levine, E. Jang, K. Hausman, and A. Herzog. Think-ing while moving: Deep reinforcement learning with concurrent control. arXiv preprint arXiv:2004.06089 , 2020. [40] L. Smith, I. Kostrikov, and S. Levine. A walk in the park: Learning to walk in 20 minutes with model-free reinforcement learning. arXiv preprint arXiv:2208.07860 , 2022. [41] L. Smith, J. C. Kew, X. B. Peng, S. Ha, J. Tan, and S. Levine. Legged robots that keep on learning: Fine-tuning locomotion policies in the real world. In 2022 international conference on robotics and automation (ICRA) , pages 1593–1599. IEEE, 2022. [42] H. Zhu, J. Yu, A. Gupta, D. Shah, K. Hartikainen, A. Singh, V. Kumar, and S. Levine. The ingredients of real-world robotic reinforcement learning. arXiv preprint arXiv:2004.12570 ,2020. [43] J. Luo, Z. Hu, C. Xu, Y. L. Tan, J. Berg, A. Sharma, S. Schaal, C. Finn, A. Gupta, and S. Levine. Serl: A software suite for sample-efficient robotic reinforcement learning. In 2024 IEEE Inter-national Conference on Robotics and Automation (ICRA) , pages 16961–16969. IEEE, 2024. [44] R. Mendonca, E. Panov, B. Bucher, J. Wang, and D. Pathak. Continuously improving mobile manipulation with autonomous real-world rl. arXiv preprint arXiv:2409.20568 , 2024. [45] E. Rosete-Beas, O. Mees, G. Kalweit, J. Boedecker, and W. Burgard. Latent plans for task agnostic offline reinforcement learning. In Conference on Robot Learning (CoRL) , 2022. 12 [46] J. Luo, C. Xu, J. Wu, and S. Levine. Precise and dexterous robotic manipulation via human-in-the-loop reinforcement learning. Science Robotics , 10(105):eads5033, 2025. [47] M. Cutler, T. J. Walsh, and J. P. How. Reinforcement learning with multi-fidelity simulators. In 
+
+2014 IEEE International Conference on Robotics and Automation (ICRA) , pages 3888–3895. IEEE, 2014. [48] A. Rajeswaran, S. Ghotra, B. Ravindran, and S. Levine. Epopt: Learning robust neural network policies using model ensembles. arXiv preprint arXiv:1610.01283 , 2016. [49] J. Tobin, R. Fong, A. Ray, J. Schneider, W. Zaremba, and P. Abbeel. Domain randomization for transferring deep neural networks from simulation to the real world. In 2017 IEEE/RSJ international conference on intelligent robots and systems (IROS) , pages 23–30. IEEE, 2017. [50] X. B. Peng, M. Andrychowicz, W. Zaremba, and P. Abbeel. Sim-to-real transfer of robotic control with dynamics randomization. In 2018 IEEE international conference on robotics and automation (ICRA) , pages 3803–3810. IEEE, 2018. [51] Y. Chebotar, A. Handa, V. Makoviychuk, M. Macklin, J. Issac, N. Ratliff, and D. Fox. Closing the sim-to-real loop: Adapting simulation randomization with real world experience. In ICRA ,2019. [52] J. Lee, J. Hwangbo, L. Wellhausen, V. Koltun, and M. Hutter. Learning quadrupedal locomo-tion over challenging terrain. Science robotics , 5(47):eabc5986, 2020. [53] A. Kumar, Z. Fu, D. Pathak, and J. Malik. Rma: Rapid motor adaptation for legged robots. 
+
+arXiv preprint arXiv:2107.04034 , 2021. [54] A. Wagenmaker, K. Huang, L. Ke, K. Jamieson, and A. Gupta. Overcoming the sim-to-real gap: Leveraging simulation to learn to explore for real-world rl. Advances in Neural Informa-tion Processing Systems , 37:78715–78765, 2024. [55] Z. Zhang, K. Zheng, Z. Chen, J. Jang, Y. Li, S. Han, C. Wang, M. Ding, D. Fox, and H. Yao. Grape: Generalizing robot policy via preference alignment. arXiv preprint arXiv:2411.19309 ,2024. [56] M. S. Mark, T. Gao, G. G. Sampaio, M. K. Srirama, A. Sharma, C. Finn, and A. Kumar. Policy agnostic rl: Offline rl and online rl fine-tuning of any class and backbone. arXiv preprint arXiv:2412.06685 , 2024. [57] M. Nakamoto, O. Mees, A. Kumar, and S. Levine. Steering your generalists: Improving robotic foundation models via value guidance. Conference on Robot Learning (CoRL) , 2024. [58] Y. Chen, S. Tian, S. Liu, Y. Zhou, H. Li, and D. Zhao. Conrft: A reinforced fine-tuning method for vla models via consistency policy. arXiv preprint arXiv:2502.05450 , 2025. [59] J. Hu, R. Hendrix, A. Farhadi, A. Kembhavi, R. Mart´ ın-Mart´ ın, P. Stone, K.-H. Zeng, and K. Ehsani. Flare: Achieving masterful and adaptive robot policies with large-scale reinforce-ment learning fine-tuning. In 2025 IEEE International Conference on Robotics and Automation (ICRA) , pages 3617–3624. IEEE, 2025. [60] L. Ankile, A. Simeonov, I. Shenfeld, M. Torne, and P. Agrawal. From imitation to refinement-residual rl for precise assembly. In 2025 IEEE International Conference on Robotics and Automation (ICRA) , pages 01–08. IEEE, 2025. [61] P. Dong, S. Mirchandani, D. Sadigh, and C. Finn. What matters for batch online reinforcement learning in robotics? arXiv preprint arXiv:2505.08078 , 2025. [62] P. Dong, Q. Li, D. Sadigh, and C. Finn. Expo: Stable reinforcement learning with expressive policies. arXiv preprint arXiv:2507.07986 , 2025. 13 [63] W. Xiao, H. Lin, A. Peng, H. Xue, T. He, Y. Xie, F. Hu, J. Wu, Z. Luo, L. Fan, et al. Self-improving vision-language-action models with data generation via residual rl. arXiv preprint arXiv:2511.00091 , 2025. [64] C. Xu, J. T. Springenberg, M. Equi, A. Amin, A. Esmail, S. Levine, and L. Ke. Rl token: Bootstrapping online rl with vision-language-action models. arXiv preprint arXiv:2604.23073 ,2026. [65] Y. Guo, J. Zhang, X. Chen, X. Ji, Y.-J. Wang, Y. Hu, and J. Chen. Improving vision-language-action model with online reinforcement learning. arXiv preprint arXiv:2501.16664 , 2025. [66] G. Lu, W. Guo, C. Zhang, Y. Zhou, H. Jiang, Z. Gao, Y. Tang, and Z. Wang. Vla-rl: To-wards masterful and general robotic manipulation with scalable reinforcement learning. arXiv preprint arXiv:2505.18719 , 2025. [67] V. Myers, B. C. Zheng, O. Mees, S. Levine, and K. Fang. Policy adaptation via language optimization: Decomposing tasks for few-shot imitation. In Conference on Robot Learning ,2024. [68] J. Liu, F. Gao, B. Wei, X. Chen, Q. Liao, Y. Wu, C. Yu, and Y. Wang. What can rl bring to vla generalization? an empirical study. arXiv preprint arXiv:2505.19789 , 2025. [69] T. Johannink, S. Bahl, A. Nair, J. Luo, A. Kumar, M. Loskyll, J. A. Ojea, E. Solowjow, and S. Levine. Residual reinforcement learning for robot control, 2018. URL https://arxiv. org/abs/1812.03201 .[70] X. Yuan, T. Mu, S. Tao, Y. Fang, M. Zhang, and H. Su. Policy decorator: Model-agnostic online refinement for large policy model. arXiv preprint arXiv:2412.13630 , 2024. [71] L. Ankile, Z. Jiang, R. Duan, G. Shi, P. Abbeel, and A. Nagabandi. Residual off-policy rl for finetuning behavior cloning policies. arXiv preprint arXiv:2509.19301 , 2025. [72] Q. Li, S. Park, and S. Levine. Decoupled q-chunking. arXiv preprint arXiv:2512.10926 , 2025. [73] T. Z. Zhao, V. Kumar, S. Levine, and C. Finn. Learning fine-grained bimanual manipulation with low-cost hardware, 2023. URL https://arxiv.org/abs/2304.13705 .[74] M. Matthews, M. Beukman, C. Lu, and J. Foerster. Kinetix: Investigating the training of general agents through open-ended physics-based control tasks, 2025. URL https://arxiv. org/abs/2410.23208 .[75] Physical Intelligence. openpi. https://github.com/Physical-Intelligence/openpi ,2025. GitHub repository, accessed June 2026. 14 Contributions 
+
+• Brian Zhu: Methodology (contribution 2: adding intermediate state), DSRL + RTC repro, Aloha simulation, software architecture & implementation, writing • Momen Khalil: Methodology (contribution 1: adding intermediate actions), DSRL + RTC repro, Kinetix simulation, software architecture & implementation, writing • E Harrison: Simulated experiments, writing • Emanuele Poggi: Simulation and real-world experiments, ran learning dynamics analysis, writing • Philipp Schmitt: original idea, software architecture, advice • Bernd Kast: Software architecture & implementation, advice • Philine Meister: Real-world experiment lead, writing • Pranav Atreya: Experimental support, writing • Qiyang Li: Theoretical results • Finn Ferchau: Real-world experiment execution • Cesar Colmenero: Real-world experiment execution • Yash Shahapurkar: Early real-world experiment testing • Gokul Narayanan: Early real-world experiment testing • Melih Erdogan: Early real-world experiment testing • Kai Wurm: Advice, resources, funding • Georg von Wichert: Advice, resources, funding • Oier Mees: Advising, writing • Eugen Solowjow: Advice, resources, funding • Andrew Wagenmaker: Advising, method ideation, writing • Sergey Levine: Advising, writing 
+
+A Experimental Details 
+
+A.1 Implementation Algorithm . For all experiments, we run A RLI and D SRL using D SRL -S AC with repeated latent actions as described in the π0 experiments from [12]. In particular, we train a single step actor πsingle rl 
+
+and critic Qsingle (s, w single ) where Wsingle = Rd; during inference we sample wsingle ∼ πsingle rl (s)
+
+and repeat it across the action chunk axis to query the flow policy, i.e. w = {(w1, . . . , w k)|wi =
+
+wsingle } where k is the chunk length of the flow policy. Similar to [12], we handle RL with action chunking by treating the sampling and execution of an action chunk as a single step in the latent MDP, ignoring observations from within the chunk. Note that the number of environment steps stated in all results corresponds to the total number of steps from the original environment rather than the latent MDP. For residual RL experiments, we use the implementation described in [71]. Specifically, we train residual policy πrl to output a residual correction a∆ 
+
+> t
+
+, which is used to edit the base policy’s action and execute ˜at = at + a∆ 
+
+> t
+
+. The resulting action ˜at is also used to train the critic function Q(st, ˜at).The residual RL policy can be run independently of the base policy’s inference process, and due to its lightweight size, can essentially be run without inference delay. So, we provide πrl with the most up-to-date RL state, srl  
+
+> t
+
+← st. Unlike D SRL which necessarily stays within the support of the base policy, residual edits that have a similar magnitude to the base policy actions can lead to the policy relearning the task from scratch, rather than finetuning the base policy. To ensure that this does not occur, we limit the search of the optimal action magnitude for residual edits ( bw) within [0, 0.1]. 15 Observation Space and Architecture . For Kinetix tasks we use the ”symbolic” observation space, which according to [74] is a flat vector that concatenates the physical properties all the entities in the scene (e.g., position, rotation, velocity). The actor and critics are thus defined as an MLP that processes this observation vector. For AlohaTransferCube and real-world tasks we use the raw images and joint state as the observation space. For both actor and critics, the raw images are processed by a vision encoder consisting of 4 CNN layers before being flattened and concatenated with the joint state. The final state vector is then processed by an MLP. Table 1 summarizes the observation space and architecture choices for each task. Note that for real-world tasks, we use 3 camera streams (1 base camera along with 1 wrist camera for each arm); the images are concatenated along the channel dimension before being processed by the vision encoder. Table 1: Observation space and architecture used for each environment 
+
+Hyperparameter Kinetix AlohaTransferCube Real-World 
+
+Observation space Symbolic Pixels & State Pixels & State Image observation size N/A 64 × 64 64 × 64 Actor and critic architecture MLP CNN+MLP CNN+MLP Number of actor and critic MLP layers 3 3 3MLP hidden size 256 128 128 CNN features N/A (32 , 32 , 32 , 32) (32 , 32 , 32 , 32) 
+
+Number of images N/A 1 ( cam high ) 3 (base & wrists) 
+
+Intermediate Information Processing . To handle the intermediate state introduced by A RLI , we concatenate the intermediate state with the original state. For Kinetix, we concatenate the obser-vation vectors. For AlohaTransferCube and real-world tasks, we concatenate images along the channel dimension and separately concatenate the joint states. To handle the intermediate actions introduced by A RLI , we flatten the actions and concatenate them to the full state vector before it is processed by the MLP layers. 
+
+Code . We use the dsrl pi0 codebase from [12] to implement the D SRL -S AC training loop. We modify dsrl pi0 and openpi [75] to integrate R TC based on the codebase from [21]. We also inte-grate the Kinetix tasks from [21] with D SRL . For AlohaTransferCube , we do not make additional modifications. 
+
+Base Policy . For Kinetix, we use the BC flow policy checkpoints from [21] for each task. In particular, we use the checkpoint for the 5th epoch as the base policy ini-tialization. For AlohaTransferCube , we follow [12] and use the π0 checkpoint from 
+
+s3://openpi-assets/checkpoints/pi0 aloha sim . For real-world experiments, we finetune 
+
+π0.5 [10] with LoRA on each task using a cosine decay schedule. Training data was recorded for the specific tasks at 60Hz using a Meta Quest to remote control the robots. Note that the training data for the Shoe-in-Bag task does not only focus on packing the shoe, but also contains demonstrations for packing other clothing items as t-shirts into the bag. Dataset details and training hyperparameters for finetuning π0.5 are listed in Table 2. 
+
+A.2 Hyperparameters 
+
+DSRL -specific hyperparameters are listed in Table 3. Simulation evaluation metrics are averaged over 50 rollouts. For all experiments with R TC , we use the hyperparameters listed in Table 4. Values of inference delay we ablate over are shown as a list. Residual RL hyperparameters are listed in Table 5. We initialize all experiments with offline data collection (that is, rolling out the base policy some number of episodes) and optionally offline training (that is, training the actor and critic with S AC on the offline data for some number of steps). Hyperparameters are listed in Table 6. Note that number of offline transitions refer to transitions from the latent MDP rather than the original environment. For AlohaTransferCube , we found that scaling down the variance of the noise distribution boosted 16 Table 2: Real-world experiments base policy training data details 
+
+Assembly Shoe-in-Bag Bag-Placement 
+
+Number of episodes 60 123 51 Total dataset steps 84821 474301 50041 Batch size 32 32 32 Approx. number of epochs 3 2 4Warm-up steps 265 1000 1000 Decay steps 8000 30000 30000 Training steps 8000 30000 6000 Peak-LR 2.5e-5 2.5e-5 2.5e-5 Decay-LR 2.5e-6 2.5e-6 2.5e-6 the number of successful trajectories in the replay buffer. Similarly, for real-world experiments we found that clipping the sampled noise wsingle reduces unsafe motions from the robot. Table 3: Hyperparameters used for D SRL 
+
+Hyperparameter Kinetix AlohaTransferCube Real-World 
+
+Batch size 256 256 256 Actor learning rate 0.0001 0.0001 0.0001 Critic learning rate 0.0003 0.0003 0.0003 Temperature learning rate 0.0003 0.0003 0.0003 Activation ReLU ReLU ReLU Discount factor 0.999 0.999 0.999 Target entropy −d/ 2 −d/ 2 −d/ 2
+
+Target update rate ( τ ) 0.005 0.005 0.005 Gradient steps per update 20 25 20 Action magnitude ( bw) 1.0 2.0 0.5 Action chunk size 8 50 50 Number of actions to execute 4 25 20 Number of critics 10 10 10 Clipped Q-learning False False False Table 4: Hyperparameters used for R TC 
+
+Hyperparameter Kinetix AlohaTransferCube Real-World 
+
+Denoising steps 5 10 10 Inference Delay ( tdelay ) [1 , 2, 3, 4] [10 , 20] 10 Soft Masking True True True Max. Guidance Weight 5 10 10 17 Table 5: Hyperparameters used for Residual RL 
+
+Hyperparameter Kinetix AlohaTransferCube 
+
+Batch size 256 256 Actor learning rate 0.000001 0.000001 Critic learning rate 0.0001 0.0001 Activation ReLU ReLU Discount factor 0.99 0.99 Target update rate ( τ ) 0.005 0.005 Gradient steps per update 4 4Action magnitude ( bw) 0.1 0.1 Action chunk size 8 50 Number of actions to execute 4 25 Number of critics 10 10 Clipped Q-learning False False Table 6: Hyperparameters used for initial offline data collection 
+
+Hyperparameter Kinetix AlohaTransferCube Real-World 
+
+Number of offline transitions 500 1000 1200 Offline training steps 0 0 24000 Offline noise distribution N (0 , 1) N (0 , 0.3) N (0 , 1) 
+
+Clip noise False False True (0.5) 18 0 2 4 6 
+
+> Env Steps ×10 4
+> 0.00.51.0
+> Success Rate
+
+Kinetix mjc swimmer ( tdelay = 4 )     
+
+> 0246
+> Env Steps ×10 4
+> 0.00.51.0
+
+Kinetix mjc walker ( tdelay = 4 )     
+
+> 0246
+> Env Steps ×10 4
+> 0.00.51.0
+
+Kinetix car launch ( tdelay = 4 )     
+
+> 0246
+> Env Steps ×10 5
+> 0.00.51.0
+
+Aloha Transfer Cube ( tdelay = 20 )       
+
+> Arli Arli Dsrl Arli (Actions Only) Arli (State Only) Pretrained Policy (No Rtc )
+
+Figure 9: Variants of A RLI (no R TC ) with one of intermediate state or actions on mjc swimmer ,
+
+mjc walker , car launch and AlohaTransferCube .0 2 4 6 
+
+> Env Steps ×10 4
+> 0.00.51.0
+> Success Rate
+
+Kinetix mjc swimmer ( tdelay = 4 )     
+
+> 0246
+> Env Steps ×10 4
+> 0.00.51.0
+
+Kinetix mjc walker ( tdelay = 4 )     
+
+> 0246
+> Env Steps ×10 4
+> 0.00.51.0
+
+Kinetix car launch ( tdelay = 4 )     
+
+> 0246
+> Env Steps ×10 5
+> 0.00.51.0
+
+Aloha Transfer Cube ( tdelay = 20 )       
+
+> Arli Arli Dsrl (Rtc )Arli (Actions Only) Arli (State Only) Pretrained Policy ( Rtc )
+
+Figure 10: Variants of A RLI (with R TC ) with one of intermediate state or actions on mjc swimmer ,
+
+mjc walker , car launch and AlohaTransferCube .
+
+B Additional Ablations 
+
+We run additional ablations from Section 5.3 for the following questions. 
+
+How critical is it that we condition πrl on the intermediate state and actions? We run the same ablation on all tasks from the main results from Section 5.1 ( mjc swimmer , mjc walker ,
+
+car launch , AlohaTransferCube ) and also ablate between running A RLI with and without R TC .Figure 9 shows ablation results without R TC and Figure 10 shows ablation results with R TC . Adding RTC reduces the amount of additional information that needs to be added to final state representation, but across all tasks and environments we see that including all intermediate information consistently produces the best results. 
+
+How sensitive is A RLI to trl delay ? We run the same set of ablations over trl delay on mjc swimmer 
+
+with and without R TC , Figure 11 shows the results of the experiments. Here we see that removing RTC increases the requirement for how up-to-date the intermediate state must be. Between R TC and 0 2 4 6
+
+Env Steps ×10 4
+
+0.00.51.0
+
+> Success Rate
+
+Kinetix mjc swimmer( tdelay = 4 )
+
+trl delay =4 
+
+trl delay =3 
+
+trl delay =2 
+
+trl delay =1 
+
+trl delay =0 No Rtc Baseline 
+
+0 2 4 6
+
+Env Steps ×10 4
+
+0.00.51.0 Kinetix mjc swimmer( tdelay = 4 )
+
+trl delay =4 
+
+trl delay =3 
+
+trl delay =2 
+
+trl delay =1 
+
+trl delay =0 
+
+Rtc Baseline 
+
+Figure 11: A RLI performance at varying RL inference delays on mjc swimmer . Left : without R TC .
+
+Right : with R TC .19 no R TC we see that significant improvements in policy performance only appear when trl delay < 3
+
+and trl delay < 2, respectively. 20 C Learning Dynamics of A RLI Noise Steering 
+
+To better understand the learning behaviour of A RLI during training, we analyze the learned A RLI 
+
+policy on the real-world Shoe-in-Bag task over four held-out episodes not seen from the model during training. In this diagnostic, we focus on the A RLI variant conditioned on previous actions only, since the considered held-out trajectories saved the previous-actions information, but not the mid-inference observation; we therefore use the previous-action model so that every checkpoint is evaluated on exactly the same modalities used for training. For Shoe-in-Bag, the learning curves of full A RLI and the previous-action-only variant are similar, making this a useful diagnostic for the learned steering behavior. We replay two successful and two failed held-out Shoe-in-Bag episodes through every trained A RLI checkpoint. For each replayed inference step, we record the mean and variance of the noise distribution predicted by A RLI before it is denoised by the action expert. The first checkpoint considered is after the 24000 offline training steps, corresponding to the first model trained after collecting the initial warm-up episodes in the replay buffer. The middle column of Figure 12 visualizes how the predicted mean and variance of the policy’s learned noise distribution evolve across training checkpoints for the replayed trajectories. The main cross-episode trend is that failed episodes exhibit a directional shift in the predicted noise distri-bution that is not present in the same way for successful episodes. On the held-out failures, later ARLI checkpoints produce a more displaced and somewhat narrower steering-noise distribution: the predicted noise mean moves farther from zero while the predicted variance decreases. This pattern is consistent with later A RLI checkpoints becoming more confident and more biased in particular regions of the failed trajectories. This shift is localized in time rather than uniformly spread over the whole trajectory. In the heatmaps, the increased mean magnitude and reduced variance are most visible around the phase that requires the largest corrective steering. The first successful episode is smooth and well aligned, so there is little need for A RLI to apply a large steering correction; accordingly, it shows the weakest lo-calized signal among the four examples. The second successful episode is still successful but less smooth, which is consistent with the stronger mid-trajectory signal visible in the plots. The first failed episode is close to success: the shoe is only slightly misaligned with the bag opening, but the remaining correction is difficult and ultimately leads to failure. This helps explain why the signal for this episode becomes more pronounced later in training, when the learned steering distribution has become more specialized. The second failed episode represents the typical failure mode of this task, often observed in early failed episodes, where the shoe is substantially misaligned with the bag entrance. In this case, the learned signal is visible earlier in the checkpoint sequence, suggesting that this failure mode is easier for A RLI to identify. The latent-dimension view in the right column of Figure 12 provides a coarse diagnostic of where the checkpoint-dependent changes occur in the learned noise space. To quantify this, we compute the symmetric KL contribution of each latent dimension between the first and final checkpoints, aver-aged over inference steps. Overall, the drift remains broadly distributed across the latent dimensions, with effective dimension counts between 22.7 and 26.7 out of 32, suggesting that the learned change is not concentrated in only one or two specific coordinates. Failed 2 shows the clearest, though still moderate, concentration: its top three latent dimensions explain 25.3% of the total early-to-late KL contribution, compared with roughly 19–20% for the other episodes. We can therefore interpret this mainly as evidence that the learned change is distributed across the latent noise space, with only limited dimension-level localization. Overall, this analysis suggests that A RLI does not merely rescale the pretrained policy’s noise input globally, rather it reshapes the noise distribution in a trajectory- and phase-dependent manner. The considered successful episodes show weak localized distributional-drift, while the failed episodes are distinguished by the combination of three effects: the predicted noise mean moves farther from zero, the predicted variance decreases more strongly, and the largest distributional changes concen-trate around replay steps corresponding to the middle alignment/insertion portion of the task. 21 Successful episode 1         
+
+> 03710 14 18
+> inference step
+> 0.2 1.3
+> 03710 14 18
+> inference step
+> 0.4 0.8
+> 0.2 1.2
+> 0.0 0.2
+> Successful episode 2
+> 03711 15 19
+> inference step
+> 0.2 1.2
+> 03711 15 19
+> inference step
+> 0.4 0.8
+> 0.2 1.3
+> 0.0 0.2
+> Failed episode 1
+> 0511 16 22 28
+> inference step
+> 0.3 1.7
+> 0511 16 22 28
+> inference step
+> 0.3 0.8
+> 0.1 1.3
+> 0.0 0.2
+> Failed episode 2
+> 04812 16 20
+> inference step
+> 0.3 1.4
+> 40000 60000 80000
+> checkpoint step
+> 04812 16 20
+> inference step
+> 0.4 0.8
+> 0.1 1.1
+> 0715 23 31
+> latent noise dimension
+> 0.0 0.1
+> Representative frame Predicted noise mean and variance Across-checkpoint variability
+
+Figure 12: Checkpoint-wise evolution of the A RLI (actions only) noise distribution on four held-out Shoe-in-Bag episodes. Left : a representative frame from the middle of each trajectory. Middle : pre-dicted noise mean (upper plot) and variance (lower plot) by inference step and checkpoint, averaged over latent noise dimensions. Right : across-checkpoint standard deviation of the predicted noise mean (upper plot) and variance (lower plot) by inference step and latent noise dimension. This is consistent with the qualitative observation that failures in Shoe-in-Bag often occur around alignment and insertion rather than at the very beginning of the episode. The findings also align with the role of A RLI ’s intermediate information: because it observes the actions that will be executed during inference and, in the full method, can also use a more recent intermediate state, it can learn steering corrections that are targeted to the effective state at which the next action chunk will be used. We emphasize that this analysis is intentionally conservative: since it uses only four held-out trajec-tories replayed through multiple checkpoints of a single task, we interpret it as descriptive evidence about how the learned noise distribution evolves on these episodes, not as a population-level suc-cess/failure classifier. 22 D Theoretical Results 
+
+Our main theoretical result (Proposition 1) is built on top of the framework in Li et al. [72]. We first start by describing all the existing assumptions (Assumption 1 from Li et al. [72]) and a crucial new assumption (definition 2) that quantifies the sub-optimality caused by inference delays. 
+
+Assumption 1 (Data Obeys the Transition Dynamics) D ∈ ∆T is a trajectory distribution generated by rolling out a behavior policy from a distribution of st ∼ μ. The behavior policy can be non-Markovian ( i.e. , πβ (at+h | st:t+h+1 , a t:t+h)). Each subsequent state is generated according to the dynamics of the MDP M: st+h+1 ∼ P (· | st+h, a t+h), ∀h ∈ { 0, 1, · · · , k −
+
+1}. The resulting trajectory is (st, s t+1 , · · · , s t+k, a t, a t+1 , · · · , a t+k) ∈ T = Sk × A k.
+
+Definition 1 (Strong Open-Loop Consistency) D is strongly open-loop consistent if for every 
+
+at:t+k ∈ supp( PD (at:t+k | st)) ,
+
+P (st+k′ | st, a t:t+k′ ) = PD (st+k′ | st, a t:t+k), ∀k′ ∈ { 1, 2, · · · , k }, (2) where we use P (st+k′ | st, a t:t+k′ ) to denote the distribution of the future state st+k′ after carrying out the action sequence at:t+k′ in the environment open-loop from st.
+
+Notations. Following the notations introduced by Li et al. [72], we learn an action chunking Q-function, ˆQ+ac (st, a t:t+k). In our setting, there is a d-time-step delay on the observation st, so we may only react to the observation information that is d-step delayed ( i.e. , st−d) when carrying out 
+
+at. Our policy approximates the best action chunk ( at−d:t−d+k) that retains the same “action prefix” (a•
+
+> t−d
+
+, · · · , a •
+
+> t−1
+
+) while maximizing ˆQ+ac (st−d, a t−d:t−d+k). We formalize this as follows: 
+
+a◦ 
+
+> t:t+k−d
+
+= arg max ˆat:t+k−d
+
+ˆQ+ac (st−d, ˆat−d:t+k−d), (3) where 
+
+ˆat−d:t+k−d := a•
+
+> t−d
+
+, a •
+
+> t−d+1
+
+, · · · , a •
+
+> t−1
+
+| {z }
+
+> not used due to time delay
+
+, ˆat, ˆat+1 , · · · ˆat+k−d−1
+
+| {z }
+
+> open-loop execution
+
+(4) We denote the policy that produces a◦ the d-delayed action chunking policy: 
+
+πd(st−d) := a◦ 
+
+> t:t+k−d
+
+(5) 
+
+Lemma 1 (Open-loop consistency of d-delayed policy) If D satisfies Assumption 1 and it is also collected by rolling out an d-delayed action chunking policy for any d ≥ 0, that is 
+
+PD (at+d:t+k | st:t+k) = PD (at+d:t+k | st) = δπ(st), (6) then D is open-loop consistent. 
+
+Proof. PD (at+d:t+k | st:t+k) = PD (at+d:t+k | st) implies that the action chunk at+d:t+k is inde-pendent from the intermediate actions st+1: t+k. In addition, we also know that at:t+d have already been determined before st and cannot be changed after observing st:t+k either. Therefore, we have 
+
+PD (at:t+k | st:t+k) = PD (at:t+k | st). (7) This allows us to establish 
+
+PD (st+k′ | st, a t:t+k) = P (st+k′ | st, a t:t+k), ∀k′ ∈ { 1, 2, . . . , k } (8) as desired. 23 Lemma 2 (Action chunking Q-learning is optimal under d-delayed action chunking policy data collection) Let D be some data distribution collected by a mixture of d-delayed policies, and 
+
+a⋆t:t+k ∈ supp( PD (at:t+k | st)) for a⋆t:t+k = arg max at:t+k Q⋆
+
+> ac
+
+(st, a t:t+k). Then 
+
+ˆQ+ac (st, a t:t+k) = Q⋆
+
+> ac
+
+(st, a t:t+k), ∀st, a t:t+k ∈ supp( PD ), (9) where ˆQ+ac is the learned value of the non-delayed action chunking policy: π+ac : st 7 →
+
+arg max at:t+k
+
+ˆQ+ac (st, a t:t+k), and Q⋆ 
+
+> ac
+
+is the optimal value achievable by a non-delayed action chunking policy. 
+
+Proof. We first observe that any mixture of open-loop consistent data distribution is also open-loop consistent. It is not hard to conclude that D is open-loop consistent due to lemma 1. Now, we can reuse Theorem 1 from Li et al. [72] to conclude that 
+
+ˆQ+ac (st, a t:t+k) = Q+ac (st, a t:t+k), ∀st, a t:t+k ∈ supp( PD ), (10) where Q+ac is the true value of the non-delayed action chunking policy π+ac .Now, since we have assumed that the optimal action chunking policy data is in the support, the value maximizing action chunk must be the optimal action chunk. We can now conclude that 
+
+ˆQ+ac (st, a t:t+k) = Q⋆
+
+> ac
+
+(st, a t:t+k), ∀st, a t:t+k ∈ supp( PD ) (11) as desired. The implication of this result is that we can use the data collected by any d-delayed action chunking policy to learn optimal action chunking Q-function as long as the data covers some optimal ac-tion chunking policy’s behavior. However, even with the optimal action chunking Q-function, such optimal action chunking policy is not achievable because we have a delay of d time steps in our setting. 
+
+Definition 2 (Delayed Oracle Optimality Gap) An MDP M exhibits ωd-delayed optimality gap if for any st, a t:t+k,
+
+Q⋆
+
+> ac
+
+(st, a t:t+k) − EP (·| st,a t:t+k )[Rt:t+k−d + γh−dV ⋆
+
+> ac
+
+(st+k−d, a t+k−d:t+k) ≤ ωd, (12) where V ⋆
+
+> ac
+
+(st, a t:t+d) = max at+d:t+k Q⋆
+
+> ac
+
+(st, a t:t+k).Intuitively, ωd upper-bounds the amount of sub-optimality resulted from a delayed decision. The left-hand-side (LHS) of the inequality quantifies the maximum value achievable when the decision is not delayed and at a regular interval of k (i.e. , make decision at st, s t+k, · · · ). The right-hand-side (RHS) of the inequality quantifies the maximum value achievable when the decision is delayed ( i.e. ,
+
+at+k:t+2 k−d is based on the delayed st) and because of the delay, the prefix of the action chunk is pre-determined ( i.e. , at+k−d:t+k). 
+
+Theorem 1 (Delayed Action Chunking Policy is Near-optimal) Let D be some data distri-bution colleted by a mixture of d-delayed policies, and the following two support assumptions hold: 1. Optimal action chunks are in-support: 
+
+a⋆t:t+k ∈ supp( PD (· | st)) , (13) where a⋆t:t+k = π⋆
+
+> ac
+
+(st).2. Optimal action chunk completions for in-support delayed action prefix are also in-support: 
+
+a⋆t+d:t+k ∈ supp( PD (· | st, a t:t+d)) , ∀at:t+d ∈ supp( PD (· | st)) , (14) 24 where a⋆t+d:t+k = arg max at+d:t+k Q⋆
+
+> ac
+
+(st, a t:t+k).If additionally, the MDP exhibits ωd-delayed optimality gap, then the value of the d-delayed action chunking policy π+ 
+
+> d
+
+, V + 
+
+> d
+
+satisfies 
+
+|V + 
+
+> d
+
+(st, a t:t+d) − V ⋆
+
+> ac
+
+(st, a t:t+d)| ≤ ωd
+
+1 − γk−d , ∀st, a t:t+d ∈ supp( PD ), (15) where V ⋆
+
+> ac
+
+(st, a t:t+d) := max at+d:t+k Q⋆
+
+> ac
+
+(st, a t:t+k) and V + 
+
+> d
+
+(st, a t:t+d) := Q+ 
+
+> d
+
+(st, ˜at:t+k)
+
+with ˜at:t+k = [ at:t+d, a ⋆t+d:t+k], a⋆t+d:t+k = arg max at+d:t+k Q+ac (st, a t:t+k), and Q+ 
+
+> d
+
+is the fixed point of the following bellman equation: 
+
+Q+ 
+
+> d
+
+(st, a t:t+k) = EP (·| st,a t:t+k )[Rt:t+k−d + γk−dQ+ 
+
+> d
+
+(st+k−d, ˜at+k−d:t+2 k−d)] , (16) where again ˜at+k−d:t+2 k−d := [at+k−d:t+k, a ⋆t+k:t+2 k−d] with a⋆t+k:t+2 k−d =arg max at+k:t+2 k−d Q+ac (st+k−d, a t+k−d:t+2 k−d)
+
+Proof. We first note that due to the first support assumption (eq. (13)), we can trigger lemma 2 to conclude that ˆQ+ac (st, a t:t+k) = Q⋆
+
+> ac
+
+(st, a t:t+k) for in-support st, a t:t+k. On top of that, due to the second support assumption (eq. (14)), we know that the optimal action chunk completion would also be in-support, which means that 
+
+arg max at+d:t+k
+
+ˆQ+ac (st, a t:t+k) = arg max at+d:t+k Q⋆
+
+> ac
+
+(st, a t:t+k), ∀st, a t:t+d ∈ supp( PD ),
+
+(17) so we can use a⋆t+d:t+k to denote the optimal action chunk completion for both value function. We first write out 
+
+Q+ 
+
+> d
+
+(st, a t:t+k) = EP (·| st,a t:t+k )[Rt:t+k−d + γk−dQ+ 
+
+> d
+
+(st+k−d, [at+k−d:t+k, a ⋆t+k:t+2 k−d])] , (18) and compare with 
+
+X = EP (·| st,a t:t+k )[Rt:t+k−d + γk−dQ⋆
+
+> ac
+
+(st+k−d, [at+k−d:t+k, a ⋆t+k:t+2 k−d])] . (19) From the ωd-delayed optimality assumption, we know that 
+
+|X − Q⋆
+
+> ac
+
+(st, a t:t+k)| ≤ ωd. (20) Set ˜at+k−d:t+2 k−d = [ at+k−d:t+k, a ⋆t+k:t+2 k−d]. We can now bound the difference between Q+
+
+> d
+
+and Q⋆
+
+> ac
+
+(st, a t:t+k).
+
+|Q+ 
+
+> d
+
+(st, a t:t+k) − Q⋆
+
+> ac
+
+(st, a t:t+k)| (21) 
+
+≤ EP (·| st,a t:t+k )[ωd + γk−d|Q+ 
+
+> d
+
+(st+k−d, ˜at+k−d:t+2 k−d) − Q⋆
+
+> ac
+
+(st+k−d, ˜at+k−d:t+2 k−d)|]
+
+(22) 
+
+≤ ωd
+
+1 − γk−d . (23) This means that 
+
+|V + 
+
+> d
+
+(st, a t:t+d) − V ⋆
+
+> ac
+
+(st, a t:t+d)| ≤ ωd
+
+1 − γk−d , ∀st, a t:t+d ∈ supp( PD ). (24) 25

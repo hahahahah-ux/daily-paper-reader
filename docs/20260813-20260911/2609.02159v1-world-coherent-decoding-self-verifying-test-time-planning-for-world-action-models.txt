@@ -1,0 +1,510 @@
+Title: World-Coherent Decoding: Self-Verifying Test-Time Planning for World Action Models
+
+URL Source: https://arxiv.org/pdf/2609.02159v1
+
+Published Time: Thu, 03 Sep 2026 00:38:07 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+# World-Coherent Decoding: Self-Verifying Test-Time Planning for World Action Models 
+
+Chuhan Zhang 
+
+Department of Computer Science Institute of Science Tokyo 
+
+chuhan_mio@d-itlab.comp.isct.ac.jp 
+
+Seiji Ito 
+
+Department of Computer Science Institute of Science Tokyo 
+
+ito.s.0948@m.isct.ac.jp 
+
+Kenta Hoshino 
+
+Department of Computer Science Institute of Science Tokyo DENSO IT Lab, Japan 
+
+hoshino@comp.isct.ac.jp 
+
+Satoshi Ikehata 
+
+National Institute of Informatics, Japan DENSO IT Lab, Japan 
+
+ikehata.satoshi@d-itlab.comp.isct.ac.jp 
+
+Ikuro Sato 
+
+Department of Computer Science Institute of Science Tokyo DENSO IT Lab, Japan 
+
+isato@comp.isct.ac.jp 
+
+Abstract 
+
+World Action Models (WAMs) aim to control robots by stochastically generating visual futures and then decoding actions, but empirical observations indicate that the results can strongly depend on which future is selected. We propose World-Coherent-Decoding (WCD), a self-verifying test-time planning framework that treats WAM rollouts as falsifiable future–action hypotheses. At each decision step, WCD samples multiple candidates from a frozen WAM and ranks them using internal generative signals: flow-based video surprisal for visual plausibility and action path effort for action-generation stability. After execution, the realized observation audits the selected imagination, yielding an imagination–reality mis-match that trains a lightweight online predictor for future candidate selection. Thus, WCD converts delayed self-verification into pre-execution reliability estimation without updating the backbone model. On RoboTwin 2.0, WCD improves Hard success under limited randomized-scene supervision from 55 .80% to 60 .90% , with a +16 .43 gains on Horizon-3 tasks, and shows qualitative robustness on real Franka visual-shift tests. These results highlight a simple principle: test-time scaling for WAMs depends less on sampling more futures than on selecting reliable ones. 
+
+1 Introduction 
+
+World Action Models (WAMs) [19, 31, 16] have recently emerged as a promising alternative to purely reactive vision-language-action (VLAs) policies [15, 2, 3]. Unlike VLAs that directly map observations and language instructions to actions, WAMs incorporate video-based world modeling to predict how the visual world may evolve under interaction, internalizing physical priors from large-scale video data: how objects move, how scenes deform and how manipulation sequences unfold accordingly. Among them, causal [19, 30, 11] video-action WAMs such as LingBot-VA [19]          
+
+> Preprint. arXiv:2609.02159v1 [cs.CV] 2 Sep 2026 (a) Hindsight imagination--reality error under the same prefix
+> (b) Task-level distribution of within-prefix error spread
+> Observed prefix
+> Best among N samples
+> (hindsight-ranked)
+> Worst among N samples
+> (hindsight-ranked) Real future
+> Blocks
+> scene
+> Bottle
+> scene
+> (c) Utilizing internal scores before execution and mismatch feedback after execution
+> Causal WAM imagines futures
+> Observed World
+> Selected Future Guides Action
+> Execute Action + language instruction
+> “ adjust the bottle”
+> time
+> Sample N future -
+> action candidates
+> Internal reliable scores
+> Imagination-real mismatch
+> non-exist target
+> gripper pose drift
+> …
+> Accumulated Error
+> t𝑜 t<𝑚 t𝑚 t𝑚+𝐻 t𝑚 t𝑚+𝐻 t𝑚 t𝑚+𝐻
+
+Figure 1: Pilot motivation: WAM imagination contains selectable reliability variation. A frozen WAM samples multiple future–action candidates from the same causal history, and each imagined visual future is scored in hindsight by its latent-space imagination–reality error after the real future becomes available. (a) Under the same observation prefix, candidates can differ sharply in hindsight error; green marks the lowest-error candidate, brown the highest, and gray the remainder. (b) The within-prefix spread appears across tasks, measured by the median and 90th-percentile oracle error spread over prefixes. (c) Reliability-aware candidate selection is applied before execution, and self-supervised mismatch feedback is given after execution. Implementation details are provided in Appendix ?? .jointly model visual futures and action chunks in an autoregressive structure, explicitly tying imagined future dynamics to the actions that produce them. This future-conditioned action decoding can be viewed through an inverse-dynamics lens [27, 6, 11]: the predicted future visual state acts as an implicit goal, and the action branch decodes the motion required to reach it. This structure connects classical goal-conditioned control with modern pixel-and latent-space visual dynamics [9, 26]. More importantly for test-time control, it exposes candidate visual consequences before physical commitment, making causal WAMs especially appealing under distribution shift or temporally extended manipulation [7]. However, realizing this potential is non-trivial, because video generation is inherently stochastic. Under the same observation prefix and task instruction, a WAM can sample futures of widely different quality: some remain physically consistent and task-relevant, while others introduce nonexistent objects of implausible object poses (see the top row of Figure 1) that make consistent action decoding difficult. These observations motivate us to investigate a selection rule for test-time imaginations so that the WAM can more successfully perform a desired control. The similar issues are broadly found in stochastic generation, where random sampling alone does not guarantee downstream utility and candidate ranking or refinement is often needed for reliable deployment [17, 29, 20, 8]. For WAM-based control, this reliability problem is more consequential: an imagined future is not merely a generated artifact, but an action-conditioned hypothesis whose reliability directly affects physical execution. 
+
+Pilot: WAM imagination contains selectable reliability variation. We first ask whether stochas-tic WAM futures contain enough within-prefix variation so that candidate selection is reasonable. We replay fixed observation prefixes into the frozen WAM cache, sample multiple future–action candidates from the same causal history, and evaluate each imagined visual future in hindsight after the corresponding real future becomes available. Figure 1 (a) shows a clear reliability spread within the sampled pool. Even with the same observation history and instruction, different stochastic futures can yield substantially different imagination– reality errors, and this effect appears across multiple tasks (Figure 1 (b)). Thus, test-time imagination 2is not merely noisy. Qualitatively, high-error futures can correspond to recognizable failure patterns, such as nonexistent target objects, implausible object motion, or gripper-pose drift, rather than only small latent-space deviations; it contains a selectable gap between a one-shot sample and better candidates in the same pool. Complementarily, online rollouts show that larger early imagination– reality mismatch is associated with higher failure rate (Figure 5), suggesting that this mismatch is behaviorally meaningful rather than only a latent-space diagnostic. This leads to the core idea behind our proposed method: WAM imagination is falsifiable . A WAM predicts an explicit future before execution, and the realized observation can later audit that prediction. The resulting mismatch provides a self-supervised reliability signal without task rewards, success detectors, or external trained verifiers (Figure 1 (c)). The difficulty is temporal: this signal is revealed only after execution, while the action must be selected beforehand. In this work, we propose World-Coherent Decoding (WCD): Self-Verifying Test-Time Planning for World Action Models. Before online feedback is available, WCD ranks multiple future-action candidates using two model-internal signals: flow-based video surprisal , which estimates visual plausibility under the WAM’s own generative dynamics, and action path effort , which measures the stability of the action denoising trajectory. After execution, WCD compares the selected imagined future with the realized observation and uses this delayed mismatch to train a lightweight online predictor. In this way, WCD amortizes post-execution self-verification into pre-execution candidate selection while keeping the backbone WAM frozen. Our contributions are as follows: • We formulate test-time WAM control as reliability-aware candidate selection, identifying 
+
+imagination falsifiability as a structural advantage of causal WAMs. We show that sampled futures from the same prefix contain a selectable reliability gap, and that imagination–reality mismatch is associated with downstream failure. • We introduce WCD, a reward-free and verifier-free test-time planning framework for frozen WAMs. WCD ranks best-of-N future–action candidates using model-internal generative traces, namely flow-based video surprisal for visual plausibility and action path effort for action-generation stability. • We propose delayed self-verification for online calibration: after execution, the realized observation audits the selected imagination, and the resulting mismatch trains a lightweight predictor that amortizes post-execution feedback into future pre-execution selection. • We validate WCD on RoboTwin 2.0 and a real Franka stress test. Under limited-randomization Hard RoboTwin evaluation, WCD improves Hard Avg. by +5 .10 points and Horizon-3 success by +16 .43 points over the base WAM, while ablations show that gains come from structured selection rather than sampling more candidates alone. 
+
+2 Related Work 
+
+Selection and scaling in stochastic generation. A broad lesson from generative modeling is that sample quality can vary substantially under the same condition, making decoding, or refinement central to deployment-time performance. Text-to-image systems use preference models, reward models, and inference-time refinement to select or improve generations [29, 17, 20]. Other methods intervene directly in the generative trajectory, for example by amortizing test-time noise optimization or optimizing noise variables under interaction constraints [8, 25]. Our work transfers this selection view to WAM control, where the candidate is not only a visual sample but a coupled future-action rollout, and therefore must be judged by signals available before physical feedback arrives. 
+
+Test-time guidance for robot policies. Generative control and offline reinforcement learning methods often guide sampled trajectories using rewards, values, constraints, or learned critics [13, 14, 28]. Recent robot foundation-model methods similarly improve action decoding through value guidance, bidirectional sampling, external verification, or verifier-free candidate filtering [24, 23, 18, 12]. These approaches demonstrate the value of test-time computation, but they usually rely on additional supervision, learned evaluators, or action-level selection criteria. We address the complementary case where future samples are useful but uneven in reliability within WAM context, and show that selection can make test-time imagination more effective under randomized-scene uncertainty. 3visual                         
+
+> cache
+> …
+> action
+> cache
+> …
+> 𝐶 𝑚 = (𝑧 <𝑚 𝑜𝑏𝑠 , 𝑎 <𝑚 )
+> pathwise divergence contributions accumulate along the flow
+> 𝑞 𝑣 ( Ƹ𝑧 𝑚,1:𝐾 |𝐶 𝑚 )
+> Local volume
+> 𝑑𝑉
+> (center 𝑥 𝜏 )
+> outward flux
+> positive
+> divergence
+> density
+> drops
+> surprisal
+> increases
+> ⇒⇒
+> log 𝑝 𝜏 𝑥 𝜏 𝐶 𝑚 final
+> log 𝑝
+> (higher)
+> lower
+> surprisal
+> ⇒
+> final
+> log 𝑝
+> (lower)
+> higher
+> surprisal
+> ⇒
+> low surprisal
+> …
+> high surprisal
+> oriented source-to-data coordinate 𝜏 = 1 − 𝜎
+> Surprisal is determined by the final log density after accumulated divergence
+> contributions
+> low effort
+> high effort
+> one denoising step
+> solver step |∆𝜎 𝑞 |
+> action update ∆𝑎 𝑚,𝑛,𝑞
+> 𝑠 𝑚,𝑛 𝑎 = ෍
+> 𝑞
+> ∥ ∆ 𝑎 𝑚,𝑛,𝑞 ∥2
+> ∆𝜎 𝑞 + 𝜀
+> source
+> 𝑝 base (𝑎)
+> action target
+> 𝑞 𝑎 (𝑎 𝑚,1:𝐾 | ǁ𝑧 𝑚,1:𝐾 , 𝐶 𝑚 )
+> +-
+> --
+> -
+> +
+> +
+> +
+> -
+> 𝑝 𝑏𝑎𝑠𝑒
+> low surprisal
+> high surprisal
+> / +:
+> / −:
+> (a) Cache-conditioned candidate flows (b) Local divergence and probability flux (c) Pathwise density accumulation (d) Action denoising path effort
+> 𝑥 0
+> (1)
+> 𝑥 0(2)
+> 𝑥 0
+> (3)
+> flow transports
+> 𝑝 𝑏𝑎𝑠𝑒 to 𝑞 𝑣 ǁ𝑧 𝐶 𝑚 )
+> log 𝑝
+> local surprisal gain
+> local surprisal drop
+
+Figure 2: Internal generative signals for test-time candidate selection. (a) From the same cache state Cm, the frozen WAM samples multiple video–action candidates through stochastic conditional flows. (b) Positive divergence in the oriented source-to-data coordinate τ = 1 − σ corresponds to outward probability flux and local density decrease. (c) Accumulating divergence along the saved video solver trajectory yields the video-side surprisal score sv, surp 
+
+m,n . (d) Given an imagined future, the action branch decodes the corresponding action chunk; path effort sam,n measures normalized denoising motion in action space. 
+
+3 Method 
+
+3.1 Preliminary: Chunked World Model and the Falsifiability Opportunity 
+
+We build on a causal video-action world model 1 that performs chunked closed-loop control. At decision step m, the model conditions on the executed interaction history, represented by the causal cache Cm = ( zobs 
+
+<m , a <m ), where zobs 
+
+<m denotes previously realized observations encoded into the visual latent space. Conditioned on Cm, the model first generates an imagined visual latent future and then decodes the corresponding low-level action chunk: 
+
+ˆzm, 1: K ∼ qvθ (· | Cm), am, 1: K ∼ qaθ (· | ˆzm, 1: K , C m), zreal 
+
+m, 1: K = E(om, 1: K ). (1) After executing the action chunk, the realized latent observation zreal 
+
+m, 1: K is appended to the history, and the process repeats autoregressively over chunks. This structure creates the central opportunity exploited by WCD. Before acting, the WAM commits to an explicit visual prediction ˆzm, 1: K ; after acting, the physical world reveals zreal 
+
+m, 1: K . Thus, the imagined future is a falsifiable prediction, auditable by the world it was meant to describe. WCD uses this delayed imagination–reality discrepancy to calibrate subsequent test-time selection, while keeping the backbone WAM frozen. Both video and action generators are implemented as flow-matching denoising processes. For clarity, the main text uses the oriented source-to-data coordinate τ = 1 − σ; the native scheduler-coordinate implementation and its equivalence are given in Appendix ?? .
+
+3.2 Test-Time Candidate Selection via Internal Generative Signals 
+
+The central planning problem is to choose a reliable action chunk before its real consequence is observed. At decision step m, we turn the frozen WAM into a best-of-N selector by sampling 
+
+{(ˆ zm,n, 1: K , a m,n, 1: K )}Nn=1 , ˆzm,n, 1: K ∼ qvθ (· | Cm), am,n, 1: K ∼ qaθ (· | ˆzm,n, 1: K , C m).
+
+All candidates share the same observation history and task conditioning; their differences therefore reflect stochasticity in the conditional generative process rather than changes in the causal cache (Figure 2(a)). WCD ranks these candidates before execution using only generation-time traces, without rewards, external verifiers, or policy updates. We use two complementary internal signals: video-side flow surprisal for visual plausibility and action-side path effort for action generation stability. 
+
+1Here, “causal” refers to this modality-level generation order, in contrast to joint video-action formulations that denoise or model future visual and action tokens simultaneously. 
+
+4Video-side flow surprisal. The video branch defines a cache-conditioned future distribution over plausible visual continuations. In a flow-matching sampler, a learned velocity field transports a base distribution toward this conditional future distribution [21, 22]. As in continuous normalizing flows [4, 10], the log-density along a trajectory changes according to the divergence of the velocity field: ddτ log pτ (xτ | Cm) = −∇ · uvθ (τ, x τ | Cm), (2) where τ = 1 −σ is the oriented source-to-data coordinate. Intuitively, positive divergence corresponds to outward probability flux, causing local density to drop and surprisal to increase (Figure 2(b)). Accumulating these divergence contributions along a candidate’s saved trajectory determines its final log-density: trajectories with larger positive-divergence accumulation arrive at lower-density, higher-surprisal futures (Figure 2(c)). For candidate n, let T vm,n = {(xvm,n,r , τ vr , ∆τ vr )}Rv −1 
+
+> r=0
+
+be its saved video denoising trace. Discretizing Eq. (2) gives the pathwise video surprisal score: 
+
+sv, surp  
+
+> m,n
+
+= Sv 
+
+> base ,m,n
+
++ 
+
+> Rv−1
+
+X
+
+> r=0
+
+\∇ · uvθ (τ vr , x vm,n,r | Cm) ∆ τ vr , (3) where Sv 
+
+> base ,m,n
+
+= − log pbase (xvm,n, 0). We estimate the divergence with a Hutchinson trace esti-mator [10] and provide the native σ-coordinate implementation in Appendix ?? . Lower surprisal indicates a higher-density imagined future under the WAM’s learned visual dynamics, and is therefore preferred before reality arrives to audit the prediction. 
+
+Action-side path effort. A visually plausible future may still require an unstable low-level action trajectory. We therefore complement the video score with an action-side path-effort score derived from action denoising updates (Figure 2(d)). Let ∆am,n,q = xam,n,q +1 − xam,n,q be the action update at denoising step q. We define 
+
+sam,n =
+
+> Ra−1
+
+X
+
+> q=0
+
+mean (∆ am,n,q )2
+
+|∆σaq | + ϵ . (4) The normalization by |∆σaq | measures corrective motion per unit solver step, making the score less sensitive to nonuniform scheduler spacing. Lower effort indicates a smoother and more direct action generation path, used only as a relative control-side reliability proxy among candidates sharing the same conditioning. A schedule-normalized kinetic-cost interpretation is given in Appendix ?? .
+
+Fusion and selection. Since video and action scores have different scales, we normalize each score across the N candidates at the current decision step: 
+
+˜sjm,n = sjm,n − μ(sjm, 1: N )std( sjm, 1: N ) + ϵs
+
+, j ∈ { v, a }. (5) The final candidate score and selected rollout are 
+
+cm,n = λm ˜svm,n + (1 − λm)˜ sam,n , n⋆m = arg min  
+
+> n
+
+cm,n . (6) WCD executes am,n ⋆m,1: K , retains the selected imagined future as visual memory, and caches its generation features for the delayed feedback described in Section 3.4. Normalization edge cases and exploration are detailed in Appendix ?? .
+
+3.3 Delayed Self-Verification via Backward Error 
+
+The most informative reliability signal arrives only after execution: the realized observation directly audits the selected imagination. Given the executed candidate nexec  
+
+> m
+
+, we define the per-frame visual backward error 
+
+evb  
+
+> m,k
+
+= MSE  ˆzm,n exec  
+
+> m,k
+
+, z real 
+
+> m,k
+
+ , k = 1 , . . . , K, (7) and its scalar summary bm = 1
+
+> K
+
+P 
+
+> k
+
+evb 
+
+> m,k
+
+. The signal is entirely self-supervised—it requires no reward, no success detector, and no external verifier. We exploit bm in two ways. First, it drives online adaptation of the video–action fusion weight. Letting ¯bhist  
+
+> m
+
+denote the running mean of prior backward scores, 
+
+λm+1 = λbase · min 
+
+
+
+1, ¯bhist 
+
+> m
+
+max( bm, ϵ b)
+
+
+
+. (8) 5Phase1: Before execution  
+
+> Select candidate at decision step 𝑚
+> +
+> +
+> +
+> 𝑛 = 1
+> 𝑛 = 2
+> 𝑛 = 𝑁
+
+{( ǁ𝑧 𝑚,𝑛,1:𝐾 , 𝑎 𝑚,𝑛,1:𝐾 )} 𝑛=1 𝑁          
+
+> …
+> Observation
+> history cache
+> 𝑧 <𝑚 obs
+> Frozen
+> WAM
+> Pre-warm
+> (default ON)
+> surprisal
+> 𝑠 𝑚,𝑛 𝑠𝑢𝑟𝑝
+> Post-warm
+> (predictor)
+> predictor score
+> 𝑠 𝑚,𝑛 𝑣,𝑝𝑟𝑒𝑑
+> video score 𝑠 𝑚,𝑛
+> 𝑣 action score 𝑠 𝑚,𝑛
+> 𝑎
+> path effort
+> fused ranking 𝒄 𝒎,𝒏
+
+select  𝑛 𝑚  
+
+> ∗
+> execute
+> selected
+> action
+> 𝑎 𝑚,𝑛 𝑚
+> ∗,1:𝐾
+
+Phase2: After execution  
+
+> Self-verification in the physical world
+> real
+> observation chunk
+> 𝑧 𝑚,1:𝐾 𝑟𝑒𝑎𝑙
+
+selected imagination 
+
+ǁ𝑧 𝑚,𝑛 𝑚 ∗ ,1:𝐾         
+
+> backward error (appears now)
+> 𝑏 𝑚 =1
+> 𝐾 ෍
+> 𝑘=1
+> 𝐾
+> 𝑀𝑆𝐸 ǁ𝑧 𝑚,𝑛 𝑚
+> ∗,𝑘 , 𝑧 𝑚,𝑘 𝑟𝑒𝑎𝑙
+> Physical world
+> Too late for current selection;
+> Usable only for future steps.
+> free self-supervised mismatch signal
+
+Phase3: Online calibration    
+
+> Bring the delayed signal forward
+> replay buffer ℬ ∶ (𝜙 𝑚,𝑛 𝑚
+> ∗, 𝜖 𝑚,1:𝐾 𝑟𝑒𝑎𝑙 )
+> |ℬ|
+
+Curriculum switch      
+
+> if ℬ≥threshold →Post-warm ON
+
+Online predictor  𝑓 𝜓 
+
+(update online)     
+
+> predict future mismatch Ƹ𝑒 𝑚+1,1:𝐾 𝑤𝑏
+> planning-time video score 𝑠 𝑚+1,𝑛 𝑣,𝑝𝑟𝑒𝑑
+> used to rank
+> candidates at next
+> step 𝑚 + 1
+
+Amortizing delayed error into planning time           
+
+> selected / highlighted imagined future ǁ𝑧 action chunk 𝑎 data / control flow frozen component curriculum switch
+> (warm-up
+> threshold)
+> backward
+> error 𝑏 𝑚
+> is unavailable
+> when selecting
+> 𝑛 𝑚 ∗.
+> action
+> executed
+> here
+> Execution
+> Horizon &
+> Causal
+> Boundary
+
+decision step  𝑚 : before execution  after execution at step  𝑚  next decision step  𝑚 + 1 Figure 3: Method overview of WCD. At each decision step m, the frozen WAM samples N future– action candidates and selects one via pre-execution internal signals ( Phase 1 ). After execution, the realized observation zreal 
+
+m, 1: K audits the selected imagination, yielding a self-supervised backward error bm that is reliable but causally delayed ( Phase 2 ). WCD accumulates these mismatch labels in a replay buffer to train an online predictor fψ , amortizing the delayed signal into a planning-time video score sv, pred 
+
+m+1 ,n for future candidate ranking ( Phase 3 ). When the current mismatch exceeds the historical baseline, trust in the video-side score is reduced proportionally. Second, for the executed candidate, we store a planning-time generation feature 
+
+ϕm,n exec  
+
+> m
+
+together with the revealed error vector evb 
+
+m, 1: K in a replay buffer B. This links information available before execution to the ground-truth reliability revealed afterward, forming the supervision signal for the online predictor below. 
+
+3.4 Online Calibration: Amortizing Delayed Error into a Learned Proxy 
+
+Flow surprisal provides a principled cold-start score, but it is computationally expensive: for every candidate and decision step, it requires storing the denoising trace, replaying the velocity field with gradients, and estimating divergence. In contrast, each candidate already exposes compact generation-time features during standard video sampling. We denote this feature vector by ϕm,n ,constructed from the denoising velocity-norm sequence, spatially pooled future latents, and pooled frame differences. The exact construction is given in Appendix ?? .We therefore train a lightweight predictor fψ that maps ϕm,n to a direct estimate of future the backward error that will be observed after execution, namely the imagination–reality mismatch:: 
+
+ˆevb 
+
+m,n,k = fψ (ϕm,n )k, sv, pred 
+
+m,n = 1
+
+K
+
+KX
+
+k=1 
+
+ˆevb 
+
+m,n,k . (9) The predictor is trained online from B via framewise regression, 
+
+L(ψ) = E(ϕ,y )∼B 
+
+∥fψ (ϕ) − y∥22
+
+ , y = evb 
+
+m, 1: K . (10) We use separate encoders for denoising dynamics and latent-motion features before a shared prediction head; feature and architecture ablations are provided in Appendix ?? .
+
+Warm-up curriculum. WCD follows a data-driven two-stage schedule illustrated in Figure 3. In the pre-warm stage, the video-side score is flow surprisal sv, surp 
+
+m,n , providing a principled cold start before any deployment feedback exists. Once |B| reaches a threshold, WCD switches to post-warm: surprisal traces are discarded, divergence replay is disabled, and the video score becomes 6(a) Clean  (b) Hard: colored light  (c) Hard: camera blur 
+
+> (d) Hard: cluttered layout
+
+Figure 4: Real-robot Franka evaluation. We train on the clean hammering setup and test on unseen colored-light, camera-blur, and cluttered-layout variants. 
+
+svm,n = sv, pred  
+
+> m,n
+
+. The action-side path-effort score and frozen WAM backbone remain unchanged. Predictor weights and the replay buffer persist across episodes of the same task, while episode-local state, including the fusion weight and autoregressive cache, resets per episode. 
+
+4 Experiments 
+
+4.1 Experiment Setup RoboTwin 2.0 simulation. We evaluate WCD on RoboTwin 2.0 [5], a 50-task bimanual manipula-tion benchmark covering diverse object interactions, multi-step execution, and long-horizon skills. We consider two training-randomization regimes on the same benchmark. The standard protocol 
+
+follows prior RoboTwin evaluations [19, 1]: we use the pretrained backbone trained on a mixture of 2.5k clean demonstrations and 25k heavily randomized demonstrations, and evaluate it on Easy and Hard configurations. This setting tests whether WCD can still improve a strong WAM in a near-saturated regime. We further evaluate a limited-randomization protocol , a harder point on the same randomization axis. Motivated by the practical setting where clean demonstrations are abundant but heavily randomized demonstrations are costly, the base WAM is first trained for 18k steps on clean scenes, then continued for 18k steps with a 70% clean / 30% randomized mixture. The task set, backbone architecture, and Hard evaluation remain unchanged; only the amount of randomized-scene supervision is reduced. This creates the predicted regime where the WAM has learned feasible visual-action structure, but its sampled futures remain uneven in reliability, leaving more headroom for candidate selection. Unless otherwise specified, we report average task success rate over multiple trials. ?? Real-robot Franka evaluation. We further evaluate WCD on a real Franka tabletop hammering task, where the robot must strike the target object specified by a language instruction. The policy is trained only on clean demonstrations collected in a standard workspace with normal lighting and an external RGB camera. At test time, we keep the task interface fixed but introduce three unseen visual shifts: colored illumination, camera blur, and cluttered layouts with distractor objects (Figure 4). These variants directly perturb the visual evidence used by the WAM while preserving the language-conditioned control objective, creating a challenging robustness test for test-time candidate selection. All real-robot evaluations use the same frozen backbone; no hard variant is used for additional training or finetuning. Additional protocol details are provided in Appendix ?? .
+
+4.2 Main Results Imagination error is behaviorally meaningful. Figure 1 shows that, under the same observation prefix, sampled imaginations can differ substantially in hindsight consistency. Figure 5 further asks whether this mismatch is behaviorally meaningful during online rollouts, where the selected candidate is executed and its imagined latent future can be compared with the subsequently observed latent chunk. We aggregate the mismatch over the first three decision chunks of each episode, using task- and depth-normalized log error to control for scale differences across tasks and rollout stages. The results show two complementary patterns: failed episodes exhibit larger early mismatch than successful ones, and failures concentrate in high-error rollouts. Quantitatively, the failure rate increases monotonically from 
+
+4.9% to 21 .2% across early-error quartiles. Thus, the backward error used by WCD is behaviorally 7Figure 5: Early imagination–reality mismatch is associated with rollout failure. We aggregate task- and depth-normalized visual-back error over the first three executed chunks. Failure rate increases from 4.9% in the lowest early-error quartile to 21 .2% in the highest. Table 1: Standard RoboTwin 2.0 evaluation with the pretrained LingBot-VA backbone kept frozen. Best results are bolded and second-best results are underlined.                                                            
+
+> Method H1 H2 H3 Overall Easy Hard Easy Hard Easy Hard Easy Hard X-VLA ∗81.6 82.5 59.3 55.9 61.2 66.0 72.9 72.8
+> π066.5 61.6 66.1 54.7 61.6 50.2 65.9 58.4
+> π0.585.1 80.2 79.3 73.0 78.6 67.4 82.7 76.8 Motus 91.0 90.6 85.2 80.9 85.0 84.2 88.7 87.0 LingBot-VA 94.2 93.6 90.3 86.9 93.2 93.2 92.9 91.6 WCD 94.5 93.6 89.9 89.4 93.3 93.2 93.0 92.3
+
+aligned with task-level failure, making it a meaningful self-supervised target for test-time reliability estimation. 
+
+Standard setting with a strong pretrained WAM. We first plug WCD into the pretrained LingBot-VA backbone [19], keeping all backbone weights frozen. As shown in Table 1, WCD remains competitive across horizons and improves overall Hard success from 91 .55% to 92 .28% . This result shows that reliability-aware candidate selection can still provide gains on top of a strong WAM, but the absolute improvement is naturally limited by saturation: several RoboTwin tasks are already near-perfect under the fully trained standard protocol. This motivates the limited-randomization protocol below, where randomized-scene uncertainty leaves more room for test-time selection to matter. Table 2: Limited-randomization Hard results. ∆
+
+denotes absolute gain.                 
+
+> Method H1 H2 H3 Avg. LingBot-VA 63.33 49.33 30.00 55.80 WCD 66.72 53.69 46.43 60.90
+> ∆+3.39 +4.36 +16.43 +5.10
+
+Generalization under limited randomized-scene supervision. Table 2 evaluates the same selection mechanism under the less saturated limited-randomization protocol. Here, the base WAM has seen randomized scenes during train-ing, but not enough to fully master their visual and geometric variation. This directly targets our intended failure mode: sampled futures can be plausible under the model, yet still vary sub-stantially in reliability under randomized test scenes. WCD improves Hard success from 55 .80% to 60 .90% without updating the backbone. The gain is especially large on Horizon-3 tasks, where success increases by +16 .43 points. This supports the core hypothesis that test-time candidate selection is most useful when the base model has learned enough structure to imagine feasible futures, but its stochastic samples remain unreliable enough that selecting a better future-action rollout can prevent early errors from compounding. 
+
+Real-robot Franka stress test. Figure 4 and the supplementary rollout videos provide a qualitative real-robot stress test under visual shifts not seen during clean-data training. In the colored-light case, both the frozen base WAM and the π0.5 baseline fail to complete the hammering task, while WCD selects an executable trajectory. These results provide preliminary evidence that test-time selection can recover more reliable actions from the same frozen WAM under shifted or degraded visual evidence. 8Table 3: Module ablation on RoboTwin 2.0. “Video” and “Action” denote the video-side and action-side scoring branches; “Online Pred.” denotes the online reliability predictor. Random-N selects uniformly among N candidates and serves as the baseline. 
+
+Variant Video Branch Action Branch Online Pred. Clean Avg. (%) Hard horizon-wise (%) Hard Avg. (%) H = 1 H = 2 H = 3 Random-N ✗ ✗ ✗ 91.1 62.2 51.1 27.0 53.5 Action-only ✗ Path Eff. ✗ 93.3 64.9 55.2 21.6 55.1 Surprisal-only Surp. ✗ ✗ 90.4 64.9 56.5 23.0 55.4 Predictor-only Pred. ✗ ✓ 92.9 68.9 55.7 35.4 59.3 
+
+WCD (ours) Surp. →Pred. Path Eff. ✓ 92.3 66.7 53.7 46.4 60.9 (a)  Selection signal enables test-time scaling  (b)  Scaling gains depend on task difficulty 
+
+Figure 6: Test-time scaling requires structured selection. (a) More candidates improve success only when paired with reliable selection. (b) Scaling gains concentrate on tasks with remaining headroom. 
+
+4.3 Ablation Study 
+
+We ablate WCD under the hard generalization protocol in Section 4.1, focusing on module contribu-tions, candidate count N , and predictor design. 
+
+Module ablation. Table 3 shows that sampling alone is insufficient: Random-N reaches 91 .1% 
+
+on clean scenes but only 53 .5% on Hard. The single-branch variants reveal complementary failure modes. Path effort improves short-horizon robustness, surprisal filters implausible visual futures under distribution shift, and the predictor gives the best Horizon-3 result among the ablations, but none is reliable alone. Combining them yields the best Hard average ( 60 .90% ), improving over Random-N by +7 .40 and over the strongest single-branch variant by +5 .50 . This supports the need to combine video plausibility, action stability, and delayed self-verification. 
+
+Effect of candidate count N . Figure 6 shows that test-time scaling only helps when additional candidates can be ranked. At N =1 , all methods reduce to the same single rollout. As N increases, Random-N fluctuates without a consistent trend, whereas structured selectors improve more reliably: action-only peaks at smaller pools, while predictor-only benefits more at larger pools ( N =6 –8). The task-level view in Figure 6(b) further shows that gains are largest on tasks with remaining headroom and shrink on saturated tasks such as dump_bin_bigbin . More candidates are therefore useful only when paired with a reliability signal that can expose better futures. 
+
+5 Conclusion 
+
+We presented WCD, a reward-free and verifier-free test-time planning framework that treats WAM imagination as a set of falsifiable future–action hypotheses rather than a one-shot intermediate generation. By combining flow-based video surprisal, action path effort, and an online predictor trained from delayed imagination–reality mismatch, WCD selects and calibrates reliable candidates while keeping the backbone WAM frozen. Experiments show that this reliability-aware selection is most useful when stochastic futures remain uncertain. Early imagination–reality mismatch is associated with rollout failure, structured selectors outperform random sampling, and under limited-randomization Hard RoboTwin evaluation WCD 9improves success from 55 .80% to 60 .90% , with a +16 .43 point gain on Horizon-3 tasks. Real Franka stress tests further suggest that the same selection mechanism can recover executable actions under visual shifts. A remaining trade-off is test-time compute: WCD improves robustness by spending additional parallel candidate generation. Appendix ?? shows that the costly flow-surprisal replay is only at cold-start stage, while the post-warm online predictor adds negligible scoring overhead compared with WAM generation. Future work should study faster backbone WAM generation and optimized deployment pipelines for high-frequency robot control. 10 References 
+
+[1] Hongzhe Bi, Hengkai Tan, Shenghao Xie, Zeyuan Wang, Shuhe Huang, Haitian Liu, Ruowen Zhao, Yao Feng, Chendong Xiang, Yinze Rong, et al. Motus: A unified latent action world model. arXiv preprint arXiv:2512.13030 , 2025. [2] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian Ichter, et al. π0: A Vision-Language-Action Flow Model for General Robot Control. arXiv preprint arXiv:2410.24164 , 2024. [3] Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail, Michael Robert Equi, Chelsea Finn, Niccolo Fusai, Manuel Y. Galliker, Dibya Ghosh, Lachy Groom, Karol Hausman, brian ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Devin LeBlanc, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Allen Z. Ren, Lucy Xiaoyang Shi, Laura Smith, Jost Tobias Springenberg, Kyle Stachowicz, James Tanner, Quan Vuong, Homer Walke, Anna Walling, Haohuan Wang, Lili Yu, and Ury Zhilinsky. 
+
+π0.5: A vision-language-action model with open-world generalization. In Proceedings of The 9th Conference on Robot Learning , volume 305 of Proceedings of Machine Learning Research ,pages 17–40. PMLR, 2025. [4] Ricky TQ Chen, Yulia Rubanova, Jesse Bettencourt, and David K Duvenaud. Neural ordinary differential equations. Advances in neural information processing systems , 31, 2018. [5] Tianxing Chen, Zanxin Chen, Baijun Chen, Zijian Cai, Yibin Liu, Zixuan Li, Qiwei Liang, Xianliang Lin, Yiheng Ge, Zhenyu Gu, et al. Robotwin 2.0: A scalable data generator and benchmark with strong domain randomization for robust bimanual robotic manipulation. arXiv preprint arXiv:2506.18088 , 2025. [6] Yilun Du, Sherry Yang, Bo Dai, Hanjun Dai, Ofir Nachum, Josh Tenenbaum, Dale Schuurmans, and Pieter Abbeel. Learning universal policies via text-guided video generation. Advances in neural information processing systems , 36:9156–9172, 2023. [7] Frederik Ebert, Chelsea Finn, Sudeep Dasari, Annie Xie, Alex Lee, and Sergey Levine. Visual foresight: Model-based deep reinforcement learning for vision-based robotic control. arXiv preprint arXiv:1812.00568 , 2018. [8] Luca Eyring, Shyamgopal Karthik, Alexey Dosovitskiy, Nataniel Ruiz, and Zeynep Akata. Noise hypernetworks: Amortizing test-time compute in diffusion models. arXiv preprint arXiv:2508.09968 , 2025. [9] Katerina Fragkiadaki, Pulkit Agrawal, Sergey Levine, and Jitendra Malik. Learning visual predictive models of physics for playing billiards. arXiv preprint arXiv:1511.07404 , 2015. [10] Will Grathwohl, Ricky TQ Chen, Jesse Bettencourt, Ilya Sutskever, and David Duvenaud. Ffjord: Free-form continuous dynamics for scalable reversible generative models. arXiv preprint arXiv:1810.01367 , 2018. [11] Yucheng Hu, Yanjiang Guo, Pengchao Wang, Xiaoyu Chen, Yen-Jen Wang, Jianke Zhang, Koushil Sreenath, Chaochao Lu, and Jianyu Chen. Video prediction policy: A generalist robot policy with predictive visual representations. In International Conference on Machine Learning ,pages 24328–24346. PMLR, 2025. [12] Suhyeok Jang, Dongyoung Kim, Changyeon Kim, Youngsuk Kim, and Jinwoo Shin. Verifier-free test-time sampling for vision language action models. arXiv preprint arXiv:2510.05681 ,2025. [13] Michael Janner, Qiyang Li, and Sergey Levine. Offline reinforcement learning as one big sequence modeling problem. Advances in neural information processing systems , 34:1273– 1286, 2021. [14] Michael Janner, Yilun Du, Joshua B Tenenbaum, and Sergey Levine. Planning with diffusion for flexible behavior synthesis. arXiv preprint arXiv:2205.09991 , 2022. 11 [15] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakrishna, Suraj Nair, Rafael Rafailov, Ethan Foster, Grace Lam, Pannag Sanketi, et al. Openvla: An open-source vision-language-action model. arXiv preprint arXiv:2406.09246 , 2024. [16] Moo Jin Kim, Yihuai Gao, Tsung-Yi Lin, Yen-Chen Lin, Yunhao Ge, Grace Lam, Percy Liang, Shuran Song, Ming-Yu Liu, Chelsea Finn, et al. Cosmos policy: Fine-tuning video models for visuomotor control and planning. arXiv preprint arXiv:2601.16163 , 2026. [17] Yuval Kirstain, Adam Polyak, Uriel Singer, Shahbuland Matiana, Joe Penna, and Omer Levy. Pick-a-pic: An open dataset of user preferences for text-to-image generation. Advances in neural information processing systems , 36:36652–36663, 2023. [18] Jacky Kwok, Christopher Agia, Rohan Sinha, Matt Foutter, Shulu Li, Ion Stoica, Azalia Mirhoseini, and Marco Pavone. Robomonkey: Scaling test-time sampling and verification for vision-language-action models. arXiv preprint arXiv:2506.17811 , 2025. [19] Lin Li, Qihang Zhang, Yiming Luo, Shuai Yang, Ruilin Wang, Fei Han, Mingrui Yu, Zelin Gao, Nan Xue, Xing Zhu, et al. Causal world modeling for robot control. arXiv preprint arXiv:2601.21998 , 2026. [20] Shufan Li, Konstantinos Kallidromitis, Akash Gokul, Arsh Koneru, Yusuke Kato, Kazuki Kozuka, and Aditya Grover. Reflect-dit: Inference-time scaling for text-to-image diffusion transformers via in-context reflection. In Proceedings of the IEEE/CVF International Conference on Computer Vision , pages 15657–15668, 2025. [21] Yaron Lipman, Ricky TQ Chen, Heli Ben-Hamu, Maximilian Nickel, and Matt Le. Flow matching for generative modeling. arXiv preprint arXiv:2210.02747 , 2022. [22] Xingchao Liu, Chengyue Gong, and Qiang Liu. Flow straight and fast: Learning to generate and transfer data with rectified flow. arXiv preprint arXiv:2209.03003 , 2022. [23] Yuejiang Liu, Jubayer Ibn Hamid, Annie Xie, Yoonho Lee, Maximilian Du, and Chelsea Finn. Bidirectional decoding: Improving action chunking via guided test-time sampling. arXiv preprint arXiv:2408.17355 , 2024. [24] Mitsuhiko Nakamoto, Oier Mees, Aviral Kumar, and Sergey Levine. Steering your generalists: Improving robotic foundation models via value guidance. arXiv preprint arXiv:2410.13816 ,2024. [25] Sakuya Ota, Qing Yu, Kent Fujiwara, Satoshi Ikehata, and Ikuro Sato. Pino: Person-interaction noise optimization for long-duration and customizable motion generation of arbitrary-sized groups. In Proceedings of the IEEE/CVF International Conference on Computer Vision , pages 10676–10685, 2025. [26] Aravind Srinivas, Allan Jabri, Pieter Abbeel, Sergey Levine, and Chelsea Finn. Universal plan-ning networks: Learning generalizable representations for visuomotor control. In International conference on machine learning , pages 4732–4741. PMLR, 2018. [27] Yang Tian, Sizhe Yang, Jia Zeng, Ping Wang, Dahua Lin, Hao Dong, and Jiangmiao Pang. Predictive inverse dynamics models are scalable learners for robotic manipulation. arXiv preprint arXiv:2412.15109 , 2024. [28] Zhendong Wang, Jonathan J Hunt, and Mingyuan Zhou. Diffusion policies as an expressive policy class for offline reinforcement learning. arXiv preprint arXiv:2208.06193 , 2022. [29] Jiazheng Xu, Xiao Liu, Yuchen Wu, Yuxuan Tong, Qinkai Li, Ming Ding, Jie Tang, and Yuxiao Dong. Imagereward: Learning and evaluating human preferences for text-to-image generation. 
+
+Advances in Neural Information Processing Systems , 36:15903–15935, 2023. [30] Angen Ye, Boyuan Wang, Chaojun Ni, Guan Huang, Guosheng Zhao, Hao Li, Hengtao Li, Jie Li, Jindi Lv, Jingyu Liu, et al. Gigaworld-policy: An efficient action-centered world–action model. arXiv preprint arXiv:2603.17240 , 2026. 12 [31] Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, Shenyuan Gao, Sihyun Yu, George Kurian, Suneel Indupuru, You Liang Tan, Chuning Zhu, Jiannan Xiang, Ayaan Malik, Kyungmin Lee, William Liang, Nadun Ranawaka, Jiasheng Gu, Yinzhen Xu, Guanzhi Wang, Fengyuan Hu, Avnish Narayan, Johan Bjorck, Jing Wang, Gwanghyun Kim, Dantong Niu, Ruijie Zheng, Yuqi Xie, Jimmy Wu, Qi Wang, Ryan Julian, Danfei Xu, Yilun Du, Yevgen Chebotar, Scott Reed, Jan Kautz, Yuke Zhu, Linxi "Jim" Fan, and Joel Jang. World action models are zero-shot policies, 2026. URL https://arxiv.org/abs/2602.15922 .13
