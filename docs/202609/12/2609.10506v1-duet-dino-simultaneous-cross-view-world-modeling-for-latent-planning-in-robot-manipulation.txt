@@ -1,0 +1,1185 @@
+DUET-DINO: Simultaneous Cross-View World Modeling for Latent
+Planning in Robot Manipulation
+Nisarga Nilavadi1, Ralf R¨omer2, Moritz Reuss3,4, Michael Krawez1, Tobias J¨ulg1,
+Angela P. Schoellig2,5, Rudolf Lioutikov3,5, Wolfram Burgard1,5
+Abstract— Action-conditioned latent world models predict fu-
+ture visual representations, enabling zero-shot goal-conditioned
+robot planning and control. However, their predictions for fine-
+grained spatial and rotational actions are unreliable for full 7-
+DoF end-effector control. To address this gap, we introduce
+DUET-DINO, a simultaneous cross-view latent world model
+that jointly learns action-conditioned predictions from static
+side- and wrist-camera observations through cross-view condi-
+tioning. By exploiting complementary global scene and gripper-
+centric information, DUET-DINO enables latent planning over
+the full 7-DoF action space. Across spatially diverse reach,
+orientation-intensive angled-reach, and multi-goal grasp-and-
+lift tasks, DUET-DINO consistently outperforms single-view
+and independent dual-view baselines, achieving 92% success on
+reach, 72.5% on angled-reach, and 60.0% on lift tasks. DUET-
+DINO is trained from scratch on DROID and RoboArena
+datasets and generalizes robustly under visual distribution
+shifts. We further show that while V-JEPA 2 wrist-view pre-
+dictions underestimate visual dynamics induced by fine-grained
+actions, DINOv3 predictions better capture action-conditioned
+scene changes, leading to stronger downstream planning. The
+code and model checkpoints will be open-sourced. Project page:
+https://utn-air.github.io/DUET-DINO
+I. INTRODUCTION
+World models have emerged as a promising direction to
+address generalization in robotics by learning representations
+of the world and its dynamics from large-scale web data [1]–
+[3]. Through self-supervised training on billions of examples,
+world models can improve generalization across diverse
+environments and implicitly capture aspects of real-world
+dynamics, such as how objects move and interact. In robot
+manipulation, world models can predict future states as latent
+representations [2], [4], pixel-level observations [1], [5], [6],
+or rewards [6], thereby providing information about the
+consequences of actions. These predictions can be leveraged
+in various ways, such as for planning [2], [7], policy train-
+ing [8], [9], or safety verification [10], [11]. Latent world
+models [2], [4], [12] are particularly attractive for closed-loop
+planning and control: they produce task-relevant features
+without modeling photorealistic details, enabling much faster
+rollouts than pixel-space generators.
+Despite these compelling properties, applying latent world
+models to real-world manipulation remains challenging.
+1Artificial Intelligence and Robotics Lab, University of Technology
+Nuremberg (UTN), Germany.
+2Learning Systems and Robotics Lab, Technical University of Munich
+(TUM), Germany.
+3Intuitive Robots Lab, Karlsruhe Institute of Technology (KIT), Germany.
+4NVIDIA.
+5Robotics Institute Germany.
+Fig. 1.
+Comparison of goal-conditioned 7-DoF action planning toward the
+target object (banana) between our proposed DUET-DINO world model and
+V-JEPA 2-AC. DUET-DINO progressively moves the end-effector toward
+the goal, while V-JEPA 2-AC fails to approach the target.
+While existing action-conditioned predictors [2], [4] can be
+conditioned on the full 7-DoF end-effector action space, their
+rollouts primarily capture coarse translational motion over
+short horizons. Accordingly, prior deployment setups have
+focused on translation-only action planning from predicted
+rollouts for relatively simple pick-and-place downstream
+tasks. In contrast, full 7-DoF action planning requires re-
+liable prediction of fine-grained translational, rotational, and
+gripper-state changes, which are critical for precise manipu-
+lation tasks such as spatially diverse reaching, angled grasp-
+ing, orientation-intensive pick-and-place, and insertion [7].
+Consequently, tasks that require planning over the full end-
+effector action space remain out of reach for current static
+single-view latent world models.
+To address this gap, we introduce a tightly modeled dual-
+view approach, Simultaneous Cross-View World Modeling
+for Latent Planning in Robot Manipulation (DUET-
+DINO), for planning full 7-DoF end-effector motions.
+DUET-DINO goes beyond prior latent world models [2],
+[4] by jointly modeling scene changes from a side-view
+camera that captures global workspace context and a wrist-
+mounted camera that observes gripper-centric geometry. The
+two streams are conditioned on each other in the latent
+space via cross-attention, enabling each view predictor to
+exploit complementary cues from the other while remaining
+specialized to its own camera. At deployment, DUET-DINO
+plans over full 7-DoF action sequences by jointly minimizing
+the dual-view goal cost across both latent streams. On hard-
+ware and simulated benchmarks including spatially diverse,
+orientation-intensive, and multi-goal angled-lift tasks, DUET-
+DINO consistently outperforms static single-view and naive
+dual-view baselines.
+arXiv:2609.10506v1  [cs.RO]  9 Sep 2026
+
+
+In summary, our main contributions are the following:
+1) We propose DUET-DINO, a latent world model that
+jointly trains side- and wrist-view action-conditioned
+predictors on cross-view-conditioned observation la-
+tents, enabling each view-specific predictor to leverage
+complementary information for improved downstream
+planning.
+2) We extend latent world-model planning to the full
+7-DoF end-effector space by jointly optimizing over
+predicted side and wrist-view latent rollouts using a
+normalized dual-view goal cost.
+3) We show the effect of pretrained latent representa-
+tions on action-conditioned predictions, finding that
+V-JEPA 2 underestimates wrist-view visual changes,
+while DINOv3 better captures fine-grained motion.
+4) We introduce spatially diverse, orientation-intensive,
+and multi-goal manipulation tasks in the RoboLab
+simulator [13] that expose the 7-DoF prediction bot-
+tlenecks of latent world models.
+5) We conduct extensive evaluations across simulation
+and hardware on spatial reach, orientation-intensive
+angled reach, and sequential angled-grasp and lift
+tasks, including diverse backgrounds, distractors, and
+perturbations. DUET-DINO achieves 92% success on
+reach, 72.5% on angled-reach, and 60% on lift tasks,
+consistently outperforming single-view and indepen-
+dent dual-view baselines.
+II. RELATED WORK
+A. World Models in Robotics
+Generative video world models. Foundation-scale video
+generators such as Cosmos [1] and Wan [14] use diffusion-
+and flow-based models to synthesize photorealistic video,
+and a growing number of works adapt this capability to robot
+manipulation. DreamGen [15] synthesizes neural trajectories
+for policy training, recovering latent pseudo-actions to facil-
+itate generalization. WorldGym [16] uses an autoregressive
+video generator as a proxy environment for scoring policies
+via Monte Carlo rollouts, while Ctrl-World [5] combines
+pose-conditioned memory with multi-view video diffusion to
+rank policies and produce imagined rollouts for supervised
+fine-tuning. DiWA [8] pushes this further to fully offline
+reinforcement learning for adapting diffusion policies inside
+a learned world model. While generative world models excel
+at visual fidelity, reconstructing every pixel is computation-
+ally expensive and prone to hallucinations of physically
+implausible scenes [17].
+Latent world models. A complementary line of work
+avoids pixel reconstruction by predicting representations in
+a learned latent space. Joint-Embedding Predictive Archi-
+tectures (JEPAs), as introduced for images by I-JEPA [18]
+and extended to video by V-JEPA [19], leverage masked
+feature-prediction objectives to produce strong, transferable
+representations without any reconstruction or hand-crafted
+augmentation. V-JEPA 2 [2] scales this recipe further and
+adds an action-conditioned predictor (V-JEPA 2-AC) using
+under 62 hours of robot interaction. V-JEPA 2.1 [4] intro-
+duces a dense predictive loss and deep self-supervision to
+better capture fine-grained features. DINO-WM [12] demon-
+strates that patch features from a frozen DINOv2 encoder can
+support action-conditioned latent prediction and zero-shot
+planning, and DINOv3 [20] pushes dense self-supervised
+features to a larger scale. A key limitation of existing latent
+world models is that they largely rely on a single external
+camera and struggle with fine-grained 7-DoF control, an
+open challenge that we explicitly target in this work.
+B. Visual Planning with World Models
+Planning in pixel vs. latent space. One family of methods
+plans directly in pixel space by generating future videos
+and extracting actions from them. UniPi [21] casts decision
+making as text-conditioned video generation followed by
+an inverse-dynamics model; SuSIE [22] uses a pretrained
+image-editing diffusion model to propose subgoal images
+for a low-level goal-conditioned policy; and CLOVER [23]
+closes the loop by combining a text-conditioned video dif-
+fusion model with a measurable error space and a feedback-
+driven controller. These methods directly couple planning
+quality to the fidelity of generated pixels. An alternative is
+to plan in the latent space of a latent world model: V-JEPA
+2-AC [2] and DINO-WM [12] formulate manipulation as
+latent-feature matching to a goal embedding and optimize
+action sequences directly against this latent cost. Wang et
+al. [24] show that explicitly regularizing latent trajectories to
+be locally straight improves the geometry of the latent space
+and makes Euclidean distances a better proxy for cost.
+Action proposals and optimization. A common choice
+is to sample actions from a Gaussian proposal and iteratively
+refine them using the cross-entropy method (CEM) [2], [12],
+[25]–[27], which is derivative-free and well-suited to highly
+non-convex objectives. Other works learn structured proposal
+distributions [28] or rely on a vision-language model to
+propose camera trajectories for spatial reasoning [29]. Opti-
+mization can also blend sampling and gradients: [26] inter-
+leave CEM with gradient steps to escape local optima, and
+[27] shows that simple MPPI-style updates already enable
+dexterous in-hand manipulation when paired with sufficiently
+accurate dynamics. Recent works plan from a single external
+camera and primarily address translation-dominated tasks.
+Rotational and gripper actions remain challenging because
+their effects are degraded in latent predictions [2], [7]. In
+addition, goal cost is poorly informed by a single global
+view. DUET-DINO addresses this bottleneck by conditioning
+the global side- and gripper-centric wrist observation views
+on each other in latent space, and performing CEM planning
+with a goal cost that aggregates both views, enabling reliable
+planning over the full 7-DoF action space.
+III. METHODOLOGY
+A. Problem Formulation
+We
+approach
+tabletop
+manipulation
+using
+synchro-
+nized camera streams from a static side camera and
+
+
+Fig. 2.
+Architecture and training of DUET-DINO. The pretrained encoder maps side- and wrist-view observations into latent space. Cross-attention blocks
+condition each view on complementary information from the other view in the latent space. The view-specific predictor heads then predict future latents
+conditioned on the action and end-effector state. The dual-view prediction loss Lpred(ϕ, ψ) combines the teacher-forcing loss computed over all one-step
+predictions in the clip with an autoregressive loss over the K-step rollout predictions.
+a
+dynamic
+wrist-mounted
+camera.
+Given
+an
+observa-
+tion
+ot = (oside
+t
+, owrist
+t
+)
+consisting
+of
+two
+camera
+im-
+ages oside
+t
+, owrist
+t
+∈RH×W ×C, as well as the full end-effector
+action at ∈R7 at timestep t, we aim to predict future latent
+representations ˆzside
+t+T , ˆzwrist
+t+T induced by the executed actions
+over horizon T. The predicted latents should capture visual
+features from both camera views, enabling zero-shot goal-
+conditioned planning for manipulation.
+B. DUET-DINO: Simultaneous Cross-View World Modeling
+The proposed world model consists of three components.
+First, a pretrained visual encoder maps side- and wrist-view
+images to latent representations. Next, cross-attention blocks
+allow each view-specific latent to query the complementary-
+view latents. Finally, using the updated latent representations,
+separate predictor heads predict future latents for their re-
+spective views, conditioned on the same robot action. We
+keep the visual encoder frozen and train the cross-attention
+blocks and predictor heads jointly from scratch on large-scale
+robotic manipulation datasets. An overview of DUET-DINO
+is shown in Fig. 2.
+The side- and wrist-view observations oside
+t
+and owrist
+t
+are
+independently encoded using the frozen DINOv3 encoder
+Eθ which was pretrained on large-scale visual data, yielding
+patch-wise latent representations
+zv
+t = Eθ(ov
+t ) ∈RP ×D
+v ∈{side, wrist}.
+(1)
+where P is the number of image patches, and D is the
+encoder’s latent dimension per patch. We then feed these
+latents through learnable cross-attention blocks, Cϕside and
+Cϕwrist, where the latents of each view query the latents of
+the other view. Within each cross-attention block, the target-
+view latents serve as queries, while the other-view latents
+serve as keys and values
+˜zside
+t
+= Cϕside
+ Q = zside
+t
+, K = zwrist
+t
+, V = zwrist
+t
+
+,
+˜zwrist
+t
+= Cϕwrist
+ Q = zwrist
+t
+, K = zside
+t
+, V = zside
+t
+
+.
+(2)
+The resulting cross-view-conditioned latents, ˜zside
+t
+and ˜zwrist
+t
+,
+are passed to their respective state- and action-conditioned
+predictor heads, Pψside and Pψwrist, for which we adopt the
+architecture introduced by [2]. The predictor heads remain
+view-specific, with their inputs having already been updated
+through cross-view latent conditioning. This allows each
+predictor to preserve its own view-specific dynamics while
+using complementary information from the other view to
+predict the next latent representation as
+ˆzv
+t+1 = Pψv (˜zv
+t , at, st)
+v ∈{side, wrist}.
+(3)
+Training: We train the cross-attention blocks and pre-
+dictor heads of DUET-DINO from scratch on a large-
+scale dataset D = {(oi
+t:t+T , ai
+t:t+T −1)}N
+i=1 containing clips
+of length T of observation-action pairs. For both camera
+views v ∈{side, wrist}, we combine two loss functions for
+training: a teacher-forcing (one-step prediction) loss Lv
+TF and
+an autoregressive rollout loss Lv
+AR. We compute the latter
+over a rollout horizon of K = 2, starting from the first frame
+of the clip [2]. The overall dual-view prediction loss for joint
+training of the cross-attention blocks and the view-specific
+predictor heads is given by
+Lpred(ϕ, ψ) = E(ot:t+T ,at:t+T −1)∼D
+X
+v∈{side,wrist}
+"
+1
+T −1
+T
+X
+t=2
+∥ˆzv
+t −zv
+t ∥1
+|
+{z
+}
+Lv
+TF
++ 1
+K
+K+1
+X
+k=2
+ˆzv
+k,AR −zv
+k
+
+1
+|
+{z
+}
+Lv
+AR
+#
+.
+(4)
+C. Visual Planning
+Once trained, we leverage DUET-DINO for zero-shot
+planning of full end-effector motions. Our objective is to
+generate a sequence of actions driving the robot to a goal
+observation og = (oside
+g
+, owrist
+g
+). We formulate this problem
+in the dual learned latent space of DUET-DINO, with the
+goal embeddings given by zside
+g
+= Eθ(oside
+g
+), zwrist
+g
+=
+Eθ(owrist
+g
+). Denoting zt = (zside
+t
+, zwrist
+t
+) and considering a
+
+
+DUET-DINO Latent 
+Rollouts
+Side-View (𝑶𝒕
+𝒔𝒊𝒅𝒆)
+Wrist-View (𝑶𝒕
+𝒘𝒓𝒊𝒔𝒕)
+Sample 7-DoF Actions
+Fine-Grained Action (at ) 
+Goal Images
+DINOv3 Encoder
+{at }N
+Rotation
+Translation
+A
+T
+T
+N
+A
+T
+T
+N
+Latent Planning
+𝐽𝑧g, ƶ𝑧𝑇
+Fig. 3.
+Overview of the proposed simultaneous cross-view world modeling method, showing predicted dual-view latent rollouts, CEM action planning
+using predicted and goal latents, and the normalized dual-view planning cost J(zg, ˆzT ).
+fixed receding horizon of length H, we aim to iteratively
+solve the optimal control problem
+min
+a0:H−1 J(zg, ˆzH)
+s.t.
+ˆzτ+1 = DUET-DINO(ˆzτ, aτ), τ = 0, . . . , H −1,
+ˆz0 = zt,
+(5)
+where J(zg, ˆzH) measures the distance between the predicted
+and goal latents. We solve the optimal control problem (5)
+using CEM [2], [7]. At each CEM iteration, we sample N
+action sequences a1:N
+t:t+H−1 ∼N(µ, Σ) from a Gaussian
+proposal distribution with mean µ and variance Σ and
+roll out the actions inside DUET-DINO to obtain imagined
+latent trajectories τ 1:N = (st, zt, at, ˆz1:N
+t+1, a1:N
+t+1, . . . , ˆz1:N
+t+H).
+Then, we can assess the quality of each action sequence by
+computing the corresponding deviations from the goal latents
+as
+ℓside
+i
+= ∥ˆzside,i
+t+H −zside
+g
+∥1, ℓwrist
+i
+= ∥ˆzwrist,i
+t+H
+−zwrist
+g
+∥1. (6)
+The overall dual-view planning cost is obtained by summing
+the two per-view costs and normalizing by the dual-view cost
+of a zero-action rollout over the same prediction horizon, i.e.,
+Ji(zg, ˆzt+H) =
+ℓside
+i
++ ℓwrist
+i
+(ℓside + ℓwrist)0
+J = {Ji}N
+i=1.
+(7)
+We adopt a weighted top-k CEM update, where the selected
+candidates are weighted using a softmax over their negative
+costs, assigning larger weights to lower-cost action sequences
+when updating the proposal distribution.
+IV. EXPERIMENTS
+This section describes the dataset processing, world-model
+training procedure, experimental setup, evaluation protocol,
+and results for DUET-DINO and the baseline methods.
+A. Implementation and Training Details
+We train and evaluate our world-model predictors on two
+large-scale robot manipulation datasets: DROID [30] and
+RoboArena [31]. After filtering the data, we obtain 62,877
+DROID and 5,856 RoboArena diverse tabletop manipula-
+tion trajectories. DROID comprises 86 diverse manipulation
+tasks across 564 scenes and 52 buildings at 13 institutions,
+covering a broad range of everyday objects, tasks, and envi-
+ronments. Unlike prior work that trains only on DROID [2],
+[4], we include data from RoboArena, collected by rolling
+out different policies, to expose the model to a broader distri-
+bution of behaviors, scenes, and failure modes than DROID
+alone. Each batch samples 8-frame video clips with syn-
+chronized side- and wrist-view observations at 4 FPS from
+1280×720 images and resizes them to 256×256 for V-JEPA
+2 encoders and 224×224 for DINOv3 encoders. At each
+time step, the predictor is conditioned on a 7D end-effector
+action at = st+1 −st = [∆x, ∆y, ∆z, ∆r, ∆p, ∆y, ∆g],
+where ∆x, ∆y, ∆z denote Cartesian translation, ∆r, ∆p, ∆y
+denote changes in end-effector roll, pitch, and yaw, and ∆g
+is the change in gripper state.
+We train baseline world-model predictors that vary in
+visual encoder, camera view, and architecture. Specifically,
+we consider independently trained single-view predictors for
+the side and wrist cameras, alongside our proposed DUET
+dual-view predictor. Each predictor architecture is evalu-
+ated with two frozen pretrained visual encoder families: V-
+JEPA 2 [2], using a ViT-G/16 backbone with 1B parameters,
+and DINOv3 [20], using a ViT-H+/16 backbone with 840M
+parameters. We optimize all world-model variants using
+AdamW for 120k steps with a batch size of 256 with a
+learning rate of 4.25×10−4 and a weight decay of 0.04. The
+learning rate is warmed up from 7.5 × 10−5 over the first
+4.5k steps and annealed to zero over the final 30k steps. The
+total computational cost of DUET-DINO over 120k training
+steps across four GPUs is 5 × 1020 FLOPs. The combined
+training cost of all baseline and ablation models, excluding
+DUET-DINO, is 2.8 × 1021 FLOPs.
+
+
+B. Experimental Setup
+We evaluate latent-world-model planning on manipulation
+tasks that require full 7-DoF end-effector control. These tasks
+include reach, angled reach, angled grasp and angled lift-to-
+home. We organize the baseline and proposed world models
+into three predictor categories:
+1) Single-view: These models predict latent representa-
+tions for either the side view or the wrist view using
+a single view-specific predictor.
+2) Independent dual-view: This baseline combines sep-
+arately trained side- and wrist-view predictors, without
+cross-attention or joint optimization between the two.
+3) DUET dual-view: Our proposed model jointly trains
+two view-specific predictor heads together with cross-
+view attention blocks.
+In addition, we evaluate all tasks using the official V-JEPA 2-
+AC∗checkpoint [2], which was trained exclusively on the
+left side-view DROID data for 94.5k optimization steps.
+Fig. 3 shows an overview of the prediction and planning
+pipeline. Goal observations from the corresponding camera
+views specify each task. For single-view predictors, the goal
+is provided from either the static side camera or the wrist
+camera, whereas dual-view predictors use paired side- and
+wrist-view goal observations. Single-view predictors plan
+using the corresponding normalized view-specific cost, while
+dual-view predictors use the combined planning cost, as
+described in Sec. III-C. Unlike prior work [2], [4], which
+uses 3-DoF end-effector actions with gripper control, our
+planner samples candidate action sequences over the full 7-
+DoF end-effector action space. For all tasks in simulation,
+planning consistently uses 800 action samples, weighted 50
+top-k candidates, and 2 CEM iterations. For each evaluation
+run, we use a run-specific CEM seed shared across all model
+variants, while different runs use different seeds.
+The proposed tasks are evaluated in the RoboLab sim-
+ulator [13], which provides visually realistic and diverse
+backgrounds, object assets, configurable camera views, and
+the DROID robot setup, making it well-suited for rigorous
+evaluation of latent planning for manipulation. The DROID
+setup consists of a Franka arm equipped with a Robotiq 2F-
+85 gripper, a wrist-mounted camera, and a static side-view
+camera. Note that the right side-view camera is used con-
+sistently for both training and evaluation. The end-effector
+actions produced by the planner are transformed into joint
+commands using inverse kinematics.
+C. Reach Task
+The
+experimental
+setup
+for
+the
+reach
+task
+con-
+sists
+of
+ten
+semantically
+distinct
+target
+objects
+dis-
+tributed
+across
+the
+breakfast table
+scene
+with
+a HomeOfficeBackground, as shown in Fig. 4. We
+define a reach run to be successful if the end-effector
+position pe is within a distance of ϵp to the goal position pg,
+in 100 steps, i.e., if ∥pe −pg∥2 ≤ϵp. We define ϵp = 5 cm
+for all items. The final position error (FPE) is the Euclidean
+distance computed at the final planning step, regardless
+Fig. 4.
+Static right side-camera view showing the robot in its home pose
+and the target objects used in the reach tasks: (1) Coffee Pot, (2) Coffee
+Can, (3) Banana, (4) Juice Carton, (5) Yogurt Cup, (6) Apple, (7) Orange,
+(8) Bagel, (9) White Pitcher, and (10) Ceramic Mug.
+TABLE I
+AGGREGATE REACH SUCCESS RATE (SR) AND FINAL POSITION ERROR
+(FPE) OVER 100 EVALUATION RUNS PER MODEL ACROSS TEN TASKS.
+Side
+Wrist
+Predictor
+SR (%) ↑
+FPE (cm) ↓
+V-JEPA 2 Encoder
+✓
+–
+V-JEPA 2-AC∗
+55%
+18.6±23.2
+✓
+–
+Single-view
+20%
+34.4±17.9
+–
+✓
+Single-view
+37%
+32.5±26.6
+✓
+✓
+Independent
+37%
+32.5±24.4
+✓
+✓
+DUET-VJEPA
+41%
+39.0±38.6
+DINOv3 Encoder
+✓
+–
+Single-view
+18%
+28.0±15.6
+–
+✓
+Single-view
+79%
+13.1±20.3
+✓
+✓
+Independent
+78%
+9.8±13.8
+✓
+✓
+DUET-DINO
+92%
+5.4±7.4
+of task success, and therefore includes residual error after
+successful task completion.
+Table I shows the reach performance of single-view and
+dual-view predictors in latent planning. V-JEPA 2-AC∗with
+our visual planning achieves a higher success rate than all
+trained V-JEPA 2 baselines, suggesting that longer training
+on more diverse data degraded spatial planning. The trained
+side-view predictors achieve low success rates and high
+FPE, suggesting limited ability to spatially plan end-effector
+actions across different regions of the table. Successful runs
+were primarily observed for target objects located near the
+robot’s home pose, such as objects (10) and (5). The V-
+JEPA 2 wrist-view predictor shows a moderate improvement
+over its side-view. In contrast, the DINOv3 wrist-view pre-
+dictor shows a larger performance gain. Independent dual-
+view models provide negligible gains over the corresponding
+wrist-view predictors, highlighting the difficulty of naively
+combining views. The DUET-VJEPA predictor improves
+over its corresponding independent dual-view model in terms
+of success rate. Despite this improvement, its FPE remains
+high because, in failed reach (3)Banana runs, the planned
+end-effector actions drive the robot substantially away from
+the target object, resulting in a large FPE. Our DUET-DINO
+predictor achieves the strongest overall spatial planning per-
+formance, reaching a success rate of 92%. Notably, DUET-
+DINO also succeeds on the challenging reach (1)Coffee
+Pot runs near the table corner, which requires coordinated
+
+
+TABLE II
+AGGREGATE ANGLED-REACH SUCCESS RATE (SR), FINAL POSITION
+ERROR (FPE), AND FINAL ANGULAR ERROR (FAE) OVER 40
+EVALUATION RUNS PER MODEL ACROSS FOUR TASKS.
+Side
+Wrist
+Predictor
+SR (%) ↑
+FPE (cm) ↓
+FAE (◦) ↓
+V-JEPA 2 Encoder
+✓
+–
+V-JEPA 2-AC∗
+2.5%
+3.6±1.5
+72.6±32.2
+✓
+–
+Single-view
+25.0%
+3.6±1.6
+51.9±31.9
+–
+✓
+Single-view
+25.0%
+36.7±22.5
+67.9±37.7
+✓
+✓
+Independent
+25.0%
+18.4±15.7
+66.7±36.8
+✓
+✓
+DUET-VJEPA
+25.0%
+15.7±20.6
+69.7±41.7
+DINOv3 Encoder
+✓
+–
+Single-view
+25.0%
+5.3±1.5
+67.1±40.2
+–
+✓
+Single-view
+62.5%
+8.3±7.2
+47.4±57.5
+✓
+✓
+Independent
+55.0%
+3.2±2.5
+48.8±54.4
+✓
+✓
+DUET-DINO
+72.5%
+1.9±1.2
+22.7±32.2
+translational and rotational motion under kinematic con-
+straints, while the target is outside the wrist camera’s field of
+view at the robot’s home pose. [2] reports 16 s per planning
+step for a single-view predictor using more CEM iterations,
+while DUET-DINO requires 15–17 s with two predictors in
+our experiment setup. Overall, dual-view models are roughly
+2× slower than single-view models, and V-JEPA 2 dual-
+view variants are about 1.3× slower than the corresponding
+DINOv3 models.
+D. Angled Reach Task
+To evaluate orientation planning, we define a set of
+orientation-intensive angled-reach tasks. We define an angled
+reach run as successful if the translational and rotational
+errors satisfy ∥pe −pg∥2 ≤ϵp and θ(qe, qg) ≤ϵθ, where qe
+and qg are the actual and goal orientation expressed as
+quaternions, and the orientation error is given by θ(qe, qg) =
+2 cos−1 (|qe · qg|). We set the tolerances to ϵp = 0.05 m and
+ϵθ = 0.21 (corresponding to 12◦), which must be satisfied
+within 100 steps for a run to be counted as successful. The
+final angular error (FAE) is computed at the final planning
+step, regardless of whether a run is successful.
+Fixed Background: First, we define four orientation-
+intensive angled-reach tasks across four distinct tabletop
+scenes in a HomeOfficeBackground. Two tasks pri-
+marily require vertical reaching along the z-axis, followed
+by clockwise and counterclockwise yaw rotations, respec-
+tively. The remaining two tasks require coordinated trans-
+lational motion in (x, y, z), together with clockwise and
+counterclockwise yaw rotations. As shown in Table II, V-
+JEPA 2-AC∗achieves a lower success rate than the trained
+V-JEPA 2 side-view baseline on angled-reach tasks, sug-
+gesting that while prior work performs well for coarse
+translational planning, it struggles with fine-grained control.
+The trained side-view predictors fail on the most rotation-
+intensive angled-reach tasks and succeed only on the simpler
+rotation cases. Since the V-JEPA 2 wrist-view predictor also
+performs poorly, the corresponding independent dual-view
+and DUET-VJEPA predictors show no improvement. The
+DINOv3 wrist-view predictor shows substantially stronger
+TABLE III
+AGGREGATE ANGLED-REACH SUCCESS RATE (SR), FINAL POSITION
+ERROR (FPE), AND FINAL ANGULAR ERROR (FAE) UNDER VISUAL
+DISTRIBUTION SHIFTS OVER 100 EVALUATION RUNS PER MODEL.
+Side
+Wrist
+Predictor
+SR (%) ↑
+FPE (cm) ↓
+FAE (◦) ↓
+DINOv3 Encoder
+–
+✓
+Single-view
+25%
+15.0±10.0
+54.3±42.4
+✓
+✓
+Independent
+45%
+3.3±2.4
+47.3±40.8
+✓
+✓
+DUET-DINO
+63%
+2.6±2.1
+30.9±36.5
+TABLE IV
+AGGREGATE ANGLED-REACH SUCCESS RATES (SR), FINAL POSITION
+ERRORS (FPE), AND FINAL ANGULAR ERRORS (FAE) OVER 30
+HARDWARE EVALUATION RUNS ACROSS THREE TASKS.
+Side
+Wrist
+Predictor
+SR (%) ↑
+FPE (cm) ↓
+FAE (◦) ↓
+DINOv3 Encoder
+–
+✓
+Single-view
+3.3%
+24.9±21.0
+39.9±31.5
+✓
+✓
+Independent
+16.7%
+14.3±17.2
+40.0±42.0
+✓
+✓
+DUET-DINO
+26.7%
+14.7±17.1
+28.0±17.7
+performance, suggesting that DINOv3 latent features capture
+orientation changes effectively and that the corresponding
+action-conditioned predictor learns these dynamics well. Al-
+though the DINOv3 independent dual-view model improves
+FPE by leveraging the side-view predictor, its FAE increases
+when both views are combined, resulting in a lower success
+rate. DUET-DINO reduces both final position and angular
+errors, resulting in a higher success rate.
+Diverse Backgrounds and Distractor Objects: Next, we
+rigorously evaluate the best-performing models on the same
+orientation-intensive tasks under visual distribution shifts
+across five diverse backgrounds and tabletop objects. For
+each of five backgrounds, we vary the tabletop scene from
+one target object to five tabletop objects, including visually
+similar distractors. We evaluate these variations across four
+angled-reach tasks, resulting in 5 × 5 × 4 = 100 evaluation
+runs per model. Table III shows that DUET-DINO remains
+robust under these visual variations, while the wrist-view
+predictor exhibits a noticeable drop in success rate. We
+observe that the overall angled-reach planning performance is
+particularly strong for asymmetrically shaped target objects.
+Hardware Runs: Finally, we evaluate the best-performing
+DINOv3-based predictors on three angled-reach tasks using
+a real DROID robot setup. We selected challenging tar-
+get poses near the table corners with both clockwise and
+counterclockwise target orientations. Our DROID hardware
+setup consists of a table-mounted Franka Research 3 robot
+equipped with a Robotiq 2F-85 gripper, a ZED 2i camera
+for the static side view, and a ZED Mini camera for the
+wrist view. We use the Robot Control Stack [32] for real-
+world robot control and VLAgents [33] to serve the policy.
+Results in Table IV show that DUET-DINO achieves the
+highest success rate on the challenging angled-reach poses,
+outperforming the independent dual-view predictor. Due to
+the computational cost and latency of CEM planning on
+hardware, we use one CEM iteration with 500 candidate
+
+
+TABLE V
+AGGREGATE STAGE-WISE SUCCESS RATES (SR) FOR ANGLED-LIFT
+TASKS OVER 40 EVALUATION RUNS ACROSS FOUR TASKS.
+Side
+Wrist
+Predictor
+Angled-Reach
+SR (%) ↑
+Lift
+SR (%) ↑
+DINOv3 Encoder
+–
+✓
+Single-view
+57.5%
+20.0%
+✓
+✓
+Independent
+60.0%
+57.5%
+✓
+✓
+DUET-DINO
+75.0%
+60.0%
+actions and 15 planning steps. This reduced planning budget
+contributes to the lower hardware success rates relative to the
+simulation results. For safety, actions resulting in collisions
+or kinematic singularities were rejected, and runs were termi-
+nated if unsafe actions were proposed for three consecutive
+planning steps. The wrist-view predictor produced unsafe
+actions more frequently, further contributing to its lower
+success rate on hardware.
+E. Angled Grasp and Angled Lift-to-Home
+We
+further
+extend
+the
+angled-reach
+tasks
+in
+the
+HomeOfficeBackground with grasping and lifting sub-
+tasks, thereby evaluating the models on sequential multi-
+goal planning. We allocate 60 planning steps for angled
+reaching (successful if the pose error is below 15 cm and
+20◦), 10 steps for grasping, and 60 steps for lifting the
+grasped object to the initial robot home pose (successful if
+the end-effector position is within 20 cm of the home position
+while maintaining the grasp). Most of the DUET-DINO runs
+succeed in all sub-tasks, thereby completing the full lift task.
+The DINOv3 wrist-view predictor often succeeds at angled
+reaching and grasping but loses task context during the lift-
+to-home phase, resulting in lift failure.
+F. Ablation
+Cross-view Cross Attention: We train an ablated DUET-
+DINO variant without the cross-attention blocks. This re-
+duces the reach performance of DUET-DINO in Table I
+to 81% SR with 10.7±15.4 cm FPE, and the angled-reach
+performance in Table II to 42.5% SR with 4.3±3.1 cm FPE
+and 55.5±52.8◦FAE. This confirms the importance of cross-
+view attention for fine-grained dual-view planning.
+Camera Perturbations: The side-view predictor learns
+action-conditioned visual dynamics from a fixed camera
+viewpoint, i.e., robot joint motion during reaching and object
+motion in contact-rich interactions. We therefore evaluate
+robustness to camera-pose shifts on ReachBananaTask
+over 30 runs, perturbing the camera by ±20 cm in x/y,
+±10 cm in z, and ±11.5◦in roll, pitch, and yaw, using
+matched perturbation seeds across models’ runs. Under these
+shifts, DUET-DINO and the DINOv3 independent dual-
+view predictor achieve 66.7% SR, compared with 46.7%
+for DUET-VJEPA and 40.0% for the V-JEPA 2 independent
+dual-view predictor, while both single-view side predictors
+fail with 0% SR. These results highlight the sensitivity of
+side-view planning to camera-pose shifts and the robustness
+gained from incorporating the wrist view.
+Side-view
+Wrist-view
+Encoders
+DINOv3 Predictors
+V-JEPA 2 Predictors
+V-JEPA 2 
+DINOv3  
+DINOv3 Predictor  
+V-JEPA 2 Predictor  
+Episode transition step 
+L1 norm
+Fig. 5.
+Mean latent changes captured by frozen encoders, DINOv3 action-
+conditioned predictors, and V-JEPA 2 action-conditioned predictors over 30
+runs of an angled-reach task.
+Frame (t)
+Frame (t+1)
+Encoder (t)
+Encoder (t+1)
+Predictor (t+1)
+DINOv3
+V-JEPA 2
+Fig. 6. Patch-wise latent distances for DINOv3 and V-JEPA 2 feature maps.
+Lower ℓ1 distances indicate greater similarity to the selected reference patch.
+Frames at t and t + 1 are shown after resizing to the respective encoder
+inputs. Feature maps are visualized at 14 × 14 for DINOv3 and 16 × 16
+for V-JEPA 2. DINOv3 produces 196 patches of 1280 dimensions, whereas
+V-JEPA 2 produces 256 patches of 1408 dimensions.
+Training Data: To study the effect of training data, we
+train DUET-DINO on DROID only for 94.5k steps following
+the prior work [2]. The DROID-only DUET-DINO achieves
+78% SR on the reach tasks in Table I, showing the ben-
+efit of additional training data on spatial planning. On the
+angled-reach tasks in Table II, the DROID-only DUET-DINO
+achieves 72.5% SR, showing no improvement in orientation
+planning.
+G. Embeddings Analysis
+To understand why DINOv3-based predictors outperform
+those based on V-JEPA 2, we analyze the underlying latent
+representations. Using an angled-reach rollout, we encode
+all frames with the frozen DINOv3 and V-JEPA 2 encoders
+and compute the ℓ1 norm between consecutive feature maps.
+This measures the sensitivity of each representation space
+to visual changes over action steps. As shown in Fig. 5,
+first column, V-JEPA 2 and DINOv3 encoder features exhibit
+latent changes of similar magnitude, with slightly larger
+side-view changes for V-JEPA 2. We then measure the
+scene dynamics produced by the predictors by computing
+the ℓ1 distance between the encoded input features and
+the action-conditioned predicted next-step features. In the
+second column, the DINOv3 side- and wrist-view predictions
+follow the ground-truth temporal pattern, while generally
+
+
+overestimating their magnitude due to prediction error. In
+contrast, the last column shows that the V-JEPA 2 wrist-view
+predictor underestimates latent changes, while the side-view
+predictor better captures the magnitude, suggesting weaker
+modeling of fine-grained action-conditioned dynamics by V-
+JEPA 2 wrist predictor.
+In Fig. 6, we analyze wrist-view patch correspondences by
+selecting a target-object latent patch at time t and computing
+its ℓ1 distance to all patches at t, t+1, and the predicted t+1
+feature maps. Lower distances indicate higher feature simi-
+larity. DINOv3 embeddings show coherent correspondences
+over semantically related object regions, and its AC-predictor
+closely preserves the encoded t + 1 pattern. In contrast, V-
+JEPA 2 embedding exhibits noisier correspondences, with
+predicted low-distance regions also appearing in semantically
+unrelated areas.
+V. CONCLUSION
+We present DUET-DINO, a cross-view latent world model
+for action-conditioned prediction and planning in robot ma-
+nipulation. By combining cross-view latent conditioning with
+DINO representations, DUET-DINO provides an effective
+approach for modeling scene changes induced by transla-
+tional, rotational, and gripper actions. The evaluations are
+computationally expensive as CEM evaluates many candidate
+actions through world models at each step. While this
+enables rigorous world-model evaluation under diverse action
+proposals, it limits real-time control. Our future work will
+leverage DUET-DINO on a broader range of real-world
+tasks and use action proposals from generalist robot policies,
+such as vision-language-action (VLA) models, to reduce the
+planning search space and enable faster closed-loop control.
+VI. ACKNOWLEDGEMENTS
+We thank Volker Schneider for support with the hard-
+ware setup and 3D-printing, and Prasanna Bhat for helping
+with real-world evaluations. This work has been partially
+supported by the German Federal Ministry of Research,
+Technology and Space (BMFTR) under the Robotics Institute
+Germany (RIG). Ralf R¨omer gratefully acknowledges sup-
+port from the German Research Foundation (DFG) within
+the RTG project ConVeY, funded by grant GRK 2428.
+The authors acknowledge the HPC resources provided by
+the Erlangen National HPC Center (NHR@FAU) under the
+BayernKI project no. v106be.
+REFERENCES
+[1] N. Agarwal, A. Ali, M. Bala, Y. Balaji, E. Barker, T. Cai, P. Chattopad-
+hyay, Y. Chen, Y. Cui, Y. Ding et al., “Cosmos world foundation model
+platform for physical AI,” https://arxiv.org/abs/2501.03575, 2025.
+[2] M. Assran, A. Bardes, D. Fan, Q. Garrido, R. Howes, M. Komeili,
+M. Muckley, A. Rizvi, C. Roberts, K. Sinha, A. Zholus, S. Arnaud,
+A. Gejji, A. Martin, F. Robert Hogan, D. Dugas, P. Bojanowski,
+V. Khalidov, P. Labatut, F. Massa, M. Szafraniec, K. Krishnakumar,
+Y. Li, X. Ma, S. Chandar, F. Meier, Y. LeCun, M. Rabbat, and N. Bal-
+las, “V-jepa 2: Self-supervised video models enable understanding,
+prediction and planning,” https://arxiv.org/abs/2506.09985, 2025.
+[3] B. Hou, G. Li, J. Jia, T. An, X. Guo, S. Leng, H. Geng, Y. Ze,
+T. Harada, P. Torr et al., “World model for robot learning: A compre-
+hensive survey,” https://arxiv.org/abs/2605.00080, 2026.
+[4] L. Mur-Labadia, M. Muckley, A. Bar, M. Assran, K. Sinha, M. Rabbat,
+Y. LeCun, N. Ballas, and A. Bardes, “V-JEPA 2.1: Unlocking dense
+features in video self-supervised learning,” https://arxiv.org/abs/2603.
+14482, 2026.
+[5] Y. Guo, L. X. Shi, J. Chen, and C. Finn, “Ctrl-World: A controllable
+generative world model for robot manipulation,” in Proc. of the
+Int. Conf. on Learning Representations (ICLR), 2026.
+[6] M. J. Kim, Y. Gao, T.-Y. Lin, Y.-C. Lin, Y. Ge, G. Lam, P. Liang,
+S. Song, M.-Y. Liu, C. Finn et al., “Cosmos Policy: Fine-tuning video
+models for visuomotor control and planning,” https://arxiv.org/abs/
+2601.16163, 2026.
+[7] B. Terver, T.-Y. Yang, J. Ponce, A. Bardes, and Y. LeCun, “What
+drives success in physical planning with joint-embedding predictive
+world models?” https://arxiv.org/abs/2512.24497, 2025.
+[8] A. L. Chandra, I. Nematollahi, C. Huang, T. Welschehold, W. Bur-
+gard, and A. Valada, “DiWA: Diffusion policy adaptation with world
+models,” in Proc. of the Conf. on Robot Learning (CoRL), 2025.
+[9] Z. Jiang, K. Liu, Y. Qin, S. Tian, Y. Zheng, M. Zhou, C. Yu, H. Li, and
+D. Zhao, “World4RL: Diffusion world models for policy refinement
+with reinforcement learning for robotic manipulation,” https://arxiv.
+org/abs/2509.19080, 2025.
+[10] Y. Li, Y. Zhu, J. Wen, C. Shen, and Y. Xu, “WorldEval: World model as
+real-world robot policies evaluator,” https://arxiv.org/abs/2505.19017,
+2025.
+[11] Gemini
+Robotics
+Team,
+K.
+Choromanski,
+C.
+Devin,
+Y.
+Du,
+D. Dwibedi, R. Gao, A. Jindal, T. Kipf, S. Kirmani, I. Leal et al.,
+“Evaluating Gemini Robotics policies in a Veo world simulator,”
+https://arxiv.org/abs/2512.10675, 2025.
+[12] G. Zhou, H. Pan, Y. LeCun, and L. Pinto, “DINO-WM: World models
+on pre-trained visual features enable zero-shot planning,” in Proc. of
+the Int. Conf. on Machine Learning (ICML), 2025.
+[13] X. Yang, R. Dagli, A. Zook, H. Hadfield, A. Goyal, S. Birchfield,
+F. Ramos, and J. Tremblay, “RoboLab: A High-Fidelity Simulation
+Benchmark for Analysis of Task Generalist Policies,” in Proc. of
+Robotics: Science and Systems (RSS), 2026.
+[14] Wan Team, A. Wang, B. Ai, B. Wen, C. Mao, C.-W. Xie, D. Chen,
+F. Yu, H. Zhao, J. Yang et al., “Wan: Open and advanced large-scale
+video generative models,” https://arxiv.org/abs/2503.20314, 2025.
+[15] J. Jang, S. Ye, Z. Lin, J. Xiang, J. Bjorck, Y. Fang, F. Hu, S. Huang,
+K. Kundalia, Y.-C. Lin et al., “DreamGen: Unlocking generalization in
+robot learning through video world models,” in Proc. of the Conf. on
+Robot Learning (CoRL), 2025.
+[16] J. Quevedo, A. K. Sharma, Y. Sun, V. Suryavanshi, P. Liang, and
+S. Yang, “WorldGym: World model as an environment for policy
+evaluation,” in Proc. of the Int. Conf. on Learning Representations
+(ICLR), 2026.
+[17] Z. Mei, T. Yin, M. Baker, O. Shorinwa, and A. Majumdar, “World
+models that know when they don’t know: Controllable video gen-
+eration with calibrated uncertainty,” https://arxiv.org/abs/2512.05927,
+2025.
+[18] M. Assran, Q. Duval, I. Misra, P. Bojanowski, P. Vincent, M. Rabbat,
+Y. LeCun, and N. Ballas, “Self-supervised learning from images with
+a joint-embedding predictive architecture,” in Proc. of the IEEE Com-
+puter Society Conference on Computer Vision and Pattern Recognition
+(CVPR), 2023.
+[19] A. Bardes, Q. Garrido, J. Ponce, X. Chen, M. Rabbat, Y. LeCun,
+M. Assran, and N. Ballas, “Revisiting feature prediction for learning
+visual representations from video,” Transactions on Machine Learning
+Research, 2024.
+[20] O. Sim´eoni, H. V. Vo, M. Seitzer, F. Baldassarre, M. Oquab, C. Jose,
+V. Khalidov, M. Szafraniec, S. Yi, M. Ramamonjisoa et al., “DINOv3,”
+https://arxiv.org/abs/2508.10104, 2025.
+[21] Y. Du, S. Yang, B. Dai, H. Dai, O. Nachum, J. Tenenbaum, D. Schu-
+urmans, and P. Abbeel, “Learning universal policies via text-guided
+video generation,” in Advances in Neural Information Processing
+Systems, 2023.
+[22] K. Black, M. Nakamoto, P. Atreya, H. R. Walke, C. Finn, A. Ku-
+mar, and S. Levine, “Zero-shot robotic manipulation with pre-trained
+image-editing diffusion models,” in Proc. of the Int. Conf. on Learning
+Representations (ICLR), 2024.
+[23] Q. Bu, J. Zeng, L. Chen, Y. Yang, G. Zhou, J. Yan, P. Luo, H. Cui,
+Y. Ma, and H. Li, “Closed-loop visuomotor control with generative
+expectation for robotic manipulation,” in Advances in Neural Infor-
+mation Processing Systems, 2024.
+
+
+[24] Y. Wang, O. Bounou, G. Zhou, R. Balestriero, T. G. Rudner, Y. LeCun,
+and M. Ren, “Temporal straightening for latent planning,” https://arxiv.
+org/abs/2603.12231, 2026.
+[25] R. Y. Rubinstein, “Optimization of computer simulation models with
+rare events,” European Journal of Operational Research, 1997.
+[26] H. Bharadhwaj, K. Xie, and F. Shkurti, “Model-predictive control
+via cross-entropy and gradient-based optimization,” in Proc. of the
+Learning for Dynamics & Control Conference (L4DC), 2020.
+[27] A. Nagabandi, K. Konolige, S. Levine, and V. Kumar, “Deep dynamics
+models for learning dexterous manipulation,” in Proc. of the Conf. on
+Robot Learning (CoRL), 2020.
+[28] C. Gao, H. Zhang, Z. Xu, C. Zhehao, and L. Shao, “FLIP: Flow-centric
+generative planning as general-purpose manipulation world model,” in
+Proc. of the Int. Conf. on Learning Representations (ICLR), 2025.
+[29] Y. Yang, J. Liu, Z. Zhang, S. Zhou, R. Tan, J. Yang, Y. Du, and
+C. Gan, “MindJourney: Test-time scaling with world models for spatial
+reasoning,” in Advances in Neural Information Processing Systems,
+2025.
+[30] A. Khazatsky, K. Pertsch, S. Nair, A. Balakrishna, S. Dasari, S. Karam-
+cheti, S. Nasiriany, M. K. Srirama, L. Y. Chen, K. Ellis et al., “DROID:
+A large-scale in-the-wild robot manipulation dataset,” in Proc. of
+Robotics: Science and Systems (RSS), 2024.
+[31] P. Atreya, K. Pertsch, T. Lee, M. J. Kim, A. Jain, A. Kuramshin,
+C. Eppner, C. Neary, E. Hu, F. Ramos et al., “RoboArena: Distributed
+real-world evaluation of generalist robot policies,” in Proc. of the
+Conf. on Robot Learning (CoRL), 2025.
+[32] T. J¨ulg, P. Krack, S. Bien, Y. Blei, K. Gamal, K. Nakahara, J. Hechtl,
+R. Calandra, W. Burgard, and F. Walter, “Robot Control Stack: A
+lean ecosystem for robot learning at scale,” in Proc. of the IEEE
+Int. Conf. on Robotics & Automation (ICRA), 2026.
+[33] T. J¨ulg, K. Gamal, N. Nilavadi, P. Krack, S. Bien, M. Krawez,
+F. Walter, and W. Burgard, “VLAgents: A policy server for efficient
+vla inference,” https://arxiv.org/abs/2601.11250, 2026.

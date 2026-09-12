@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-11</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-12</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 28 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 21 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>17</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>11</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-11 19:22:26 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-12 19:28:50 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-11 日报精选28篇，精读17篇、速读11篇，聚焦机器人操作与视觉-语言-动作模型前沿。最值得看的是两篇满分工作：GE-Act 2.0 用世界-动作模型做机器人操作预训练与扩展，ICI-VLA 让VLA模型通过时空对齐演示实现上下文模仿。建议普通读者先读这两篇，再顺带浏览世界模型与高效导航的速读方向。</p>
+<p>2026-09-12 日报：21 篇论文中精读 10 篇、速读 11 篇，VLA 模型仍是绝对主角。最值得看的是两篇 9.0 分精读：《Reasoning Without Inference Cost》用潜在语义支架让机器人策略免于推理开销，《RoboSPA》则追问 VLA 能否走出简单场景和短时任务。普通读者可先从这两篇入手，再顺带浏览速读里的 LeFlow、LM-X 和 MA-VLA，看世界模型规划、可解释性与多臂协作的进展。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">17 篇</strong>
+    <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="GE-Act 2.0: Pretraining and Scaling a World-Action Model for Robotic Manipulation">GE-Act 2.0: Pretraining and Scaling a World-Action Model for Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="ICI-VLA: In-Context Imitation with Spatiotemporally Aligned Demonstrations for Vision-Language-Action Models">ICI-VLA: In-Context Imitation with Spatiotemporally Aligned Demonstrations for Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="DeCAL: Towards Physically-Grounded Dexterous Vision-Language-Action Models via Contact-Aware Latent Co-Imagination">DeCAL: Towards Physically-Grounded Dexterous Vision-Language-Action Models via Contact-Aware Latent Co-Imagination</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Reasoning Without Inference Cost: Latent Semantic Scaffolding for Robot VLA Policies">Reasoning Without Inference Cost: Latent Semantic Scaffolding for Robot VLA Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="RoboSPA: Can VLA Models Go Beyond Simple Scenes and Short-Horizon Tasks?">RoboSPA: Can VLA Models Go Beyond Simple Scenes and Short-Horizon Tasks?</span></li><li><span class="dpr-home-dashboard-paper-title" title="Towards Neuro-Symbolic Procedural Reasoning for Long-Horizon Vision-Language-Action Manipulation">Towards Neuro-Symbolic Procedural Reasoning for Long-Horizon Vision-Language-Action Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>17</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>10</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,7 +94,7 @@
     <strong class="dpr-home-dashboard-count">11 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Embodied-Navigator: Point, Think, Memorize, and Align for Efficient Navigation">Embodied-Navigator: Point, Think, Memorize, and Align for Efficient Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="On the Capability Separation Between World-Model Policy Learning and Imitated World-Action Models">On the Capability Separation Between World-Model Policy Learning and Imitated World-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Beyond Instance Slots: Semantically Rich World Models for Physical Interaction Planning">Beyond Instance Slots: Semantically Rich World Models for Physical Interaction Planning</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LeFlow: Generative Latent Flow Planning for World Models">LeFlow: Generative Latent Flow Planning for World Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="LM-X: Explainable Vision--Language--Action Modeling via Progress, Event, and Uncertainty Prediction">LM-X: Explainable Vision--Language--Action Modeling via Progress, Event, and Uncertainty Prediction</span></li><li><span class="dpr-home-dashboard-paper-title" title="MA-VLA: Multi-Arm Vision-Language-Action Model for Collaboration and Compositional Generalization">MA-VLA: Multi-Arm Vision-Language-Action Model for Collaboration and Compositional Generalization</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span></div>
 </section>
