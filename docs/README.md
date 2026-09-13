@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-12</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-13</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 21 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 17 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>6</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>11</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-12 19:28:50 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-13 19:44:27 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-12 日报：21 篇论文中精读 10 篇、速读 11 篇，VLA 模型仍是绝对主角。最值得看的是两篇 9.0 分精读：《Reasoning Without Inference Cost》用潜在语义支架让机器人策略免于推理开销，《RoboSPA》则追问 VLA 能否走出简单场景和短时任务。普通读者可先从这两篇入手，再顺带浏览速读里的 LeFlow、LM-X 和 MA-VLA，看世界模型规划、可解释性与多臂协作的进展。</p>
+<p>2026-09-13 日报精选 17 篇机器人学习论文，精读 6 篇、速读 11 篇，聚焦强化学习与世界模型。最值得关注的是满分级的 CAST（模型强化学习的状态价值目标与策略梯度交替优化）和 Compact Visuotactile World Models（视觉触觉世界模型用于举升），速读中 AdaVLA、SmoothRL、SymVD 也值得一看。普通读者可先从 CAST 和视觉触觉世界模型两篇入手，再按兴趣追踪 VLA 加速与异步强化学习方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">10 篇</strong>
+    <strong class="dpr-home-dashboard-count">6 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Reasoning Without Inference Cost: Latent Semantic Scaffolding for Robot VLA Policies">Reasoning Without Inference Cost: Latent Semantic Scaffolding for Robot VLA Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="RoboSPA: Can VLA Models Go Beyond Simple Scenes and Short-Horizon Tasks?">RoboSPA: Can VLA Models Go Beyond Simple Scenes and Short-Horizon Tasks?</span></li><li><span class="dpr-home-dashboard-paper-title" title="Towards Neuro-Symbolic Procedural Reasoning for Long-Horizon Vision-Language-Action Manipulation">Towards Neuro-Symbolic Procedural Reasoning for Long-Horizon Vision-Language-Action Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="CAST: Alternating State-Value Targets and Expanded Policy Gradients for Model-Based Reinforcement Learning">CAST: Alternating State-Value Targets and Expanded Policy Gradients for Model-Based Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Compact Visuotactile World Models for Lifting: Prediction, Reward Alignment, and Force Constraints">Compact Visuotactile World Models for Lifting: Prediction, Reward Alignment, and Force Constraints</span></li><li><span class="dpr-home-dashboard-paper-title" title="Show-Harness: Just a VLM Agent Can Play Robots">Show-Harness: Just a VLM Agent Can Play Robots</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>10</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,7 +94,7 @@
     <strong class="dpr-home-dashboard-count">11 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LeFlow: Generative Latent Flow Planning for World Models">LeFlow: Generative Latent Flow Planning for World Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="LM-X: Explainable Vision--Language--Action Modeling via Progress, Event, and Uncertainty Prediction">LM-X: Explainable Vision--Language--Action Modeling via Progress, Event, and Uncertainty Prediction</span></li><li><span class="dpr-home-dashboard-paper-title" title="MA-VLA: Multi-Arm Vision-Language-Action Model for Collaboration and Compositional Generalization">MA-VLA: Multi-Arm Vision-Language-Action Model for Collaboration and Compositional Generalization</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="AdaVLA: Adaptive Step Flow Matching for Training-free Acceleration of Vision-Language-Action Models">AdaVLA: Adaptive Step Flow Matching for Training-free Acceleration of Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="SmoothRL: Online Reinforcement Learning During Asynchronous Execution">SmoothRL: Online Reinforcement Learning During Asynchronous Execution</span></li><li><span class="dpr-home-dashboard-paper-title" title="SymVD: Symmetric Vision Language Action Distillation for Robot Manipulation">SymVD: Symmetric Vision Language Action Distillation for Robot Manipulation</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span></div>
 </section>
