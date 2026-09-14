@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-13</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-16 ~ 2026-09-14</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 17 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 26 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>6</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>15</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>11</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-13 19:44:27 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-14 03:55:24 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-13 日报精选 17 篇机器人学习论文，精读 6 篇、速读 11 篇，聚焦强化学习与世界模型。最值得关注的是满分级的 CAST（模型强化学习的状态价值目标与策略梯度交替优化）和 Compact Visuotactile World Models（视觉触觉世界模型用于举升），速读中 AdaVLA、SmoothRL、SymVD 也值得一看。普通读者可先从 CAST 和视觉触觉世界模型两篇入手，再按兴趣追踪 VLA 加速与异步强化学习方向。</p>
+<p>2026-08-16至09-14共处理26篇论文，精读15篇、速读11篇，重点聚焦灵巧操作与视觉-触觉融合。最值得看的是满分论文DeCAL提出的接触感知潜在协同想象，让VLA模型真正&quot;接地&quot;物理接触，其次是9分的仿真视觉灵巧性预训练。普通读者可从ViTaR这类视觉-触觉残差适配入手，理解机器人如何借触觉补齐基础模型的短板。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">6 篇</strong>
+    <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="CAST: Alternating State-Value Targets and Expanded Policy Gradients for Model-Based Reinforcement Learning">CAST: Alternating State-Value Targets and Expanded Policy Gradients for Model-Based Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Compact Visuotactile World Models for Lifting: Prediction, Reward Alignment, and Force Constraints">Compact Visuotactile World Models for Lifting: Prediction, Reward Alignment, and Force Constraints</span></li><li><span class="dpr-home-dashboard-paper-title" title="Show-Harness: Just a VLM Agent Can Play Robots">Show-Harness: Just a VLM Agent Can Play Robots</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DeCAL: Towards Physically-Grounded Dexterous Vision-Language-Action Models via Contact-Aware Latent Co-Imagination">DeCAL: Towards Physically-Grounded Dexterous Vision-Language-Action Models via Contact-Aware Latent Co-Imagination</span></li><li><span class="dpr-home-dashboard-paper-title" title="Pre-training Visual Dexterity in Simulation">Pre-training Visual Dexterity in Simulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="ViHaTeleop: A Low-Cost, Lightweight Visual-Haptic Teleoperation System for Dexterous Manipulation Learning">ViHaTeleop: A Low-Cost, Lightweight Visual-Haptic Teleoperation System for Dexterous Manipulation Learning</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">hand-manip <strong>14</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">11 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="AdaVLA: Adaptive Step Flow Matching for Training-free Acceleration of Vision-Language-Action Models">AdaVLA: Adaptive Step Flow Matching for Training-free Acceleration of Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="SmoothRL: Online Reinforcement Learning During Asynchronous Execution">SmoothRL: Online Reinforcement Learning During Asynchronous Execution</span></li><li><span class="dpr-home-dashboard-paper-title" title="SymVD: Symmetric Vision Language Action Distillation for Robot Manipulation">SymVD: Symmetric Vision Language Action Distillation for Robot Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Vision-Based Tactile Intelligence for Robotics: Sensing, Learning, and Embodied Manipulation">Vision-Based Tactile Intelligence for Robotics: Sensing, Learning, and Embodied Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="ReForce: Learning Force-aware Retargeting for Dexterous Manipulation">ReForce: Learning Force-aware Retargeting for Dexterous Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="ViTaR: Visuo-Tactile Residual Adaptation for Foundation VLA Manipulation">ViTaR: Visuo-Tactile Residual Adaptation for Foundation VLA Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">hand-manip <strong>9</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>2</strong></span></div>
 </section>
 </div>
 
