@@ -1,0 +1,584 @@
+Title: EmbodiedSkills: A Unified Framework for Orchestrating, Training, and Deploying VLA Agents
+
+URL Source: https://arxiv.org/pdf/2609.01281v1
+
+Published Time: Wed, 02 Sep 2026 01:48:36 GMT
+
+Number of Pages: 20
+
+Markdown Content:
+# EmbodiedSkills: A Unified Framework for Orchestrating, Training, and Deploying VLA Agents 
+
+Wei Wang 1, Wenqiao Zhang 1,‡, Yutong Lin 1, Yuqian Yuan 1, Tianwei Lin 1, Jinhao Mao 1, Zhenxuan Fan 1,
+
+Mingjian Gao 1, Yang Dai 1, Wentong Li 2, Zheqi Lv 3, Zheng Dong 4, Yingjie Niu 6, Jiaqi Zhu 5, Jun Xiao 1,
+
+Chao Li 6, Yueting Zhuang 11College of Computer Science and Technology, Zhejiang University, 2Nanjing University of Aeronautics and Astronautics, 3Cornell University, 4Universal Ubiquitous AI Co., Ltd., 5National University of Singapore, 6Hangzhou DEEP Robotics Technology Co., Ltd. 
+
+> ‡
+
+Corresponding author 
+
+Vision–language–action (VLA) models map visual observations and language instructions directly to robot actions, but long-horizon tasks require more than action prediction. An agent must coordinate perception, planning, execution, progress verification, and recovery as the physical state evolves. An action prediction or a model-generated skill decision does not, by itself, guarantee that the proposed operation is valid in the current state or that its outcome will be verified. We propose EmbodiedSkills ,a unified framework that treats each skill decision as an execution proposal: the runtime checks its prerequisites before execution and verifies the outcome afterward. A shared executable-skill interface connects high-level skill selection, bounded low-level VLA execution, and post-action verification within a single agent loop. Because this interface remains fixed, low-level VLA policies can be replaced or adapted without changing the agent loop. The interface also records planning, execution, verification, and recovery events as structured trajectories, which provide supervision for individual components and can support optional online adaptation when interactive feedback is available. We instantiate EmbodiedSkills with Qwen3-VL and OpenPI/ π0.5 on RoboTwin 2.0 and LIBERO. Task-adapted low-level VLA policies achieve an average success rate of 86.20% across 50 RoboTwin 2.0 tasks and 97.40% across the four LIBERO suites. These results establish the execution performance of the task-adapted low-level VLA policies used in EmbodiedSkills. On four memory-dependent RMBench tasks, the same task-adapted execution approach achieves 12.5% average success. The framework provides a trainable and inspectable agent layer for turning these policies into closed-loop embodied systems. 
+
+# 1 Introduction 
+
+Vision–language–action (VLA) models directly map visual observations and natural-language instructions to robot actions. Drawing on large-scale vision–language pretraining and diverse robot demonstrations, recent VLA policies have demonstrated increasing versatility, including various instructions, multi-object environ-ments, multiple robot embodiments, and long-horizon tasks [1–7]. Benchmarks such as RoboTwin 2.0 [8, 9] further reflect this broader scope through diverse bimanual manipulation tasks, object configurations, robot embodiments, and domain-randomized settings. Long-horizon manipulation requires substantially more than predicting the next action. For example, a robot instructed to “place the container on the plate” must perceive the scene, identify the task-relevant objects, select an appropriate subgoal, assess whether it is executable under the current state, invoke a low-level VLA policy to generate the corresponding actions, verify that execution has produced the task as intended, and recover if perception or execution fails. Together, these capabilities constitute the agentic layer that transforms a VLA policy into a reliable embodied system. While a VLA model predicts actions from observations and instructions, a VLA agent must coordinate perception, planning, execution, verification, and recovery as the physical state evolves. Existing VLA policies and LLM-based robotic agents address different parts of this agent-level challenge. End-to-end VLA policies provide a unified learning interface for visuomotor control, yet typically leave intermediate 1arXiv:2609.01281v1 [cs.RO] 1 Sep 2026 EmbodiedSkills Direct VLA 
+
+Pick the teal container on the white plate. 
+
+Instruction 
+
+Observation 
+
+VLA Policy 
+
+# x
+
+Unverified execution 
+
+# Modular Adaption 
+
++3.46 +0.55  
+
+> 9 skills
+> Build a fresh scene state • Capture Views • Perceive Scene • Localize Objects …
+> 3 skills
+> Reject stale or invalid actions before execution • Refresh Observation • Preflight Checks • Repair Transition
+> 8 skills
+> • Decide Recovery • Build Retry Request • Re-perceive & Rebind • Repair Transition …
+> 1
+
+Observe 2
+
+> Select the next executable subgoal • Build Task Plan • Select Subgoal • Allocate Budget • Summarize State …
+
+Plan 6 skills 
+
+Preflight 3
+
+> 7 skills
+> Run a bounded Action chunk • Build Motion Goal • Plan Motion • Execute Action …
+
+Execute 4Check whether the subgoal actually progressed • Capture Verify Views • Verify Progress • Update World State • Advance Subgoal …
+
+Verify 5 6 skills 
+
+Recover 6
+
+> Preflight Check OK
+> Verify Result Success
+> Recovery Mode Active
+> failure Re-observe / replan Active Subgoal
+> “Pick the teal container on the white plate.” (Subgoal 1/N)
+
+Closed-loop skill orchestration for VLA agents 
+
+> High-level VLM
+> VLA Backend
+> Planner/ Skill Selector
+> Environment Adapter
+> Shared Skill Interface
+
+Figure 1 Overview of EmbodiedSkills. EmbodiedSkills transforms a low-level VLA policy into a closed-loop embodied agent by coordinating observation, planning, validation, execution, verification, and recovery through executable skills. A high-level policy proposes structured operations, while a guarded runtime validates and executes them and records post-execution feedback as structured trajectories. 
+
+task decisions implicit [2, 4, 6, 7]. When a task fails, it can be difficult to determine whether the failure arose from object grounding, subgoal selection, low-level action execution, progress verification, or recovery. By contrast, LLM-based robotic agents can make intermediate tool calls and reasoning steps explicit [10, 11]. However, an explicit decision is not necessarily valid or executable in the current physical state. A proposed skill may be incompatible with the current phase, rely on stale observations, omit required arguments, or fail to produce the intended outcome after execution. These problems become especially difficult under partial observability, delayed feedback about task progress, and contact-rich failures [12, 13]. Although prompting can steer the policy toward valid choices, it cannot by itself enforce execution constraints or verify physical outcomes. The central challenge is therefore to bridge model-level decision making and physical execution so that proposed operations are checked before execution, their outcomes are verified afterward, and the resulting evidence informs subsequent decisions and learning. In this paper, we propose EmbodiedSkills , a unified framework for orchestrating, training, and deploying VLA agents. Rather than replacing existing VLA policies, EmbodiedSkills structures perception, planning, execution, verification, and recovery around executable embodied skills . Each skill is defined by typed inputs and outputs together with explicit prerequisites, and its invocation produces a structured execution trace and post-execution verification signals. A high-level agent policy selects structured operations, a low-level VLA policy such as OpenPI/ π0.5 [7] generates bounded action chunks, and a robot controller executes the resulting commands. A shared skill interface specifies how these components interact during orchestration, training, and deployment, without embedding their execution semantics in benchmark-specific prompts or control scripts. A closed-loop AgentLoop lies at the core of EmbodiedSkills and coordinates observation, task-object localiza-tion, world-state updates, subgoal planning, preflight checks, short-horizon execution, progress verification, and recovery [10, 14–17]. These stages do not constitute a fixed sequential pipeline. Instead, conditioned on the evolving task state, the agent policy can re-observe the scene, revise the plan, continue executing the current subgoal, advance to the next subgoal, or initiate recovery. At each step, the agent policy proposes the next skill. Before execution, the runtime validates phase compatibility, required inputs, artifact freshness, action validity, and legal state transitions. After execution, newly acquired observations and verifier outputs are fed into the subsequent decision. Separating policy proposals from runtime-enforced execution prevents invalid decisions from being silently translated into physical actions and renders failures explicit and traceable 2within the agent trajectory. The shared skill interfaces also provide a unified structure for component-level training. EmbodiedSkills records multimodal context, structured decisions, skill outcomes, runtime errors, and state transitions using a common trajectory schema. A planner can be trained to produce executable subgoals, a low-level VLA policy can be adapted with subtask-level demonstrations, and a verifier can learn from post-execution ob-servations and subgoal-completion labels. Because these interfaces remain consistent across training and deployment, the components can be improved independently or instantiated with stage-specific adapters without modifying the AgentLoop. When interactive feedback and a reliable environment evaluator are avail-able, the recorded trajectories can further support optional online policy optimization, while component-level supervision remains the primary training paradigm. We instantiate EmbodiedSkills with Qwen3-VL-based agent components and OpenPI/ π0.5 low-level VLA policy [7]. Across 50 RoboTwin 2.0 tasks, our task-adapted low-level VLA policies achieve an average success rate of 86.20%, surpassing the 82.74% π0.5 reference reported by LingBot-VA [18]. Across LIBERO-Spatial, LIBERO-Object, LIBERO-Goal, and LIBERO-Long [19], our VLA policy instantiation achieves an average success rate of 97.40%, compared with 96.85% official OpenPI reference. These results demonstrate the strong cross-benchmark execution performance of the task-adapted low-level VLA policies used in EmbodiedSkills. On four memory-dependent tasks from RMBench [20], the same task-adapted execution approach reaches 12.5% average success, providing an additional evaluation of subtask-conditioned execution when the correct action depends on prior interaction history. In summary, our contributions are threefold: • A skill-oriented closed-loop AgentLoop. We formulate long-horizon VLA agents as closed-loop systems that coordinate explicit embodied skills across observation, planning, readiness checks, bounded execu-tion, progress verification, and recovery, rather than following a fixed, one-pass pipeline. • Policy–runtime separation. We introduce a shared skill contract in which the policy proposes structured skill decisions, while the runtime enforces prerequisites, artifact freshness, action validity, and legal state transitions, making failures explicit and agent trajectories diagnosable. • Modular adaptation and cross-benchmark validation. We define independently trainable and replaceable interfaces for planning, verification, action generation, and environment interaction, and evaluate the resulting low-level VLA policy instantiations on RoboTwin 2.0 and LIBERO. 
+
+# 2 Related Work 
+
+2.1 Vision-Language-Action Policies for Robot Control 
+
+Vision-language-action models extend language-conditioned robot learning by integrating perception, lan-guage understanding, and action generation within a unified modeling framework. Early large-scale robot policies, such as RT-1 and RT-2, demonstrated that transformer-based policies can learn from real-world robot data and transfer visual-language knowledge to robotic control [1, 2]. Open X-Embodiment and RT-X further scaled this direction across embodiments, while OpenVLA, Octo, π0, π0.5, and Qwen-VLA advanced the development of open, reusable, and increasingly general-purpose robot policies [3–7, 21]. In parallel, low-level action policies have progressed rapidly through diffusion policies, ACT-style action chunking, diffusion and sparse experts, world-action models, and atomic skill decoders [22–30]. These works have substantially strengthened low-level robot control. EmbodiedSkills is complementary: it exposes such policies through a shared execution interface and focuses on the agentic layer that determines when and how they should be invoked, verified, continued, or retried. The low-level policy remains independently adaptable and replace-able, while the AgentLoop exposes a stable interface for replacing it without redefining high-level execution semantics. 32.2 Robotic Agents, Skills, and Hierarchical Control 
+
+A separate line of work studies how language or vision-language models can coordinate robot skills. Say-Can combines language-model scoring with learned affordances, Inner Monologue incorporates environment feedback into planning, Code as Policies generates executable robot programs, VoxPoser builds language-conditioned 3D value maps, and PaLM-E integrates embodied multimodal inputs into a large language model [10, 11, 31–33]. Recent systems further explore object-centric manipulation, visual prompting, language-grounded planning, modular routing, and hierarchical VLA execution [34–39]. These methods show that skill-level reasoning is useful for robotics. They are also connected to the long tradition of options, hierar-chical reinforcement learning, skill chaining, and behavior-tree control [14–17, 40]. EmbodiedSkills differs in where it places the boundary between learned reasoning and execution. Instead of treating skills only as a planning vocabulary or a model-internal decomposition, the policy proposes structured skill calls and a separate runtime enforces their prerequisites, artifact freshness, and legal transitions. Executable skills conse-quently become the shared contract for closed-loop orchestration, trajectory logging, component adaptation, evaluation, and deployment, including continuation and recovery after observing the effect of an action chunk. 
+
+2.3 Agent-Level Reinforcement Learning 
+
+Reinforcement learning has recently become a central mechanism for improving large-model reasoning and agent behavior. GRPO-style reasoning training and recent agent RL systems show that language models can improve through environment or verifier feedback in mathematics, software engineering, tool use, and web interaction [41–47]. Robot RL has a longer history, but physical interaction introduces distinct challenges: exploration is costly, states are partially observed, rewards are often sparse or delayed, and progress may de-pend on contact-rich dynamics [12, 13, 48–50]. Recent VLA-specific RL and post-training systems, including RLinf-VLA, π∗
+
+> 0.6
+
+, and World2Act, show that reinforcement or deployment feedback is becoming increasingly important for robot foundation policies [29, 51, 52]. EmbodiedSkills is orthogonal to a particular RL algo-rithm or optimization target. Its structured trajectories support supervised adaptation of individual agent components and can also provide deployment-consistent context and feedback for optional online optimiza-tion. The main contribution is the AgentLoop and its executable interfaces: the planner, verifier, selector, or low-level VLA policy may be adapted independently without changing the runtime state machine. 
+
+2.4 Evaluation, Verification, and Deployment 
+
+Robot learning benchmarks have expanded from tabletop manipulation to long-horizon, language-conditioned, bimanual, household, and cross-embodiment settings. Representative environments include RLBench, CALVIN, LIBERO, ManiSkill, RoboCasa, SimplerEnv, RoboTwin, and RoboTwin 2.0 [8, 9, 19, 53–57]. These bench-marks are essential for measuring policy performance, but terminal success alone does not reveal where a long-horizon VLA agent failed. A growing body of work therefore studies execution monitoring, failure explanation, failure recovery, and VLA action verification [58–63]. Infrastructure efforts such as StarVLA also reflect the need for reusable VLA development and evaluation stacks [64]. EmbodiedSkills builds on this evaluation landscape, but evaluates and deploys agents through a common structured skill trajectory. Rather than defining success semantics inside the high-level prompt, it separates model-generated subgoal verification from the terminal evaluator supplied by each environment. This allows terminal success, subgoal progress, invalid decisions, low-level policy failures, verification errors, recovery behavior, and latency to be analyzed within one runtime abstraction across benchmarks. 
+
+# 3 Methodology 
+
+EmbodiedSkills formulates an embodied VLM–VLA system as a guarded finite-stage controller over exe-cutable embodied skills. The high-level agent policy reads the task, current visual evidence, loop state, and phase-admissible skills, then selects one structured operation. The low-level VLA policy maps the active subgoal, current observation, and robot state to a bounded action chunk. The runtime checks every proposed operation, records its result as an explicit artifact, invalidates dependent artifacts when their context changes, and exposes the updated state to the next decision. Model, environment, and VLA policy adapters preserve this interface across concrete instantiations. 4Task instruction Current observation Loop history Active plan / World state 
+
+Task Context 
+
+High-level VLM Agent 
+
+> Observe 1
+> Build or revise plan 2
+> Select subgoal 3
+> Allocate action budget 4
+> Verify progress 5
+> Continue, advance, recover, or replan
+> 6
+> Structured output
+> Skill call
+> Active subgoal
+> Budget
+> Route
+
+Guarded Runtime 
+
+> Phase compatibility Required inputs Freshness and validity Legal state transition
+> Shared Skill Interface
+> Model proposal Runtime validation Typed artifact Execution evidence
+> Execution Contract
+
+Low-level VLA Policy 
+
+> Active subgoal
+> Current image
+> Robot state
+> Readiness evidence
+> Subtask-conditioned policy Bounded action chunk
+
+Robot + Environment  
+
+> Physical execution
+> Robot controller
+> Execution report Verification result
+> Proposed skill call Failure evidence
+> Retry/replan/ re-observe
+> Validated execution request
+
+Figure 2 The high-level VLM decomposes the instruction, selects executable subgoals, and verifies progress from post-action observations. The low-level VLA policy executes each active subgoal as a bounded action chunk. 
+
+3.1 Agent State and Skill Decision 
+
+An episode starts from a natural-language instruction x and an environment E. At loop step t, the method-level state is 
+
+st = ( zt, Mt, Ht) , (1) where zt is the current phase, Mt is the set of available task artifacts, and Ht is the ordered loop trace. Arti-facts may include the current observation, optional perception and grounding results, world state, complete task plan, active subgoal, preflight evidence, action chunk, execution report, verification report, and recovery context. The policy receives a deployment-consistent compact context 
+
+Ct = Ψ( x, z t, Mt, Ht) , (2) where Ψ retains the complete plan, active subgoal, current artifact summaries, recent errors, and an ordered, bounded summary of recent decisions and skill results. Older entries are compressed or dropped under a fixed history budget, while the current plan and subgoal remain explicit. Raw simulator internals and unbounded logs are not inserted into the policy context. The policy chooses a structured decision from a state-dependent action set: 
+
+dt ∼ πθ (· | Ct, z t, At) , At = Gstate (Kzt , s t) , (3) where Kzt is the configured skill set for phase zt, and Gstate exposes only choices compatible with the current artifacts. The policy has three control types: 
+
+dt ∈ { RunSkill (k, q ), AdvanceStage , FinishRun }, (4) where k is an admissible skill and q is its payload. Skill execution, forward progression, and termination therefore share one structured decision interface, while evidence-dependent rerouting remains governed by the runtime. 
+
+3.2 Executable Skill Contract 
+
+Each embodied skill is represented by the contract 
+
+k = ( Xk, Yk, pre k, exec k, post k, fail k) , (5) 5Phase Role Representative operations Exit evidence                                            
+
+> Observe Acquire current visual and task-relevant evidence. Capture views, extract task-conditioned visual evidence, estimate uncertainty, and update the scene representation when required. Current task evi-dence.
+> Plan Convert the task and evi-dence into verifiable subgoals. Build an ordered semantic plan, select the active subgoal, and allocate an execution budget. A plan and active subgoal.
+> Preflight Determine whether the active subgoal is ready for execu-tion. Check the task context, current observation, robot state, environment, and VLA policy avail-ability; refresh relevant evidence when needed. Apassed readi-ness report.
+> Execute Produce and apply one bounded action chunk. Construct a VLA policy request, generate and val-idate a chunk, and execute it in the environment. An execution re-port.
+> Verify Judge progress from fresh post-action evidence. Compare the observed state with the active sub-goal and select the next semantic route. A progress judge-ment.
+> Recover Revise the attempt after anon-continuable failure. Interpret failure evidence, revise the subgoal or plan, and select a safe re-entry phase. Arevised execu-tion context.
+> Table 1 The six phases of EmbodiedSkills. Each phase exposes a semantic set of operations while the runtime checks whether their required evidence is valid.
+
+where Xk and Yk are typed input and output schemas, pre k defines prerequisites, exec k is the executable operation, post k specifies the resulting state update, and fail k maps failures to explicit status and evidence. Artifacts carry provenance and freshness information so that observations, plans, and actions are not silently reused after their dependencies change. The contract applies to both model-backed skills and deterministic operations and prevents a textual proposal from being mistaken for a physical state transition. At invocation time, the contract defines which state and evidence a skill may consume; after invocation, it determines how outputs, side effects, and failures become part of the shared task state. A model-generated result is therefore treated as a proposal until its schema and prerequisites have been validated. Successful outputs become typed artifacts that can support later skills, whereas failures remain explicit evidence available to the next policy decision. This makes learned perception, planning, verification, and action generation composable without assuming that they have identical internal representations. The same contract also defines the boundary of invalidation. When an observation, active subgoal, or execution result changes, only artifacts that depend on the changed evidence need to be refreshed. As a result, the loop can reuse still-valid context while preventing stale predictions from authorizing new physical actions. The skill contract thus serves simultaneously as a composition interface, a runtime validity boundary, and a structured source of training traces. 
+
+3.3 Phase-Structured Skill Space 
+
+The runtime uses the ordered phase set 
+
+Z = ( Observe , Plan , Preflight , Execute , Verify , Recover ) . (6) These phases describe the semantic structure of the loop rather than a rigid one-pass program. The policy may revisit earlier phases when new observations, execution outcomes, or verification evidence invalidate the current plan. Grounding is task- and policy-conditioned rather than globally fixed to a source–target pair. A task may require no explicit object binding, one interaction object, multiple objects, or multiple destinations. Direct language-conditioned VLA policies may operate from images, robot state, and subgoal text, whereas geometry-based controllers may additionally require explicit object or region bindings. 
+
+3.4 Guarded Runtime Transition 
+
+The policy proposes decisions, whereas the runtime defines their execution semantics. Because the three controls have different invariants, we use separate guards. For a skill proposal, 6Gskill (st, d t) = 1[dt = RunSkill (k, q )] 1[stage( dt) = zt]1[k ∈ K zt ] · Y
+
+> r∈R (k,q )
+
+1[r(st) = 1] , (7) where R(k, q ) contains the prerequisites of the selected skill and payload. Forward progression is guarded by 
+
+Gadvance (st, d t) = 1[dt = AdvanceStage ]1[Rzt (st) = 1] , (8) where Rzt summarizes whether the current phase has produced the evidence needed by its successor. Termi-nation uses the separate control gate 
+
+Gfinish (dt) = 1[dt = FinishRun ]. (9) The guarded update is 
+
+st+1 =
+
+
+
+U(st, k (q)) , Gskill (st, d t) = 1 ,
+
+N (st), Gadvance (st, d t) = 1 ,
+
+F(st), Gfinish (dt) = 1 ,
+
+B(st, d t), otherwise ,
+
+(10) where U records the operation result and invalidates stale dependents, N advances the loop, F terminates it, and B records a blocked decision and its evidence. This separation allows a learned policy to choose among meaningful operations without making the prompt itself responsible for execution safety or state consistency. 
+
+3.5 Bounded Action Execution 
+
+In Execute , the low-level VLA policy maps the active subgoal, current observation, robot state, and readi-ness evidence to an action chunk and an execution report: 
+
+(gt, O t, F t) −→ at −→ et, (11) where gt is the active subgoal, Ot is the current observation, Ft is the preflight evidence, at is the proposed action chunk, and et records its observed outcome. An action chunk is a bounded command sequence 
+
+at = ( τt, U t, H t, η t) , Ut = [ u1 
+
+> t
+
+, . . . , u Ht 
+
+> t
+
+], (12) where τt is the action type, Ht is the horizon, and ηt ties the chunk to its subgoal and observation context. Let Σp denote the action schema exposed by policy module p. The runtime accepts a chunk only when 
+
+Ract (at, s t) = 1[0 < H t ≤ Hmax ]1[at |= Σ p] · 1[fresh( at; gt, O t)] 1[valid( Ut)] . (13) This checks the policy-specific action type and dimensions, numerical validity, the execution horizon, and consistency with the current subgoal and observation. After a chunk is executed, the loop obtains fresh evidence before deciding what to do next. A semantic subgoal may therefore require multiple bounded chunks rather than being forced into a single action horizon. 
+
+3.6 Verification and Recovery 
+
+Verify evaluates only the active subgoal using evidence captured after the latest action chunk. It predicts a semantic route from 
+
+V = {Advance , Continue , Reobserve , Replan , Recover , Finish }. (14) The route either advances the plan, preserves the current subgoal for another bounded attempt, refreshes scene evidence, revises the plan, or enters recovery. Recovery uses the same explicit task state and failure evidence to produce a revised execution context, which is checked again before another physical action. Overall task success remains defined by the environment’s evaluation protocol rather than by the local subgoal judgement. 7Algorithm 1 Guarded Six-Phase EmbodiedSkills Loop  
+
+> Require:
+
+Instruction x, environment E, policy πθ , step budget T 
+
+> 1:
+
+Initialize s0 in phase Observe .  
+
+> 2: for
+
+t = 0 , . . . , T − 1 do  
+
+> 3:
+
+Build Ct = Ψ( x, z t, Mt, Ht). 
+
+> 4:
+
+Compute At = Gstate (Kzt , s t). 
+
+> 5:
+
+Query dt ∼ πθ (· | Ct, z t, At).  
+
+> 6: if
+
+dt = RunSkill (k, q ) then   
+
+> 7: if
+
+Gskill (st, d t) = 1 then  
+
+> 8:
+
+Execute k(q) and update the task state with its result.  
+
+> 9:
+
+Apply any evidence-supported phase route produced by the operation.   
+
+> 10: else
+> 11:
+
+Record the blocked decision and its evidence.    
+
+> 12: end if
+> 13: else if
+
+dt = AdvanceStage then   
+
+> 14: if
+
+Gadvance (st, d t) = 1 then  
+
+> 15:
+
+Advance to the next phase.   
+
+> 16: else
+> 17:
+
+Record the blocked transition and its evidence.    
+
+> 18: end if
+> 19: else if
+
+Gfinish (dt) = 1 then  
+
+> 20:
+
+Append the finish decision and return the final state and trace.   
+
+> 21: else
+> 22:
+
+Record an invalid control decision.   
+
+> 23: end if
+> 24:
+
+Append the decision and operation result to Ht+1 .   
+
+> 25: end for
+> 26: return
+
+final task state and loop trace. 
+
+3.7 Algorithmic Summary 
+
+Algorithm 1 summarizes the AgentLoop. At each step, the policy receives compact state and admissible skills. Runtime guards block decisions that lack valid evidence, and every operation result is appended to the ordered trace used by subsequent decisions. 
+
+3.8 Modular Interfaces 
+
+EmbodiedSkills combines a typed task state, phase-structured skill interfaces, runtime validation, trajectory logging, environment adapters, and action policy modules. Perception, planning, action generation, verifica-tion, and recovery may use a shared base model with stage-specific adapters or separate models, provided that their inputs and outputs obey the same skill and state contracts. 
+
+# 4 Training the Agentic Layer 
+
+EmbodiedSkills exposes planning, skill selection, execution, verification, and recovery through explicit inter-faces. This structure allows the learned components to be adapted independently instead of requiring one end-to-end optimization procedure. In our instantiation, component-level supervision is the primary train-ing mechanism. The same trajectory interface also supports optional closed-loop policy optimization when interaction data and a reliable environment evaluator are available. 
+
+4.1 Component-Level Supervised Adaptation 
+
+The planner is trained to map the task instruction and current visual context to an ordered sequence of executable semantic subgoals. A subgoal specifies what physical state should be reached, while the low-level 8VLA policy generates the action sequence used to reach it under runtime checks. The supervision therefore avoids embedding simulator-specific control details in the high-level plan. The low-level VLA policy is adapted separately with subtask-level demonstrations. Each training example pairs the observation and robot state with the active subgoal and the corresponding action sequence. At deployment time, the policy receives the same type of subgoal-conditioned context through the Execute 
+
+interface and emits a bounded action chunk. A semantic subgoal may require more than one chunk: after each chunk, fresh evidence is collected and the verifier decides whether execution should continue or the loop should advance. For high-level control, we supervise a Qwen3-VL scheduler on deployment-consistent decision traces while keeping the low-level VLA policy frozen. Each example conditions on the task, visible observations, compact task state, recent ordered history, and the skills admissible in the current phase. The target is the phase-appropriate skill decision and its structured arguments, including whether the loop should continue the current subgoal, advance the plan, or request a revised context. Freezing the low-level VLA policy isolates this SFT stage from continuous-control learning: it improves state-conditioned scheduling and skill use without changing how low-level actions are generated. Other learned decisions can use the same decomposition. For example, a verifier can be adapted from post-execution observations and subgoal-completion labels, while the outer scheduler can be adapted from valid skill choices and their runtime outcomes. These components may share a base vision–language model while using stage-specific adapters; the runtime contract remains fixed across adapters. EmbodiedSkills does not require all components to be trained jointly, and a deterministic or externally provided component can be used where appropriate. 
+
+4.2 Deployment-Consistent Training Samples 
+
+Training examples follow the same input boundary used by the deployed component. For a model decision at time t, we write 
+
+xt =  g, z t, It, est, Kt, h t
+
+, yt = the component decision , (15) where g is the task instruction, zt is the current phase, It contains the images visible to that call, est is the compact runtime state, Kt is the set of admissible skills, and ht is the compact recent loop history. Components receive only the fields relevant to their interface. In particular, the planner receives planning context, the verifier receives the active subgoal and fresh post-execution evidence, and the scheduler receives admissible choices together with the latest artifacts and errors. Skill outputs, environment feedback, previous decisions, and runtime errors are retained as conditioning context in their original temporal order. The same history-compaction rule is applied during data construction and deployment, so a component is not trained with evidence that would be absent at test time. For vision–language supervision, loss is applied only to the tokens generated by the learned component; prompts, images, tool results, and environment messages are context rather than prediction targets. This preserves the distinction between a policy proposal and evidence supplied by the runtime. 
+
+4.3 Optional Closed-Loop Adaptation 
+
+The full AgentLoop can additionally collect interactive trajectories. One episode contains model decisions interleaved with executed skills and observed outcomes: 
+
+τ =  (x1, y 1), . . . , (xT , y T ), e 1: T , R , (16) where e1: T is the typed runtime trace and R is supplied by the environment adapter together with explicit penalties for invalid agent decisions when applicable. Infrastructure failures are recorded separately from agent-policy failures. During agent-level adaptation, the low-level VLA policy can be held fixed so that optimization changes high-level decisions without changing the continuous controller at the same time. Group-relative policy optimization is one supported mechanism. Given M > 1 rollouts of the same task 9condition, the episode score can be normalized within the group as 
+
+Ai = Ri − μG
+
+σG + ϵnorm 
+
+. (17) For generated token j of decision t, let ρi,t,j be the likelihood ratio between the updated policy and the rollout policy. A masked clipped objective is 
+
+Lonline = − 1
+
+Ngen 
+
+X
+
+> i,t,j
+
+mi,t,j min( ρi,t,j Ai, clip( ρi,t,j , 1 − ϵclip , 1 + ϵclip )Ai) , (18) where mi,t,j selects generated policy tokens and Ngen = P 
+
+> i,t,j
+
+mi,t,j . Episode-level attribution is necessarily coarse: an identical return is assigned to multiple decisions whose causal contributions may differ. We therefore treat online optimization as an optional refinement mechanism rather than as a substitute for component-level supervision or as the source of the headline results in Section 5. 
+
+# 5 Experiments 
+
+We evaluate the task-adapted low-level VLA policies exposed through the EmbodiedSkills execution interface on RoboTwin 2.0 and LIBERO. RoboTwin 2.0 provides a fine-grained comparison across 50 manipulation tasks, while the four LIBERO suites measure spatial, object, goal, and long-horizon generalization. 
+
+5.1 Evaluation Protocol 
+
+For RoboTwin 2.0 [9], we fine-tune a separate π0.5 policy for each of the 50 tasks using subtask-level demon-strations. Each policy receives the current observation, robot state, and active subgoal through the same execution interface. We report the macro-average across tasks and compare it with representative policy results from the RoboTwin 2.0 benchmark and generalist VLA results reported in the LingBot-VA study [18]. Terminal success follows the evaluator provided by RoboTwin 2.0. For LIBERO [19], we report suite-level success on LIBERO-Spatial, LIBERO-Object, LIBERO-Goal, and LIBERO-Long. The reference values are taken from the official OpenPI release 1. We report the macro-average across the four suites. We additionally evaluate three controlled AgentLoop ablations on all 50 RoboTwin 2.0 tasks, using 100 episodes per task. All variants share the same planner, low-level policy, initial states, and terminal evaluator; they differ only in whether semantic subtasks, intermediate verification, and repeated action chunks are available. This controlled loop evaluation is separate from the task-specific policy comparison in Table 2. 
+
+5.2 RoboTwin 2.0 
+
+Table 2 reports the complete task-level comparison against the per-task π0.5 results reported by LingBot-VA. Our task-adapted policies reach 86.20% macro-average success, compared with 82.74% for the reference, an improvement of 3.46 percentage points . The largest gains occur on Hanging Mug (+20), Blocks Ranking Size (+15), Open Microwave (+15), Move Can Pot (+10), and Move Stapler Pad (+10). Our task-adapted policies improve over the LingBot-VA reference on 39 of the 50 tasks, match it on one task, and are lower on ten. The gains concentrate on difficult contact-sensitive and multi-stage tasks, while most regressions are limited to one or two percentage points on tasks whose reference success is already above 90%. 
+
+> 1https://github.com/Physical-Intelligence/openpi
+
+10 Policy baselines VLA baselines Task ACT DP RDT DP3 π0 X-VLA π0.5 Ours 
+
+Adjust Bottle 97 97 81 99 99 100 100 98 Beat Block Hammer 56 42 77 72 79 92 96 100 
+
+Blocks Ranking RGB 1 0 3 3 80 83 92 93 
+
+Blocks Ranking Size 0 1 0 2 14 67 49 64 Click Alarmclock 32 61 61 77 77 99 98 97 Click Bell 58 54 80 90 71 100 99 100 
+
+Dump Bin Bigbin 68 49 64 85 88 79 92 93 
+
+Grab Roller 94 98 74 98 98 100 100 99 Handover Block 42 10 45 70 47 73 66 74 
+
+Handover Mic 85 53 90 100 97 0 98 100 
+
+Hanging Mug 7 8 23 17 14 23 18 38 
+
+Lift Pot 88 39 72 97 80 99 96 95 Move Can Pot 22 39 25 70 68 89 51 61 Move Pillbottle Pad 0 1 8 41 67 73 84 87 
+
+Move Playingcard Away 36 47 43 68 74 93 96 95 Move Stapler Pad 0 1 2 12 41 78 56 66 Open Laptop 56 49 59 82 71 93 90 91 Open Microwave 86 5 37 61 4 79 34 49 Pick Diverse Bottles 7 6 2 52 69 58 81 84 
+
+Pick Dual Bottles 31 24 42 60 59 47 93 92 Place A2B Left 1 2 3 46 43 48 87 90 
+
+Place A2B Right 0 13 1 49 39 36 87 90 
+
+Place Bread Basket 6 14 10 26 62 81 77 82 
+
+Place Bread Skillet 7 11 5 19 66 77 85 88 
+
+Place Burger Fries 49 72 50 72 81 94 94 95 
+
+Place Can Basket 1 18 19 67 55 49 62 70 
+
+Place Cans Plasticbox 16 40 6 48 63 97 94 95 Place Container Plate 72 41 78 86 97 97 99 98 Place Dual Shoes 9 8 4 13 59 79 75 80 
+
+Place Empty Cup 61 37 56 65 91 100 100 100 
+
+Place Fan 1 3 12 36 66 80 87 90 
+
+Place Mouse Pad 0 0 1 4 20 70 60 68 Place Object Basket 15 15 33 65 67 44 80 83 
+
+Place Object Scale 0 1 1 15 57 52 86 89 
+
+Place Object Stand 1 22 15 60 82 86 91 92 
+
+Place Phone Stand 2 13 15 44 49 88 81 84 Place Shoe 5 23 35 58 76 96 92 93 Press Stapler 31 6 41 69 44 92 87 90 Put Bottles Dustbin 27 22 21 60 65 74 84 87 
+
+Put Object Cabinet 15 42 33 72 73 46 80 83 
+
+Rotate QRcode 1 13 50 74 74 34 89 92 
+
+Scan Object 2 9 4 31 55 14 72 77 
+
+Shake Bottle Horizontally 63 59 84 100 98 100 99 98 Shake Bottle 74 65 74 98 94 99 99 98 Stack Blocks Three 0 0 2 1 72 6 91 92 
+
+Stack Blocks Two 25 7 21 24 93 92 97 100 
+
+Stack Bowls Three 48 63 51 57 77 76 77 82 
+
+Stack Bowls Two 82 61 76 83 94 96 95 94 Stamp Seal 2 2 1 18 46 76 79 84 
+
+Turn Switch 5 36 35 46 41 40 62 70 Average (%) 29.7 28.0 34.5 55.2 65.9 72.8 82.74 86.20 
+
+Table 2 Task-level success rates (%) on all 50 RoboTwin 2.0 tasks. The policy baselines are ACT, DP, RDT, and DP3; the generalist VLA references are π0, X-VLA, and π0.5; Ours is the task-adapted subtask-level policy. Each task is evaluated with 100 episodes. Baseline values are taken from the RoboTwin 2.0 benchmark and the reported VLA comparison, while the Ours column is our full 50-task evaluation. 
+
+11 5.3 LIBERO 
+
+Table 3 compares our VLA policy instantiation with the official OpenPI reference. Our average success rate is 97.40% , compared with 96.85% for OpenPI, an improvement of 0.55 percentage points. The largest gain occurs on LIBERO-Long, where success increases from 92.4% to 93.6%.    
+
+> Suite OpenPI Ours
+
+∆
+
+Spatial 98.8 99.0 +0.2 
+
+Object 98.2 98.6 +0.4 
+
+Goal 98.0 98.4 +0.4 
+
+Long 92.4 93.6 +1.2  
+
+> Average
+
+96.85 97.40 +0.55  
+
+> Table 3
+
+Success rates (%) on the four LIBERO suites. The OpenPI values are from the official release; improvements are percentage points. ACT DP RDT DP3           
+
+> π0
+> X-VLA
+> π0.5
+> Ours 025 50 75 100
+> Average success rate (%)
+> 29.7 28.0 34.5 55.2 65.9 72.9 82.7 86.2
+> Policy baselines Generalist VLAs Ours
+> Spatial Object Goal Long 90 95 100
+> Success rate (%)
+> 98.8 99.0
+> 98.2
+> 98.6 98.0
+> 98.4
+> 92.4
+> 93.6
+> OpenPI Ours
+> Full w/o Verify w/o Subtask 1 chunk 020 40 60 80 100
+> Success (%)
+> 86.2
+> 48.2 34.4 19.5
+> (a) RoboTwin 2.0 model comparison (b) LIBERO suites (c) AgentLoop ablations
+> Figure 3
+
+Cross-benchmark execution results. (a) Average success of representative policy baselines, generalist VLA baselines, and our task-adapted policies on the 50-task RoboTwin 2.0 benchmark. Vertical dashed lines separate method families. (b) OpenPI and our success rates on the four LIBERO suites. (c) Controlled AgentLoop ablations on the same RoboTwin 2.0 task set. 
+
+The improvement is consistent across all four LIBERO suites. Spatial, Object, and Goal are already near saturation in the official reference, leaving only small absolute margins, whereas LIBERO-Long shows a larger 1.2-point gain. This pattern indicates that the VLA policy instantiation preserves strong short-horizon spatial and object competence while obtaining its clearest advantage on longer task sequences. Together with the RoboTwin 2.0 results, it also shows that the execution interface is not tied to a single benchmark or task taxonomy. 
+
+5.4 RMBench Memory-Dependent Tasks 
+
+To test the execution interface in settings where the next action depends on earlier interaction history, we additionally evaluate our task-adapted π0.5 policies on the four M (n) tasks in RMBench [20]. Table 4 compares our completed evaluation with the RMBench policy results reported by Chen et al. [20]. The four-task macro-average of our model is 12.5%; all comparison columns are published RMBench results and are not re-estimated from our RoboTwin runs. 12 RMBench task DP ACT π0.5 X-VLA Ours                          
+
+> Battery Try 10 19 16 26 19 Blocks Ranking Try 10 0619Cover Blocks 00026
+> Press Button 000016 Macro average 5.0 4.8 5.5 7.3 12.5
+
+Table 4 Success rates (%) on the four memory-dependent M (n) tasks of RMBench. DP, ACT, π0.5, and X-VLA are the published RMBench results; Ours is our task-adapted subtask-level policy evaluation. 
+
+5.5 AgentLoop Ablations 
+
+We isolate three mechanisms of the execution loop: semantic subtask conditioning, intermediate verification, and the ability to continue an unfinished subtask with another bounded action chunk. Each configuration is evaluated on the same 5,000 RoboTwin 2.0 episodes (50 tasks and 100 episodes per task), and success is determined only by the benchmark terminal evaluator. The Full configuration retains the complete plan– execute–verify loop. In w/o Verify , the reference subtask sequence and total action budget are retained, but the system executes the predetermined chunks without checking intermediate outcomes. In w/o Subtask , the same total budget is retained, but every chunk receives only the original whole-task instruction. Finally, One chunk/subtask keeps the subtask sequence but allocates exactly one 32-step action chunk to each subtask and performs no intermediate retry.                                                                                                                                                                                                                                                    
+
+> Task Full w/o V. w/o S. 1 chunk Task Full w/o V. w/o S. 1 chunk
+> Adjust Bottle 98 85 59 0Place Can Basket 70 29 32 9Beat Block Hammer 100 33 66Place Cans Plasticbox 95 37 19 10 Blocks Ranking RGB 93 942Place Container Plate 98 88 63 53 Blocks Ranking Size 64 15 18 4Place Dual Shoes 80 61 58 27 Click Alarmclock 97 100 100 67 Place Empty Cup 100 89 50 52 Click Bell 100 100 67 100 Place Fan 90 35 24 10 Dump Bin Bigbin 93 68 50 29 Place Mouse Pad 68 910 2Grab Roller 99 100 33 54 Place Object Basket 83 18 15 5Handover Block 74 17 17 5Place Object Scale 89 49 37 16 Handover Mic 100 58 15 16 Place Object Stand 92 82 70 47 Hanging Mug 38 612 2Place Phone Stand 84 38 32 12 Lift Pot 95 67 33 0Place Shoe 93 70 53 31 Move Can Pot 61 42 50 16 Press Stapler 90 49 36 17 Move Pillbottle Pad 87 34 26 10 Put Bottles Dustbin 87 25 18 6Move Playingcard Away 95 100 00Put Object Cabinet 83 40 35 13 Move Stapler Pad 66 43 48 16 Rotate QRcode 92 36 22 10 Open Laptop 91 33 67 17 Scan Object 77 882Open Microwave 49 31 44 11 Shake Bottle Horizontally 98 81 52 41 Pick Diverse Bottles 84 21 17 6Shake Bottle 98 83 54 44 Pick Dual Bottles 92 67 33 27 Stack Blocks Three 92 000Place A2B Left 90 35 24 10 Stack Blocks Two 100 86 44 46 Place A2B Right 90 22 14 6Stack Bowls Three 82 27 23 8Place Bread Basket 82 33 29 10 Stack Bowls Two 94 49 30 16 Place Bread Skillet 88 34 25 10 Stamp Seal 84 62 56 27 Place Burger Fries 95 83 66 48 Turn Switch 70 22 24 0
+> Macro avg. 86.20 48.2 34.4 19.5 Macro avg. 86.20 48.2 34.4 19.5
+
+Table 5 Task-level AgentLoop ablation results (success rate, %) on the 50 RoboTwin 2.0 tasks. “w/o V.” removes intermediate verification, “w/o S.” removes semantic subtask conditioning, and “1 chunk” gives each subtask one 32-step action chunk. The four macro averages are Full, w/o Verify, w/o Subtask, and One chunk/subtask, respectively. 
+
+Figure 3(c) shows that the three mechanisms contribute at different levels. Preserving the full budget without verification recovers part of the Full configuration, but still loses 38.0 points. The execution budget required by a semantic subtask varies with the initial state and the realized motion, so a fixed open-loop allocation cannot adapt the number of chunks to observed progress: it may advance before the subtask is complete or continue executing after sufficient progress. Replacing the active subtask with the original task instruction increases the gap to 51.8 points: the low-level policy must infer both the current stage and the required motion from a long instruction at every chunk. The one-chunk result further shows that a semantic decomposition alone is not sufficient; many valid subtasks require more than one bounded action block. Together, these 13 results support the central design choice of combining explicit subtasks with post-action verification and adaptive continuation. 
+
+5.6 Qualitative Execution Examples 
+
+Figure 4 shows three recorded RoboTwin 2.0 executions that span object reorientation, multi-object stacking, and articulated switch interaction. In each row, the planner converts the task instruction into a short sequence of visually grounded subgoals, and the adapted VLA advances the scene from the initial observation through the corresponding intermediate states. The final state in every row is independently accepted by the environment evaluator. Adjust Bottle     
+
+> Use the right arm to grab the plastic soda bottle upright.
+> Pick up bottle → Lift above table → Move upright Initial Pick up Lift Upright
+> ✓
+
+Stack Three Blocks     
+
+> Move the red, green, and blue blocks to the center and stack them.
+> Red to center → Green on red → Blue on green Initial Red centered Green stacked Blue stacked
+> ✓
+
+Turn Switch         
+
+> Use the left arm to press the red ON/OFF toggle switch.
+> Close gripper → Press switch
+> Initial Gripper ready Press Completed
+> ✓
+> TASK AND PLAN INITIAL SUBGOAL 1 SUBGOAL 2 FINAL
+> Figure 4
+
+Three randomly selected successful execution examples on RoboTwin 2.0. 
+
+# 6 Limitations 
+
+EmbodiedSkills separates high-level agent decisions from low-level action generation, but overall performance remains bounded by both layers. The RoboTwin 2.0 instantiation uses task-adapted low-level VLA policies. Maintaining specialists for individual tasks increases training, storage, and deployment cost relative to a single generalist policy, motivating more capable subgoal-conditioned generalist VLA policies. The guarded loop makes intermediate decisions and failures explicit, but its quality still depends on the cali-bration of planning, verification, and action generation. Additional VLM calls and post-action observations also introduce latency relative to a single-pass action policy. Optional online adaptation inherits the cost of interactive robot experience, making efficient targeted adaptation an important direction for deployment. Explicit contracts prevent invalid state transitions, but they do not by themselves guarantee that a semanti-cally plausible model decision is correct. An incorrect grounding or subgoal can satisfy the required schema and still lead execution toward the wrong physical state. Verification is similarly limited when task progress is occluded, visually ambiguous, or depends on properties that cannot be inferred from the available views. Ro-bust operation therefore continues to depend on the quality and calibration of the underlying vision–language components. Finally, modular adaptation introduces a coordination trade-off. Separate planner, scheduler, verifier, and VLA policy adapters make each component easier to specialize, but their behavior must remain compatible at shared interface boundaries. Long episodes can also accumulate small planning and execution errors, 14 increasing the number of observations, retries, and model calls before completion. These costs are intrinsic considerations when selecting the level of decomposition for a particular robot and task distribution. 
+
+# 7 Conclusion 
+
+We presented EmbodiedSkills, a skill-oriented framework for turning VLA action models into closed-loop embodied agents. Its central design separates a policy that proposes structured skill decisions from a runtime that enforces prerequisites, artifact freshness, action validity, and legal state transitions. The resulting AgentLoop repeatedly observes, plans, checks readiness, executes bounded action chunks, verifies progress, and recovers from failures while keeping the planner, verifier, low-level VLA policy, and environment adapter independently replaceable and adaptable. The same decomposition provides a direct training path for the agentic layer. Deployment-consistent traces supervise semantic planning, phase-aware skill selection, and post-action verification, while subtask demon-strations adapt the low-level VLA policy behind a stable execution interface. High-level components can therefore be improved with a frozen low-level VLA policy, and that policy can be replaced or specialized without redefining the surrounding loop. Optional online adaptation remains available through the same structured trajectory interface when interactive feedback is appropriate. With task-adapted π0.5 policies, our RoboTwin 2.0 instantiation achieves 86.20% average success across 50 tasks. Our LIBERO VLA policy instantiation reaches 97.40% across the four suites, and our four-task RM-Bench evaluation reaches 12.5% average success on memory-dependent tasks. Beyond these execution-layer results, EmbodiedSkills provides an explicit trajectory and state interface for diagnosing agent behavior and for training individual components or applying optional online adaptation. The results show that a common subgoal-conditioned execution interface can support strong action policies across two distinct manipulation benchmarks while preserving the explicit control structure needed by a closed-loop agent. We hope this separation of learned decisions from executable runtime semantics provides a practical foundation for more reliable and general embodied agents. 
+
+# References 
+
+[1] Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Joseph Dabis, Chelsea Finn, Keerthana Gopalakrishnan, Karol Hausman, Alexander Herzog, Jasmine Hsu, Julian Ibarz, Brian Ichter, Alex Irpan, Tomas Jackson, Sally Jesmonth, Nikhil Joshi, Ryan Julian, Dmitry Kalashnikov, Yuheng Kuang, Isabel Leal, Kuang-Huei Lee, Sergey Levine, Yao Lu, Utsav Malla, Deeksha Manjunath, Igor Mordatch, Ofir Nachum, Carolina Parada, Jodilyn Peralta, Emily Perez, Karl Pertsch, Jornell Quiambao, Kanishka Rao, Michael S. Ryoo, Grecia Salazar, Pannag R. Sanketi, Kevin Sayed, Jaspiar Singh, Sumedh Sontakke, Austin Stone, Clayton Tan, Huong Tran, Vincent Vanhoucke, Steve Vega, Quan H. Vuong, Fei Xia, Ted Xiao, Peng Xu, Sichun Xu, Tianhe Yu, and Brianna Zitkovich. RT-1: Robotics Transformer for Real-World Control at Scale. In Proceedings of Robotics: Science and Systems , Daegu, Republic of Korea, July 2023. [2] Brianna Zitkovich, Tianhe Yu, Sichun Xu, Peng Xu, Ted Xiao, Fei Xia, Jialin Wu, Paul Wohlhart, Stefan Welker, Ayzaan Wahid, Quan Vuong, Vincent Vanhoucke, Huong Tran, Radu Soricut, Anikait Singh, Jaspiar Singh, Pierre Sermanet, Pannag R. Sanketi, Grecia Salazar, Michael S. Ryoo, Krista Reymann, Kanishka Rao, Karl Pertsch, Igor Mordatch, Henryk Michalewski, Yao Lu, Sergey Levine, Lisa Lee, Tsang-Wei Edward Lee, Isabel Leal, Yuheng Kuang, Dmitry Kalashnikov, Ryan Julian, Nikhil J. Joshi, Alex Irpan, Brian Ichter, Jasmine Hsu, Alexander Herzog, Karol Hausman, Keerthana Gopalakrishnan, Chuyuan Fu, Pete Florence, Chelsea Finn, Kumar Avinava Dubey, Danny Driess, Tianli Ding, Krzysztof Marcin Choromanski, Xi Chen, Yevgen Chebotar, Justice Carbajal, Noah Brown, Anthony Brohan, Montserrat Gonzalez Arenas, and Kehang Han. Rt-2: Vision-language-action models transfer web knowledge to robotic control. In Jie Tan, Marc Toussaint, and Kourosh Darvish, editors, Proceedings of The 7th Conference on Robot Learning , volume 229 of Proceedings of Machine Learning Research , pages 2165–2183. PMLR, 06–09 Nov 2023. [3] Embodiment Collaboration, Abby O’Neill, Abdul Rehman, Abhinav Gupta, Abhiram Maddukuri, Abhishek Gupta, Abhishek Padalkar, Abraham Lee, Acorn Pooley, Agrim Gupta, Ajay Mandlekar, Ajinkya Jain, Albert Tung, Alex Bewley, Alex Herzog, Alex Irpan, Alexander Khazatsky, Anant Rai, Anchit Gupta, Andrew Wang, Andrey Kolobov, Anikait Singh, Animesh Garg, Aniruddha Kembhavi, Annie Xie, Anthony Brohan, Antonin 
+
+15 Raffin, Archit Sharma, Arefeh Yavary, Arhan Jain, Ashwin Balakrishna, Ayzaan Wahid, Ben Burgess-Limerick, Beomjoon Kim, Bernhard Schölkopf, Blake Wulfe, Brian Ichter, Cewu Lu, Charles Xu, Charlotte Le, Chelsea Finn, Chen Wang, Chenfeng Xu, Cheng Chi, Chenguang Huang, Christine Chan, Christopher Agia, Chuer Pan, Chuyuan Fu, Coline Devin, Danfei Xu, Daniel Morton, Danny Driess, Daphne Chen, Deepak Pathak, Dhruv Shah, Dieter Büchler, Dinesh Jayaraman, Dmitry Kalashnikov, Dorsa Sadigh, Edward Johns, Ethan Foster, Fangchen Liu, Federico Ceola, Fei Xia, Feiyu Zhao, Felipe Vieira Frujeri, Freek Stulp, Gaoyue Zhou, Gaurav S. Sukhatme, Gautam Salhotra, Ge Yan, Gilbert Feng, Giulio Schiavi, Glen Berseth, Gregory Kahn, Guangwen Yang, Guanzhi Wang, Hao Su, Hao-Shu Fang, Haochen Shi, Henghui Bao, Heni Ben Amor, Henrik I Christensen, Hiroki Furuta, Homanga Bharadhwaj, Homer Walke, Hongjie Fang, Huy Ha, Igor Mordatch, Ilija Radosavovic, Isabel Leal, Jacky Liang, Jad Abou-Chakra, Jaehyung Kim, Jaimyn Drake, Jan Peters, Jan Schneider, Jasmine Hsu, Jay Vakil, Jeannette Bohg, Jeffrey Bingham, Jeffrey Wu, Jensen Gao, Jiaheng Hu, Jiajun Wu, Jialin Wu, Jiankai Sun, Jianlan Luo, Jiayuan Gu, Jie Tan, Jihoon Oh, Jimmy Wu, Jingpei Lu, Jingyun Yang, Jitendra Malik, João Silvério, Joey Hejna, Jonathan Booher, Jonathan Tompson, Jonathan Yang, Jordi Salvador, Joseph J. Lim, Jun-hyek Han, Kaiyuan Wang, Kanishka Rao, Karl Pertsch, Karol Hausman, Keegan Go, Keerthana Gopalakrishnan, Ken Goldberg, Kendra Byrne, Kenneth Oslund, Kento Kawaharazuka, Kevin Black, Kevin Lin, Kevin Zhang, Kiana Ehsani, Kiran Lekkala, Kirsty Ellis, Krishan Rana, Krishnan Srinivasan, Kuan Fang, Kunal Pratap Singh, Kuo-Hao Zeng, Kyle Hatch, Kyle Hsu, Laurent Itti, Lawrence Yunliang Chen, Lerrel Pinto, Li Fei-Fei, Liam Tan, Linxi Jim Fan, Lionel Ott, Lisa Lee, Luca Weihs, Magnum Chen, Marion Lepert, Marius Memmel, Masayoshi Tomizuka, Masha Itkina, Mateo Guaman Castro, Max Spero, Maximilian Du, Michael Ahn, Michael C. Yip, Mingtong Zhang, Mingyu Ding, Minho Heo, Mohan Kumar Srirama, Mohit Sharma, Moo Jin Kim, Muham-mad Zubair Irshad, Naoaki Kanazawa, Nicklas Hansen, Nicolas Heess, Nikhil J Joshi, Niko Suenderhauf, Ning Liu, Norman Di Palo, Nur Muhammad Mahi Shafiullah, Oier Mees, Oliver Kroemer, Osbert Bastani, Pannag R Sanketi, Patrick Tree Miller, Patrick Yin, Paul Wohlhart, Peng Xu, Peter David Fagan, Peter Mitrano, Pierre Sermanet, Pieter Abbeel, Priya Sundaresan, Qiuyu Chen, Quan Vuong, Rafael Rafailov, Ran Tian, Ria Doshi, Roberto Martín-Martín, Rohan Baijal, Rosario Scalise, Rose Hendrix, Roy Lin, Runjia Qian, Ruohan Zhang, Rus-sell Mendonca, Rutav Shah, Ryan Hoque, Ryan Julian, Samuel Bustamante, Sean Kirmani, Sergey Levine, Shan Lin, Sherry Moore, Shikhar Bahl, Shivin Dass, Shubham Sonawani, Shubham Tulsiani, Shuran Song, Sichun Xu, Siddhant Haldar, Siddharth Karamcheti, Simeon Adebola, Simon Guist, Soroush Nasiriany, Stefan Schaal, Stefan Welker, Stephen Tian, Subramanian Ramamoorthy, Sudeep Dasari, Suneel Belkhale, Sungjae Park, Suraj Nair, Suvir Mirchandani, Takayuki Osa, Tanmay Gupta, Tatsuya Harada, Tatsuya Matsushima, Ted Xiao, Thomas Kollar, Tianhe Yu, Tianli Ding, Todor Davchev, Tony Z. Zhao, Travis Armstrong, Trevor Darrell, Trinity Chung, Vidhi Jain, Vikash Kumar, Vincent Vanhoucke, Vitor Guizilini, Wei Zhan, Wenxuan Zhou, Wolfram Burgard, Xi Chen, Xiangyu Chen, Xiaolong Wang, Xinghao Zhu, Xinyang Geng, Xiyuan Liu, Xu Liangwei, Xuanlin Li, Yansong Pang, Yao Lu, Yecheng Jason Ma, Yejin Kim, Yevgen Chebotar, Yifan Zhou, Yifeng Zhu, Yilin Wu, Ying Xu, Yixuan Wang, Yonatan Bisk, Yongqiang Dou, Yoonyoung Cho, Youngwoon Lee, Yuchen Cui, Yue Cao, Yueh-Hua Wu, Yujin Tang, Yuke Zhu, Yunchu Zhang, Yunfan Jiang, Yunshuang Li, Yunzhu Li, Yusuke Iwasawa, Yutaka Matsuo, Zehan Ma, Zhuo Xu, Zichen Jeff Cui, Zichen Zhang, Zipeng Fu, and Zipeng Lin. Open x-embodiment: Robotic learning datasets and rt-x models. In 2024 IEEE International Conference on Robotics and Automation (ICRA) , pages 6892–6903. IEEE, 2024. [4] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakrishna, Suraj Nair, Rafael Rafailov, Ethan P Foster, Pannag R Sanketi, Quan Vuong, Thomas Kollar, Benjamin Burchfiel, Russ Tedrake, Dorsa Sadigh, Sergey Levine, Percy Liang, and Chelsea Finn. Openvla: An open-source vision-language-action model. In Pulkit Agrawal, Oliver Kroemer, and Wolfram Burgard, editors, Proceedings of The 8th Conference on Robot Learning , volume 270 of Proceedings of Machine Learning Research , pages 2679–2713. PMLR, 06–09 Nov 2025. [5] Dibya Ghosh, Homer Rich Walke, Karl Pertsch, Kevin Black, Oier Mees, Sudeep Dasari, Joey Hejna, Tobias Kreiman, Charles Xu, Jianlan Luo, You Liang Tan, Lawrence Yunliang Chen, Quan Vuong, Ted Xiao, Pannag R. Sanketi, Dorsa Sadigh, Chelsea Finn, and Sergey Levine. Octo: An Open-Source Generalist Robot Policy. In 
+
+Proceedings of Robotics: Science and Systems , Delft, Netherlands, July 2024. [6] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Lucy Xiaoyang Shi, James Tanner, Quan Vuong, Anna Walling, Haohuan Wang, and Ury Zhilinsky. π0: A vision-language-action flow model for general robot control, 2024. [7] Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail, Michael Robert Equi, Chelsea Finn, Niccolo Fusai, Manuel Y. Galliker, Dibya Ghosh, Lachy Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Devin LeBlanc, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Allen Z. Ren, Lucy Xiaoyang Shi, Laura Smith, Jost Tobias Springenberg, 
+
+16 Kyle Stachowicz, James Tanner, Quan Vuong, Homer Walke, Anna Walling, Haohuan Wang, Lili Yu, and Ury Zhilinsky. π0.5: a vision-language-action model with open-world generalization. In Joseph Lim, Shuran Song, and Hae-Won Park, editors, Proceedings of The 9th Conference on Robot Learning , volume 305 of Proceedings of Machine Learning Research , pages 17–40. PMLR, 27–30 Sep 2025. [8] Yao Mu, Tianxing Chen, Zanxin Chen, Shijia Peng, Zhiqian Lan, Zeyu Gao, Zhixuan Liang, Qiaojun Yu, Yude Zou, Mingkun Xu, Lunkai Lin, Zhiqiang Xie, Mingyu Ding, and Ping Luo. Robotwin: Dual-arm robot benchmark with generative digital twins. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 27649–27660, June 2025. [9] Tianxing Chen, Zanxin Chen, Baijun Chen, Zijian Cai, Yibin Liu, Zixuan Li, Qiwei Liang, Xianliang Lin, Yiheng Ge, Zhenyu Gu, Weiliang Deng, Yubin Guo, Tian Nian, Xuanbing Xie, Qiangyu Chen, Kailun Su, Tianling Xu, Guodong Liu, Mengkang Hu, Huan ang Gao, Kaixuan Wang, Zhixuan Liang, Yusen Qin, Xiaokang Yang, Ping Luo, and Yao Mu. Robotwin 2.0: A scalable data generator and benchmark with strong domain randomization for robust bimanual robotic manipulation, 2025. [10] Brian Ichter, Anthony Brohan, Yevgen Chebotar, Chelsea Finn, Karol Hausman, Alexander Herzog, Daniel Ho, Julian Ibarz, Alex Irpan, Eric Jang, Ryan Julian, Dmitry Kalashnikov, Sergey Levine, Yao Lu, Carolina Parada, Kanishka Rao, Pierre Sermanet, Alexander T. Toshev, Vincent Vanhoucke, Fei Xia, Ted Xiao, Peng Xu, Mengyuan Yan, Noah Brown, Michael Ahn, Omar Cortes, Nicolas Sievers, Clayton Tan, Sichun Xu, Diego Reyes, Jarek Rettinghouse, Jornell Quiambao, Peter Pastor, Linda Luu, Kuang-Huei Lee, Yuheng Kuang, Sally Jesmonth, Nikhil J. Joshi, Kyle Jeffrey, Rosario Jauregui Ruano, Jasmine Hsu, Keerthana Gopalakrishnan, Byron David, Andy Zeng, and Chuyuan Kelly Fu. Do as i can, not as i say: Grounding language in robotic affordances. In Karen Liu, Dana Kulic, and Jeff Ichnowski, editors, Proceedings of The 6th Conference on Robot Learning ,volume 205 of Proceedings of Machine Learning Research , pages 287–318. PMLR, 14–18 Dec 2023. [11] Wenlong Huang, Chen Wang, Ruohan Zhang, Yunzhu Li, Jiajun Wu, and Li Fei-Fei. Voxposer: Composable 3d value maps for robotic manipulation with language models, 2023. [12] Jens Kober, J. Andrew Bagnell, and Jan Peters. Reinforcement learning in robotics: A survey. The International Journal of Robotics Research , 32(11):1238–1274, 2013. [13] Chen Tang, Ben Abbatematteo, Jiaheng Hu, Rohan Chandra, Roberto Martín-Martín, and Peter Stone. Deep reinforcement learning for robotics: A survey of real-world successes, 2024. [14] Richard S. Sutton, Doina Precup, and Satinder Singh. Between mdps and semi-mdps: A framework for temporal abstraction in reinforcement learning. Artificial Intelligence , 112(1–2):181–211, 1999. [15] T. G. Dietterich. Hierarchical reinforcement learning with the maxq value function decomposition. Journal of Artificial Intelligence Research , 13:227–303, 2000. [16] Youngwoon Lee, Joseph J Lim, Anima Anandkumar, and Yuke Zhu. Adversarial skill chaining for long-horizon robot manipulation via terminal state regularization. In Aleksandra Faust, David Hsu, and Gerhard Neumann, editors, Proceedings of the 5th Conference on Robot Learning , volume 164 of Proceedings of Machine Learning Research , pages 406–416. PMLR, 08–11 Nov 2022. [17] Matteo Iovino, Edvards Scukins, Jonathan Styrud, Petter Ögren, and Christian Smith. A survey of behavior trees in robotics and ai, 2020. [18] Lin Li, Qihang Zhang, Yiming Luo, Shuai Yang, Ruilin Wang, Fei Han, Mingrui Yu, Zelin Gao, Nan Xue, Xing Zhu, Yujun Shen, and Yinghao Xu. Causal world modeling for robot control. arXiv preprint arXiv:2601.21998 ,2026. [19] Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. LIBERO: Benchmarking knowledge transfer for lifelong robot learning. In Thirty-seventh Conference on Neural Information Processing Systems Datasets and Benchmarks Track , 2023. [20] Tianxing Chen, Yuran Wang, Mingleyang Li, Yan Qin, Hao Shi, Zixuan Li, Yifan Hu, Yingsheng Zhang, Kaixuan Wang, Yue Chen, Hongcheng Wang, Junjie Wang, Tianhang Yang, Renjing Xu, Ruihai Wu, Yao Mu, Yaodong Yang, Hao Dong, and Ping Luo. Rmbench: Memory-dependent robotic manipulation benchmark with insights into policy design, 2026. URL https://arxiv.org/abs/2603.01229 .[21] Qiuyue Wang, Mingsheng Li, Jian Guan, Jinhui Ye, Sicheng Xie, Yitao Liu, Junhao Chen, Zhixuan Liang, Jie Zhang, Xintong Hu, Xuhong Huang, Pei Lin, Junyang Lin, Dayiheng Liu, Shuai Bai, Jingren Zhou, Jiazhao Zhang, Haoqi Yuan, Gengze Zhou, Hang Yin, Ye Wang, Yiyang Huang, Zixing Lei, Wujian Peng, Delin Chen, Yingming Zheng, Jingyang Fan, Xianwei Zhuang, Xin Zhou, Haoyang Li, Anzhe Chen, Tong Zhang, Xuejing 
+
+17 Liu, Yuchong Sun, Ruizhe Chen, Zhaohai Li, Chenxu Lü, Zhibo Yang, Tao Yu, and Xionghui Chen. Qwen-vla: Unifying vision-language-action modeling across tasks, environments, and robot embodiments, 2026. [22] Cheng Chi, Zhenjia Xu, Siyuan Feng, Eric Cousineau, Yilun Du, Benjamin Burchfiel, Russ Tedrake, and Shuran Song. Diffusion policy: Visuomotor policy learning via action diffusion. The International Journal of Robotics Research , 44(10–11):1684–1704, 2024. [23] Tony Z. Zhao, Vikash Kumar, Sergey Levine, and Chelsea Finn. Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware. In Proceedings of Robotics: Science and Systems , Daegu, Republic of Korea, July 2023. [24] Junjie Wen, Yichen Zhu, Jinming Li, Zhibin Tang, Chaomin Shen, and Feifei Feng. Dexvla: Vision-language model with plug-in diffusion expert for general robot control. In Joseph Lim, Shuran Song, and Hae-Won Park, editors, Proceedings of The 9th Conference on Robot Learning , volume 305 of Proceedings of Machine Learning Research , pages 3094–3114. PMLR, 27–30 Sep 2025. [25] Yixiao Wang, Yifei Zhang, Mingxiao Huo, Thomas Tian, Xiang Zhang, Yichen Xie, Chenfeng Xu, Pengliang Ji, Wei Zhan, Mingyu Ding, and Masayoshi Tomizuka. Sparse diffusion policy: A sparse, reusable, and flexible policy for robot learning. In Pulkit Agrawal, Oliver Kroemer, and Wolfram Burgard, editors, Proceedings of The 8th Conference on Robot Learning , volume 270 of Proceedings of Machine Learning Research , pages 649–665. PMLR, 06–09 Nov 2025. [26] Baiye Cheng, Tianhai Liang, Suning Huang, Maanping Shao, Feihong Zhang, Botian Xu, Zhengrong Xue, and Huazhe Xu. Moe-dp: An moe-enhanced diffusion policy for robust long-horizon robotic manipulation with skill decomposition and failure recovery, 2025. [27] Ce Hao, Xuanran Zhai, Yaohua Liu, and Harold Soh. Abstracting robot manipulation skills via mixture-of-experts diffusion policies, 2026. [28] Likui Zhang, Tao Tang, Zhihao Zhan, Xiuwei Chen, Zisheng Chen, Jianhua Han, Jiangtong Zhu, Pei Xu, Hang Xu, Hefeng Wu, Liang Lin, and Xiaodan Liang. Atomicvla: Unlocking the potential of atomic skill learning in robots. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) ,pages 20743–20754, June 2026. [29] An Dinh Vuong, Tuan Van Vo, Abdullah Sohail, Haoran Ding, Liang Ma, Xiaodan Liang, Anqing Duan, Ivan Laptev, and Ian Reid. World2act: Latent action post-training from world model dynamics, 2026. [30] Tianyuan Yuan, Zibin Dong, Yicheng Liu, and Hang Zhao. Fast-wam: Do world action models need test-time future imagination?, 2026. [31] Wenlong Huang, Fei Xia, Ted Xiao, Harris Chan, Jacky Liang, Pete Florence, Andy Zeng, Jonathan Tompson, Igor Mordatch, Yevgen Chebotar, Pierre Sermanet, Noah Brown, Tomas Jackson, Linda Luu, Sergey Levine, Karol Hausman, and Brian Ichter. Inner monologue: Embodied reasoning through planning with language models, 2022. [32] Jacky Liang, Wenlong Huang, Fei Xia, Peng Xu, Karol Hausman, Brian Ichter, Pete Florence, and Andy Zeng. Code as policies: Language model programs for embodied control, 2023. [33] Danny Driess, Fei Xia, Mehdi S. M. Sajjadi, Corey Lynch, Aakanksha Chowdhery, Brian Ichter, Ayzaan Wahid, Jonathan Tompson, Quan Vuong, Tianhe Yu, Wenlong Huang, Yevgen Chebotar, Pierre Sermanet, Daniel Duck-worth, Sergey Levine, Vincent Vanhoucke, Karol Hausman, Marc Toussaint, Klaus Greff, Andy Zeng, Igor Mordatch, and Pete Florence. PaLM-e: An embodied multimodal language model. In Andreas Krause, Emma Brunskill, Kyunghyun Cho, Barbara Engelhardt, Sivan Sabato, and Jonathan Scarlett, editors, Proceedings of the 40th International Conference on Machine Learning , volume 202 of Proceedings of Machine Learning Research ,pages 8469–8488. PMLR, 23–29 Jul 2023. [34] Xiaoqi Li, Mingxu Zhang, Yiran Geng, Haoran Geng, Yuxing Long, Yan Shen, Renrui Zhang, Jiaming Liu, and Hao Dong. Manipllm: Embodied multimodal large language model for object-centric robotic manipulation. In 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 18061– 18070, June 2024. [35] Fangchen Liu, Kuan Fang, Pieter Abbeel, and Sergey Levine. Moka: Open-world robotic manipulation through mark-based visual prompting, 2024. [36] Pengyuan Guo, Zhonghao Mai, Zhengtong Xu, Kaidi Zhang, Quan Khanh Luu, Heng Zhang, Zichen Miao, Arash Ajoudani, Zachary Kingston, Qiang Qiu, and Yu She. Planar: Planning-language-grounded agentic reasoning for robot manipulation, 2026. 
+
+18 [37] Dmytro Kuzmenko and Nadiya Shvai. Moira: Modular instruction routing architecture for multi-task robotics. 
+
+Neurocomputing , 674:132962, 2026. [38] Ruiying Li, Yunlang Zhou, YuYao Zhu, Kylin Chen, Jingyuan Wang, Sukai Wang, Kongtao Hu, Minhui Yu, Bowen Jiang, Zhan Su, Jiayao Ma, Xin He, Yongjian Shen, Yang Yang, Guanghui Ren, Maoqing Yao, Wenhao Wang, and Yao Mu. Roboclaw: An agentic framework for scalable long-horizon robotic tasks, 2026. [39] Tianshuo Yang, Guanyu Chen, Yutian Chen, Zhixuan Liang, Yitian Liu, Zanxin Chen, Chunpu Xu, Haotian Liang, Jiangmiao Pang, Yao Mu, and Ping Luo. Hivla: A visual-grounded-centric hierarchical embodied manip-ulation system, 2026. [40] Pierre-Luc Bacon, Jean Harb, and Doina Precup. The option-critic architecture. Proceedings of the AAAI Conference on Artificial Intelligence , 31(1), 2017. [41] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, Y. K. Li, Y. Wu, and Daya Guo. Deepseekmath: Pushing the limits of mathematical reasoning in open language models, 2024. [42] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, Xiaokang Zhang, Xingkai Yu, Yu Wu, Z. F. Wu, Zhibin Gou, Zhihong Shao, Zhuoshu Li, Ziyi Gao, Aixin Liu, Bing Xue, Bingxuan Wang, Bochao Wu, Bei Feng, Chengda Lu, Chenggang Zhao, Chengqi Deng, Chong Ruan, Damai Dai, Deli Chen, Dongjie Ji, Erhang Li, Fangyun Lin, Fucong Dai, Fuli Luo, Guangbo Hao, Guanting Chen, Guowei Li, H. Zhang, Hanwei Xu, Honghui Ding, Huazuo Gao, Hui Qu, Hui Li, Jianzhong Guo, Jiashi Li, Jingchang Chen, Jingyang Yuan, Jinhao Tu, Junjie Qiu, Junlong Li, J. L. Cai, Jiaqi Ni, Jian Liang, Jin Chen, Kai Dong, Kai Hu, Kaichao You, Kaige Gao, Kang Guan, Kexin Huang, Kuai Yu, Lean Wang, Lecong Zhang, Liang Zhao, Litong Wang, Liyue Zhang, Lei Xu, Leyi Xia, Mingchuan Zhang, Minghua Zhang, Minghui Tang, Mingxu Zhou, Meng Li, Miaojun Wang, Mingming Li, Ning Tian, Panpan Huang, Peng Zhang, Qiancheng Wang, Qinyu Chen, Qiushi Du, Ruiqi Ge, Ruisong Zhang, Ruizhe Pan, Runji Wang, R. J. Chen, R. L. Jin, Ruyi Chen, Shanghao Lu, Shangyan Zhou, Shanhuang Chen, Shengfeng Ye, Shiyu Wang, Shuiping Yu, Shunfeng Zhou, Shuting Pan, S. S. Li, Shuang Zhou, Shaoqing Wu, Tao Yun, Tian Pei, Tianyu Sun, T. Wang, Wangding Zeng, Wen Liu, Wenfeng Liang, Wenjun Gao, Wenqin Yu, Wentao Zhang, W. L. Xiao, Wei An, Xiaodong Liu, Xiaohan Wang, Xiaokang Chen, Xiaotao Nie, Xin Cheng, Xin Liu, Xin Xie, Xingchao Liu, Xinyu Yang, Xinyuan Li, Xuecheng Su, Xuheng Lin, X. Q. Li, Xiangyue Jin, Xiaojin Shen, Xiaosha Chen, Xiaowen Sun, Xiaoxiang Wang, Xinnan Song, Xinyi Zhou, Xianzu Wang, Xinxia Shan, Y. K. Li, Y. Q. Wang, Y. X. Wei, Yang Zhang, Yanhong Xu, Yao Li, Yao Zhao, Yaofeng Sun, Yaohui Wang, Yi Yu, Yichao Zhang, Yifan Shi, Yiliang Xiong, Ying He, Yishi Piao, Yisong Wang, Yixuan Tan, Yiyang Ma, Yiyuan Liu, Yongqiang Guo, Yuan Ou, Yuduan Wang, Yue Gong, Yuheng Zou, Yujia He, Yunfan Xiong, Yuxiang Luo, Yuxiang You, Yuxuan Liu, Yuyang Zhou, Y. X. Zhu, Yanping Huang, Yaohui Li, Yi Zheng, Yuchen Zhu, Yunxian Ma, Ying Tang, Yukun Zha, Yuting Yan, Z. Z. Ren, Zehui Ren, Zhangli Sha, Zhe Fu, Zhean Xu, Zhenda Xie, Zhengyan Zhang, Zhewen Hao, Zhicheng Ma, Zhigang Yan, Zhiyu Wu, Zihui Gu, Zijia Zhu, Zijun Liu, Zilin Li, Ziwei Xie, Ziyang Song, Zizheng Pan, Zhen Huang, Zhipeng Xu, Zhongyu Zhang, and Zhen Zhang. DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning. Nature , 645(8081):633–638, 2025. [43] Yuxiang Wei, Olivier Duchenne, Jade Copet, Quentin Carbonneaux, Lingming Zhang, Daniel Fried, Gabriel Synnaeve, Rishabh Singh, and Sida I. Wang. Swe-rl: Advancing llm reasoning via reinforcement learning on open software evolution, 2025. [44] Jiayi Pan, Xingyao Wang, Graham Neubig, Navdeep Jaitly, Heng Ji, Alane Suhr, and Yizhe Zhang. Training software engineering agents and verifiers with swe-gym, 2025. [45] Cheng Qian, Emre Can Acikgoz, Qi He, Hongru Wang, Xiusi Chen, Dilek Hakkani-Tür, Gokhan Tur, and Heng Ji. Toolrl: Reward is all tool learning needs, 2025. [46] Zhepei Wei, Wenlin Yao, Yao Liu, Weizhi Zhang, Qin Lu, Liang Qiu, Changlong Yu, Puyang Xu, Chao Zhang, Bing Yin, Hyokun Yun, and Lihong Li. Webagent-r1: Training web agents via end-to-end multi-turn reinforcement learning, 2025. [47] Zihan Wang, Kangrui Wang, Qineng Wang, Pingyue Zhang, Linjie Li, Zhengyuan Yang, Xing Jin, Kefan Yu, Minh Nhat Nguyen, Licheng Liu, Eli Gottlieb, Yiping Lu, Kyunghyun Cho, Jiajun Wu, Li Fei-Fei, Lijuan Wang, Yejin Choi, and Manling Li. Ragen: Understanding self-evolution in llm agents via multi-turn reinforcement learning, 2025. [48] Dmitry Kalashnikov, Alex Irpan, Peter Pastor, Julian Ibarz, Alexander Herzog, Eric Jang, Deirdre Quillen, Ethan Holly, Mrinal Kalakrishnan, Vincent Vanhoucke, and Sergey Levine. Qt-opt: Scalable deep reinforcement learning for vision-based robotic manipulation, 2018. 
+
+19 [49] Abhishek Gupta, Vikash Kumar, Corey Lynch, Sergey Levine, and Karol Hausman. Relay policy learning: Solving long-horizon tasks via imitation and reinforcement learning. In Leslie Pack Kaelbling, Danica Kragic, and Komei Sugiura, editors, Proceedings of the Conference on Robot Learning , volume 100 of Proceedings of Machine Learning Research , pages 1025–1037. PMLR, 30 Oct–01 Nov 2020. [50] Ashvin Nair, Abhishek Gupta, Murtaza Dalal, and Sergey Levine. Awac: Accelerating online reinforcement learning with offline datasets, 2021. [51] Hongzhi Zang, Mingjie Wei, Si Xu, Yongji Wu, Zhen Guo, Yuanqing Wang, Hao Lin, Peihong Wang, Liangzhi Shi, Yuqing Xie, Zhexuan Xu, Zhihao Liu, Kang Chen, Wenhao Tang, Quanlu Zhang, Weinan Zhang, Chao Yu, and Yu Wang. Rlinf-vla: A unified and efficient framework for reinforcement learning of vision-language-action models, 2026. [52] Physical Intelligence, Ali Amin, Raichelle Aniceto, Ashwin Balakrishna, Kevin Black, Ken Conley, Grace Connors, James Darpinian, Karan Dhabalia, Jared DiCarlo, Danny Driess, Michael Equi, Adnan Esmail, Yunhao Fang, Chelsea Finn, Catherine Glossop, Thomas Godden, Ivan Goryachev, Lachy Groom, Hunter Hancock, Karol Hausman, Gashon Hussein, Brian Ichter, Szymon Jakubczak, Rowan Jen, Tim Jones, Ben Katz, Liyiming Ke, Chandra Kuchi, Marinda Lamb, Devin LeBlanc, Sergey Levine, Adrian Li-Bell, Yao Lu, Vishnu Mano, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Allen Z. Ren, Charvi Sharma, Lucy Xiaoyang Shi, Laura Smith, Jost Tobias Springenberg, Kyle Stachowicz, Will Stoeckle, Alex Swerdlow, James Tanner, Marcel Torne, Quan Vuong, Anna Walling, Haohuan Wang, Blake Williams, Sukwon Yoo, Lili Yu, Ury Zhilinsky, and Zhiyuan Zhou. π∗
+
+> 0.6
+
+: a vla that learns from experience, 2025. [53] Stephen James, Zicong Ma, David Rovick Arrojo, and Andrew J. Davison. Rlbench: The robot learning bench-mark & learning environment. IEEE Robotics and Automation Letters , 5(2):3019–3026, 2020. [54] Oier Mees, Lukas Hermann, Erick Rosete-Beas, and Wolfram Burgard. Calvin: A benchmark for language-conditioned policy learning for long-horizon robot manipulation tasks, 2022. [55] Jiayuan Gu, Fanbo Xiang, Xuanlin Li, Zhan Ling, Xiqiang Liu, Tongzhou Mu, Yihe Tang, Stone Tao, Xinyue Wei, Yunchao Yao, Xiaodi Yuan, Pengwei Xie, Zhiao Huang, Rui Chen, and Hao Su. Maniskill2: A unified benchmark for generalizable manipulation skills, 2023. [56] Soroush Nasiriany, Abhiram Maddukuri, Lance Zhang, Adeet Parikh, Aaron Lo, Abhishek Joshi, Ajay Mandlekar, and Yuke Zhu. Robocasa: Large-scale simulation of everyday tasks for generalist robots, 2024. [57] Xuanlin Li, Kyle Hsu, Jiayuan Gu, Oier Mees, Karl Pertsch, Homer Rich Walke, Chuyuan Fu, Ishikaa Lunawat, Isabel Sieh, Sean Kirmani, Sergey Levine, Jiajun Wu, Chelsea Finn, Hao Su, Quan Vuong, and Ted Xiao. Evaluating real-world robot manipulation policies in simulation. In Pulkit Agrawal, Oliver Kroemer, and Wolfram Burgard, editors, Proceedings of The 8th Conference on Robot Learning , volume 270 of Proceedings of Machine Learning Research , pages 3705–3728. PMLR, 06–09 Nov 2025. [58] Santosh Thoduka, Juergen Gall, and Paul G. Ploger. Using visual anomaly detection for task execution monitor-ing. In 2021 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , pages 4604–4610. IEEE, 2021. [59] Zeyi Liu, Arpit Bahety, and Shuran Song. Reflect: Summarizing robot experiences for failure explanation and correction. In Jie Tan, Marc Toussaint, and Kourosh Darvish, editors, Proceedings of The 7th Conference on Robot Learning , volume 229 of Proceedings of Machine Learning Research , pages 3468–3484. PMLR, 06–09 Nov 2023. [60] Hongyi Chen, Yunchao Yao, Ruixuan Liu, Changliu Liu, and Jeffrey Ichnowski. Automating robot failure recovery using vision-language models with optimized prompts, 2024. [61] Jiafei Duan, Wilbert Pumacay, Nishanth Kumar, Yi Ru Wang, Shulin Tian, Wentao Yuan, Ranjay Krishna, Dieter Fox, Ajay Mandlekar, and Yijie Guo. Aha: A vision-language-model for detecting and reasoning over failures in robotic manipulation, 2024. [62] Qiao Gu, Yuanliang Ju, Shengxiang Sun, Igor Gilitschenski, Haruki Nishimura, Masha Itkina, and Florian Shkurti. Safe: Multitask failure detection for vision-language-action models, 2025. [63] Guiyu Zhao, Longteng Guo, Junyou Zhu, Jun Fu, Yanghong Mei, Bin Cao, Jie Jiang, Xingjian He, and Jing Liu. Verispace: Spatially grounded action verification for vision-language-action models, 2026. [64] StarVLA Community. Starvla: A lego-like codebase for vision-language-action model developing, 2026. 
+
+20

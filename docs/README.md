@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-16 ~ 2026-09-14</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-15</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 26 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>15</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>11</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-14 03:55:24 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-15 19:43:24 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-08-16至09-14共处理26篇论文，精读15篇、速读11篇，重点聚焦灵巧操作与视觉-触觉融合。最值得看的是满分论文DeCAL提出的接触感知潜在协同想象，让VLA模型真正&quot;接地&quot;物理接触，其次是9分的仿真视觉灵巧性预训练。普通读者可从ViTaR这类视觉-触觉残差适配入手，理解机器人如何借触觉补齐基础模型的短板。</p>
+<p>2026-09-15 日报精选 19 篇，精读 7 篇、速读 12 篇，聚焦具身智能与游戏世界模型。最值得看的是两篇 9.0 分工作：用动作条件世界模型自动生成可导航游戏地图，以及双世界模型驱动机器人穿越障碍。普通读者可从游戏地图生成和机器人越障两个应用场景入手理解世界模型。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">15 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DeCAL: Towards Physically-Grounded Dexterous Vision-Language-Action Models via Contact-Aware Latent Co-Imagination">DeCAL: Towards Physically-Grounded Dexterous Vision-Language-Action Models via Contact-Aware Latent Co-Imagination</span></li><li><span class="dpr-home-dashboard-paper-title" title="Pre-training Visual Dexterity in Simulation">Pre-training Visual Dexterity in Simulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="ViHaTeleop: A Low-Cost, Lightweight Visual-Haptic Teleoperation System for Dexterous Manipulation Learning">ViHaTeleop: A Low-Cost, Lightweight Visual-Haptic Teleoperation System for Dexterous Manipulation Learning</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Valerant: An Automatic Navigable Game Map Generator via Action-Conditioned World Model Exploration">Valerant: An Automatic Navigable Game Map Generator via Action-Conditioned World Model Exploration</span></li><li><span class="dpr-home-dashboard-paper-title" title="DWMP: Leveraging Dual World Models for Humanoid Obstacle Traversal">DWMP: Leveraging Dual World Models for Humanoid Obstacle Traversal</span></li><li><span class="dpr-home-dashboard-paper-title" title="ArtManip: Category-Level Articulated In-Hand Manipulation">ArtManip: Category-Level Articulated In-Hand Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">hand-manip <strong>14</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -91,12 +91,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">11 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Vision-Based Tactile Intelligence for Robotics: Sensing, Learning, and Embodied Manipulation">Vision-Based Tactile Intelligence for Robotics: Sensing, Learning, and Embodied Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="ReForce: Learning Force-aware Retargeting for Dexterous Manipulation">ReForce: Learning Force-aware Retargeting for Dexterous Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="ViTaR: Visuo-Tactile Residual Adaptation for Foundation VLA Manipulation">ViTaR: Visuo-Tactile Residual Adaptation for Foundation VLA Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LabDex: A Hierarchical Benchmark for Dexterous Manipulation in Laboratories">LabDex: A Hierarchical Benchmark for Dexterous Manipulation in Laboratories</span></li><li><span class="dpr-home-dashboard-paper-title" title="GOAG: Generative and Object-Agnostic Grasp Planner for Dexterous Robotic Manipulation">GOAG: Generative and Object-Agnostic Grasp Planner for Dexterous Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="EmbodiedSkills: A Unified Framework for Orchestrating, Training, and Deploying VLA Agents">EmbodiedSkills: A Unified Framework for Orchestrating, Training, and Deploying VLA Agents</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">hand-manip <strong>9</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>8</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>4</strong></span></div>
 </section>
 </div>
 
