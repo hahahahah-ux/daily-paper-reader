@@ -1,0 +1,1010 @@
+1
+GTA-2: A Multi-VLM Framework for Synthesizing Robot
+Manipulation Skills via Grounded Task Axes
+M. Yunus Seker1, Shobhit Aggarwal1, Ruwan Wickramarachchi2, Jonathan Francis2, and Oliver Kroemer1
+Fig. 1: GTA-2 turns task instructions into reusable, scene-grounded manipulation skills. (Left) GTA-2 identifies task-
+relevant object keypoints and axes, and composes parameterized controllers to construct executable skills, illustrated for erasing
+and pouring. (Right) Across new scene configurations, the controller composition remains fixed while object features and
+execution parameters are re-grounded for the current observation.
+Abstract—Robotic manipulation tasks are often decomposed
+into behaviors or skills. However, one often needs to prede-
+fine these behaviors for specific tasks or try to cover a wide
+range of tasks using generic skills. As a result, these behaviors
+can remain too coarse to expose the geometric, control, and
+scene-dependent decisions required for execution. We introduce
+Grounded Task Axes v2 (GTA-2), a modular multi-VLM frame-
+work that constructs executable, task-bespoke manipulation skills
+from reusable object-centric task-axis components. Rather than
+predicting actions end-to-end or composing fixed task-level primi-
+tives, GTA-2 represents each skill as semantic subtasks compris-
+ing task-relevant keypoints and axes, controller compositions,
+and scene-dependent parameters. Four specialized VLM agents
+separately decompose the task, construct an abstract task-axis
+skill, assign controller parameters, and ground the required
+visual features from RGB-D observations. This abstraction-to-
+grounding factorization enables zero-shot skill generation without
+task-specific robot demonstrations, policy training, or fine-tuning.
+It also keeps intermediate decisions explicit, allowing targeted
+human feedback to refine an incorrect stage while preserving
+correct components. We evaluate GTA-2 on 14 real-robot ma-
+nipulation tasks against a VLA policy π0.5 and two Code-as-
+Policies baselines using task-axis controllers or conventional robot
+primitives. GTA-2 achieves an average zero-shot success rate of
+73.9%, exceeding the strongest baseline by 31.4 percentage points,
+while targeted refinement raises GTA-2’s average success rate to
+90.7%. Project page: https://gta2-project.github.io/
+I. INTRODUCTION
+Robotic manipulation tasks are commonly represented as
+compositions of simpler behaviors or skills, allowing complex
+tasks to be decomposed into more manageable units such as
+reaching, grasping, moving, inserting, or placing. However,
+1The Robotics Institute, Carnegie Mellon University, Pittsburgh, PA, USA
+{mseker; shobhita; okroemer}@andrew.cmu.edu.
+2Bosch
+Research,
+Pittsburgh,
+PA,
+USA
+{ruwan.wickramarachchi;
+jon.francis}@us.bosch.com.
+these generic skill-level units often remain relatively coarse:
+each behavior must still encode how the robot should interact
+with the objects in the current scene, including which object
+parts are relevant, how the end-effector should be oriented,
+and what geometric or contact constraints should be satisfied.
+Natural-language instructions specify task-level intent, but do
+not by themselves determine these scene-specific geometric
+and control choices. Bridging this gap requires an intermediate
+representation that is abstract enough to transfer across object
+instances and configurations, yet explicit enough for low-level
+robot controllers to instantiate and execute.
+We argue that such a representation requires decomposing
+behaviors one level further, into reusable object-centric geo-
+metric features and controller-level components that can be
+recombined as needed. Figure 1 illustrates this finer-grained
+representation through erasing and pouring. For erasing, a
+spiral-trajectory controller is combined with force control and
+grounded relative to the scribble center and board normal;
+for pouring, positional and rotational controllers coordinate
+the cup with the target container. Once constructed, these
+controller compositions can be reused across scene configura-
+tions, while keypoints, axes, and execution parameters are re-
+grounded for the current observation. This separation preserves
+the reusable structure of a manipulation skill while adapting
+its geometric and control details to each scene.
+Recent language-conditioned manipulation systems offer
+two prominent routes for connecting task intent to robot exe-
+cution. Vision-language-action (VLA) models learn generalist
+behaviors that map visual observations and natural-language
+commands directly to robot actions [1]–[5]. While these sys-
+tems have demonstrated broad task capabilities, the internal
+structure of the learned behavior remains largely implicit,
+arXiv:2609.09808v1  [cs.RO]  9 Sep 2026
+
+
+2
+making it difficult to identify how the system decomposes
+a task or reasons about the scene and execution. Language-
+model-based planning approaches such as Code-as-Policies
+instead generate executable robot programs by composing
+available APIs and predefined skill primitives [6]. However,
+these primitives typically encapsulate substantial perception,
+grounding, and control logic, requiring the available skill
+library to already contain behaviors capable of solving the task.
+Thus, despite producing different outputs, both approaches
+largely treat behaviors as atomic units whose internal geo-
+metric and control structure is either implicit or predefined. In
+contrast, we aim to operate at a sub-atomic level, constructing
+new behaviors online from reusable object-centric features and
+controller-level components.
+Task-axis controllers provide a natural representation for
+operating at this finer granularity by expressing manipulation
+behaviors as structured compositions of reusable controllers
+grounded in object-centric coordinate frames [7]–[9]. These
+controllers express motion, orientation, force, and constraint
+objectives relative to semantically meaningful keypoints and
+axes, such as a handle axis, a surface normal, an insertion
+direction, or a grasp point [10]–[15]. Grounded Task-Axes
+(GTA) [16] builds on this idea by representing manipulation
+skills through task-relevant keypoints, axes, controller com-
+positions, priorities, and action spaces. This representation
+makes the structure of the skill explicit: an abstract skill can
+specify what must be achieved in terms of object-relative
+geometry, and the same skill can then be instantiated in a new
+scene by grounding the required keypoints and axes. However,
+prior task-axis-based systems relied on hand-engineered task
+decompositions, controller selections, and task-axis tuning.
+In this work, we introduce Grounded Task Axes version 2
+(GTA-2), a modular multi-VLM framework that automates the
+construction and grounding of task-axis skills from a high-
+level task prompt and a visual observation of the scene. Using
+the semantic and visual reasoning capabilities of VLMs, GTA-
+2 decomposes the task, constructs abstract controller recipes,
+assigns execution parameters, and grounds the required object
+keypoints and axes in the observed scene. Rather than generat-
+ing actions end-to-end, GTA-2 generates an explicit task-axis
+skill representation that connects language-level task reasoning
+to controller-level robot execution.
+GTA-2 realizes the separation between abstract skill syn-
+thesis and scene-specific grounding through a pipeline of four
+specialized VLM agents. The first two agents construct the
+abstract skill representation. A Task Decomposer converts the
+user instruction into an ordered sequence of subtasks, and a
+Skill Generator maps each subtask to an abstract skill recipe
+by selecting the required controller composition, keypoints,
+task axes, and parameter placeholders. The remaining two
+agents instantiate this abstract representation in the observed
+scene. A Parameter Setter assigns task- and scene-specific
+controller parameters such as offsets, forces, and orientation
+targets, while a Vision Module grounds the requested key-
+points and axes in the RGB-D observation. The resulting
+grounded skill is then compiled into an executable robot script.
+This separation also makes the robot’s intermediate deci-
+sions explicit, modular, and individually refinable. Because
+GTA-2 exposes the subtask sequence, skill recipe, controller
+parameters, and visual groundings as separate intermediate
+outputs, a human can provide targeted feedback to any stage
+of the pipeline. For example, if the task should be decomposed
+differently, the user can refine the Task Decomposer output;
+if the robot should use a different contact point or motion
+constraint, the user can provide feedback to the Skill Generator
+or Vision Module; and if the robot should lift an object higher
+before moving it, the correction can be sent to the Parameter
+Setter. This allows the system to preserve correct parts of the
+generated skill while updating only the components that re-
+quire modification, providing a practical interface for human-
+guided adaptation without retraining an end-to-end policy.
+We evaluate GTA-2 on a real robot across 14 diverse
+manipulation tasks and compare it against three baselines: the
+generalist VLA policy π0.5, a Code-as-Policies baseline with
+access to the same task-axis controllers as GTA-2, and a Code-
+as-Policies baseline using conventional robot motion and force
+primitives. Our experiments evaluate zero-shot task execution,
+generalization of generated skills across scene configurations,
+and targeted human refinement, while the baseline compar-
+isons isolate the benefits of structured skill generation and
+task-axis controller composition.
+II. RELATED WORK
+Task-Axis Controllers: Task-axis controllers build on
+a long line of work that represents manipulation in task-
+relative coordinate systems rather than as generic joint-space
+motions or single global world frames. Early task-frame and
+compliance-control formulations showed that manipulation
+objectives can be specified relative to task-relevant frames
+and that different task directions can be regulated through
+position, force, or compliance objectives [7]–[9]. Subsequent
+manipulation-planning work used related ideas to define con-
+strained task-space regions, object-centric action spaces, and
+object-relative planning frames for pose-constrained manipu-
+lation, rearrangement, and dynamic environments [11]–[13].
+More recent work has explored learning and composing mod-
+ular object-centric controllers and sequential force-interaction
+skills, demonstrating that structured controller representations
+can improve generalization across objects, subtasks, and in-
+teraction phases [10], [14]. Task-axis controllers make this
+structure explicit by parameterizing motion, orientation, force,
+and constraint objectives with object keypoints and axes;
+[15] showed that keypoint-grounded task-axis controllers can
+generalize across variations in object shape, size, and ge-
+ometry. Grounded Task-Axes (GTA-1) further extended this
+formulation to zero-shot semantic skill transfer by using
+visual foundation models to identify corresponding grounding
+features on novel objects [16]. Building on this line of work,
+GTA-2 addresses the dependence on human-designed task
+decompositions, controller recipes, task-axis definitions, pa-
+rameter choices, and example skills by using a VLM pipeline
+to generate these directly from a task prompt and scene.
+LLM-based plan and code generation: LLMs have also
+been used for robot planning and program generation by
+translating natural-language goals into sequences of high-level
+plans or executable code. Systems such as SayCan use LLMs
+
+
+3
+Fig. 2: Overview of GTA-2. GTA-2 takes a task prompt, scene image, and controller library as inputs. Specialized agents
+process these inputs to decompose the task, generate abstract skill recipes, set task-specific parameters, and produce 3D visual
+groundings. These outputs are combined into an executable robot script. Human feedback provides a refinement loop for
+updating the subtasks, parameters, or groundings when needed.
+for semantic task reasoning while grounding decisions through
+affordance models or scene feedback [17], [18]. Related
+approaches, including ProgPrompt and Code-as-Policies [6],
+[19], constrain LLM outputs through program-like prompts,
+function libraries, perception APIs, or robot-control primitives
+to produce executable plans or policy code [20]–[23]. These
+works show that LLMs can provide useful semantic reasoning
+for robot behavior generation, but they generally depend on a
+single-step-generated program using predefined primitives or
+perception APIs to bridge language and execution. Our work
+builds on the same generative insight while shifting the focus
+from directly coding over existing primitives to generating an
+explicit task-axis skill representation that can be grounded in
+the scene and refined through feedback.
+Vision Language Action models: Vision-language-action
+(VLA) models have recently become a major direction for
+language-conditioned robotic manipulation, mapping visual
+observations and natural-language instructions directly to robot
+actions. Systems such as Perceiver-Actor [1], RT-1 [2], RT-2
+[3], Octo [4], OpenVLA [24], π0 [25], and π0.5 [5] show that
+scaling robot policy learning with transformer architectures,
+large robot datasets, vision-language pretraining, and cross-
+embodiment data can produce increasingly capable generalist
+robot policies. Some recent models, such as π0.5, also begin
+to introduce higher-level reasoning by predicting intermediate
+subgoals before low-level action execution. Nevertheless, the
+core formulation remains policy-centric: the learned model is
+optimized to produce actions, and the reasoning that leads to
+those actions is largely internal to the policy. This can make the
+behavior difficult to diagnose or adapt when the scene changes,
+and recent robustness studies show that VLA policies remain
+sensitive to variations in object layout, viewpoint, robot initial
+state, lighting, background, physical conditions, and language
+prompts [26]–[28]. GTA-2 takes a complementary approach:
+instead of training an end-to-end action policy, it uses VLM
+agents to construct a structured zero-shot manipulation skill
+that can be grounded in the current scene, refined through
+feedback, and compiled into robot execution.
+III. METHOD
+GTA-2 is a modular multi-step VLM framework that maps
+a natural-language instruction ℓand an RGB-D observation I,
+together with a reusable controller library C, to an executable
+robot program P. Rather than predicting low-level robot
+actions directly, GTA-2 constructs an explicit task-axis skill
+representation that connects language-level task reasoning to
+controller-level execution. The skill is generated without task-
+specific robot demonstrations, policy training, or fine-tuning.
+The framework separates lifted/abstract skill synthesis from
+scene-specific grounding. A Task Decomposer converts the
+instruction into an ordered sequence of semantic subtasks.
+A Skill Generator then constructs a task-axis skill ˜S by
+selecting and composing controllers from C and specifying the
+required keypoints, axes, controller priorities, and parameter
+placeholders. Scene-specific grounding comprises two com-
+plementary operations: a Parameter Setter assigns numerical
+values to these placeholders, while a Vision Module resolves
+the requested scene features to metric keypoints and axes.
+Together, these stages ground ˜S in the current scene, producing
+a grounded task-axis skill S. Fig. 2 summarizes these stages
+and the structured information passed between them.
+A deterministic compiler converts the grounded skill into
+the executable program P, whose task-axis controllers produce
+low-level position, orientation, force, and gripper commands
+through the robot execution interface. Because each stage
+exposes a separate intermediate output, users can refine the
+task decomposition, controller recipe, parameter assignments,
+or feature groundings without regenerating the entire behavior.
+The following sections first define the task-axis skill represen-
+tation and then describe lifted skill synthesis, scene-specific
+grounding, robot execution, and targeted refinement.
+
+
+4
+TABLE I: Task-axis feature definitions.
+Feature
+Description
+kobject part location
+A task-relevant keypoint on an object, identi-
+fied by its object, part, and location.
+keef T CP
+Tool center point of the robot end-effector.
+aeef X, aeef Y , aeef Z
+End-effector-frame axes for the orthogonal,
+pinch, and approach directions, respectively.
+aworldX, aworldY , aworldZ Fixed world-frame axes for the front, right, and
+upward directions, respectively.
+asurface normal(k1)
+Axis along normal pointing out of surface at
+keypoint specified by k1.
+aedge tangent(k1)
+Axis along tangent direction of edge at key-
+point specified by k1.
+aalong(k1, k2)
+Axis pointing from keypoint k1 to keypoint k2.
+acrossprod(a1, a2)
+Unit-length axis computed by a1 × a2.
+A. Task-Axis Skill Representation
+GTA-2 builds on the task-axis skill representation intro-
+duced in Grounded Task-Axes [16], in which manipulation
+behaviors are expressed as compositions of controller ob-
+jectives grounded in task-relevant keypoints and axes. In
+GTA-2, this representation provides the intermediate structure
+that connects language-level task reasoning to controller-level
+robot execution.
+For notation, we implicitly index the task-relevant objects
+in a scene as O = {Oi}N
+i=1, and associate each object Oi with
+a set of keypoint definitions Ki = {ki,j} and axis definitions
+Ai = {ai,m}. A keypoint definition identifies a task-relevant
+location on or relative to an object, such as the center of a
+scribble, the tip of an eraser, or the rim of a container. An axis
+definition identifies a task-relevant direction, such as a surface
+normal, an object edge, or a direction between two keypoints.
+At the lifted level, these definitions specify which geometric
+features are required by the skill, but do not yet contain their
+metric 3D values. The sets include only the features relevant
+to the current skill and do not assume an exhaustive object
+inventory or a precomputed detection or segmentation of the
+scene. For notational simplicity, we omit the object index i in
+the remainder of the paper whenever the associated object is
+clear from context.
+Table I summarizes these scene-object features together with
+the robot-relative, world-relative, and derived feature defini-
+tions available to GTA-2. The same feature representation
+includes robot-relative and world-relative references. The robot
+end-effector is associated with keypoints and axes obtained
+from the tool frame, such as its tool center point and approach
+direction, while the world frame provides fixed reference
+directions such as the vertical axis. Axes may also be defined
+through deterministic geometric operations over other features,
+including a surface normal at a keypoint, the direction between
+two keypoints, or the cross product of two axes. These derived-
+axis definitions specify how the required direction should be
+computed once their input features receive metric values.
+A task-axis controller defines a parameterized control objec-
+tive over the feature definitions introduced above. We represent
+a lifted controller as
+˜c =
+
+τ, ϕctl, ϕref, aaxis, ˜θ, ρ
+
+,
+where τ denotes the controller type, ϕctl is the robot or object
+TABLE II: Task-axis controller library.
+Controller
+Description
+PosAlign(k1, k2, a, o)
+Aligns k1 with k2 along a with offset o.
+PosWaypoint(k1, k2, a, [on])
+Follows a sequence of positional offsets.
+AxisAlign(a1, a2, ar, ϕ)
+Aligns a1 with a2 by rotating about ar with
+angular offset ϕ.
+AxisWaypoint(a1, a2, ar, [ϕn]) Follows a sequence of angular offsets.
+ForceConstant(a, f)
+Maintains force value f along a.
+GripperControl(s, t)
+Sets the gripper state s ∈{“open”, “close”}
+at normalized subtask time t.
+PosDMPSpiral(k, a, r)
+Reproduces a learned spiral of radius r at
+k in the plane orthogonal to a.
+PosDMPLetter(k, a, l)
+Reproduces a specified letter trajectory in
+the plane orthogonal to a, included as a dis-
+tractor for task-relevant controller selection.
+feature being controlled, and ϕref is the target feature relative
+to which the objective is defined. The optional task axis aaxis
+specifies the direction along or about which the controller
+operates. The parameter placeholder ˜θ represents controller-
+specific quantities that have not yet been numerically assigned,
+while ρ specifies the controller’s priority within the composi-
+tion. The controller type τ determines which of these fields
+are required and how they are interpreted.
+Table II summarizes the task-axis controller library used in
+our experiments. For example, a position-alignment controller
+uses control and target keypoints together with a task axis and
+positional offset, whereas a constant-force controller requires
+only a force direction and magnitude. Similarly, a gripper
+controller does not require control and target features, but
+instead specifies a gripper state and the time at which it should
+be applied. Thus, individual controller types may use only the
+subset of fields required by their respective objectives.
+Multiple task-axis controllers can be composed to form a
+lifted skill step, ˜s = [˜c1, . . . , ˜cM]. Each controller contributes
+a distinct objective to the manipulation step, such as regulating
+position, orientation, force, motion, or gripper state. These
+objectives are evaluated in parallel and ordered according
+to their priorities ρ. During execution, lower-priority control
+commands are projected into the null space of higher-priority
+controllers, preventing them from interfering with higher-
+priority objectives. A lifted skill step therefore describes
+both the individual objectives and the prioritized controller
+composition needed to realize a single phase of a manipulation
+task.
+Consider the erasing step illustrated in Fig. 1. For compact-
+ness, we write kscribble for kredscribble middle center and anormal
+for asurface normal. Using the controller definitions in Table II,
+the lifted erasing step may be composed as
+˜serase =
+"
+ForceConstant(anormal(kscribble), ˜f),
+PosDMPSpiral(kscribble, anormal(kscribble), ˜r)
+#
+.
+Here,
+˜f and ˜r are parameter placeholders for the force
+magnitude and spiral radius, respectively. Relative controller
+priorities are implicit in the list order, with earlier controllers
+taking precedence over later ones. The composition remains
+lifted because its feature definitions and parameter placehold-
+ers have not yet been assigned scene-specific values.
+
+
+5
+A lifted controller becomes grounded when its feature
+definitions are resolved to metric values and its parameter
+placeholders are assigned numerical values. For the fields
+required by a given controller type, the grounded controller
+is written as
+c = (τ, G(ϕctl), G(ϕref), G(aaxis), θ, ρ) ,
+where G denotes feature grounding and θ contains the assigned
+controller parameters.
+Returning to the erasing example above, feature grounding
+provides the current scribble-center position and board-normal
+direction, while parameter assignment provides the desired
+force magnitude and spiral radius. Let:
+G(kscribble) = pscribble ∈R3,
+G(anormal) = vnormal ∈S2,
+˜f 7→3 N,
+˜r 7→5 cm.
+Applying these values yields the grounded erasing step
+serase =
+"
+ForceConstant(vnormal, 3 N),
+PosDMPSpiral(pscribble, vnormal, 5 cm)
+#
+.
+The lifted and grounded skill steps preserve the same con-
+troller types, feature relationships, and priority ordering; only
+the metric feature values and numerical parameters are specific
+to the current scene. This separation allows the lifted controller
+composition to be reused across scene configurations while
+grounding adapts its execution to each observation.
+B. Lifted Skill Synthesis
+Having defined the task-axis skill representation, we now
+describe how the first two stages of the GTA-2 pipeline,
+also shown in Fig. 2, synthesize a lifted skill from the
+task instruction and scene context. The Task Decomposer
+and Skill Generator produce structured intermediate outputs
+rather than free-form robot code.
+Task Decomposer: The Task Decomposer converts the
+natural-language instruction into an ordered sequence of se-
+mantic subtasks,
+Q = ATD(ℓ, I, C) = [q1, . . . , qT ],
+where each qt describes a meaningful phase of the manipu-
+lation task without specifying the controllers used to execute
+it. In the bottle-placement example shown in Fig. 2, the Task
+Decomposer separates the task into approaching the bottle,
+grasping it, lifting it, moving it over the box, placing it, and
+releasing the gripper. Similarly, for the erasing task in Fig. 1, it
+decomposes the behavior into alignment, contact, erasing, and
+retraction phases. These decompositions expose the temporal
+and semantic structure of each task and provide the scaffold
+from which the Skill Generator constructs the corresponding
+controller objectives.
+Skill Generator: The Skill Generator maps each semantic
+subtask qt to a lifted skill step,
+˜st = ASG(qt, ℓ, I, C) = [˜ct,1, . . . , ˜ct,Mt].
+For each subtask, it selects the controller types from C, iden-
+tifies the required keypoint and axis definitions, specifies the
+parameter placeholders, and arranges the resulting controllers
+in priority order. In the bottle-placement example in Fig. 2, the
+Move over the box subtask is mapped to position-alignment
+controllers that coordinate the bottle with the box interior and
+an axis-alignment controller that constrains the end-effector
+orientation. Similarly, for the erasing phase in Fig. 1, the Skill
+Generator produces the prioritized force-control and spiral-
+motion composition defined in Sec. III-A. The resulting skill
+step remains lifted because its feature definitions have not yet
+been grounded and its parameter placeholders have not yet
+been assigned numerical values.
+Applying the Skill Generator to each subtask yields the full
+lifted task-axis skill,
+˜S = [˜s1, . . . , ˜sT ].
+The ordering of the skill steps preserves the temporal structure
+established by the Task Decomposer, while the ordering of
+controllers within each ˜st encodes their priorities. At this
+stage,
+˜S specifies the controller types, feature definitions,
+parameter placeholders, and their composition, but does not
+yet contain metric feature groundings or numerical parameter
+values. The next stage resolves these remaining quantities for
+the observed scene.
+C. Scene-Specific Skill Grounding
+The lifted skill synthesized above specifies what geometric
+relationships and controller objectives are required, but not
+the metric values needed for execution. GTA-2 resolves these
+quantities through two complementary operations: Feature
+grounding maps each keypoint or axis definition to a 3D point
+or unit direction in the current execution context, whereas
+parameter assignment replaces each parameter placeholder
+with a task- and scene-appropriate numerical value. We refer to
+the joint application of these operations to ˜S as scene-specific
+skill grounding, which produces the grounded skill S while
+preserving its controller composition and priority structure.
+Parameter Setter: The Parameter Setter assigns numeri-
+cal values to the parameter placeholders appearing in the lifted
+skill. Conditioned on the task instruction, scene observation,
+and controller context, it produces
+Θℓ,I = APS(ℓ, I, ˜S, C) = {˜θj 7→θj}J
+j=1,
+where each ˜θj is a placeholder in ˜S and θj is its assigned
+numerical value. These assignments include controller-specific
+quantities such as positional and angular offsets, force magni-
+tudes, trajectory scales, and execution timings. The Parameter
+Setter leaves the controller types, feature definitions, and
+priority ordering of the lifted skill unchanged.
+Vision Module: The Vision Module resolves the feature
+definitions requested by ˜S to metric values for the current
+execution context. It produces the grounding map
+GI,x = AVG(I, x, ˜S) = {kj 7→pj, am 7→vm}.
+Here, kj and am range over the keypoint and axis definitions
+requested by ˜S, with pj ∈R3 and vm ∈S2, respectively.
+The state x contains the robot state and calibrated frame
+information. Scene-object keypoints are localized in the RGB
+image by the VLM and recovered as metric 3D positions
+
+
+6
+using the corresponding depth observation. Derived axes are
+evaluated from grounded features using point-cloud and geo-
+metric operations, while robot- and world-relative features are
+obtained from forward kinematics and calibrated fixed frames.
+Together, the feature groundings and parameter assignments
+transform the full lifted skill into a grounded task-axis skill,
+S =
+ GI,x, Θℓ,I
+
+( ˜S) = [s1, . . . , sT ],
+where each st is the grounded counterpart of the lifted skill
+step ˜st. This operation preserves the temporal ordering of the
+skill steps, the controller composition within each step, and
+their relative priorities, while replacing feature definitions and
+parameter placeholders with their corresponding metric and
+numerical values. In the erasing example introduced earlier,
+the Vision Module provides pscribble and vnormal, while the
+Parameter Setter supplies the force magnitude of 3 N and
+spiral radius of 5 cm. Once all skill steps have been grounded,
+S contains the complete controller specification required for
+compilation and execution.
+D. Robot Script Compilation and Execution
+A deterministic compiler converts the grounded task-axis
+skill into an executable robot program, P = Π(S, C). For
+each grounded controller in S, the compiler selects the
+corresponding implementation from the controller library C
+and inserts its grounded features, numerical parameters, and
+priority information into the generated program.
+During execution, the program activates the grounded skill
+steps st in their specified temporal order. Within the active
+step, each controller evaluates its objective using the current
+robot state and the grounded feature values, and the resulting
+control commands are combined according to the prescribed
+priority ordering. The execution backend then transmits the
+resulting position, orientation, force, and gripper commands
+through the ROS-based robot interface. By confining robot-
+specific communication and command formatting to this back-
+end, GTA-2 keeps lifted skill synthesis and scene-specific
+grounding independent of the low-level execution interface.
+E. Human-Guided Targeted Refinement
+The structured intermediate outputs exposed by GTA-2
+allow user feedback to be directed to the stage responsible for
+an observed error. As illustrated in Fig. 2, decomposition errors
+can be routed to the Task Decomposer, controller or feature-
+definition errors to the Skill Generator, numerical parameter
+errors to the Parameter Setter, and geometric grounding errors
+to the Vision Module. For example, if the generated behavior
+moves too close to an object because of an inappropriate
+positional offset, the user can direct feedback specifically to
+the Parameter Setter. Given targeted feedback hPS, the revised
+parameter assignments are
+Θ′
+ℓ,I = APS(ℓ, I, ˜S, C, hPS).
+The updated grounded skill is then obtained as S′
+=
+ GI,x, Θ′
+ℓ,I
+
+( ˜S). Because the correction is confined to the
+Parameter Setter, the existing task decomposition, lifted con-
+troller composition, and feature groundings are reused; only
+the affected parameter assignments are revised.
+More generally, targeted feedback is provided only to the
+agent responsible for the erroneous intermediate output. When
+a correction changes an upstream output, the downstream
+stages that depend on it are recomputed, while unaffected
+intermediate results are retained. GTA-2 can therefore preserve
+the correctly generated portions of a behavior while revising
+the component responsible for the failure, without policy
+retraining or indiscriminately regenerating the entire pipeline.
+IV. EXPERIMENTAL RESULTS
+We
+evaluate
+GTA-2
+on
+14
+real-robot
+manipulation
+tasks spanning pick-and-place, articulated-object interaction,
+contact-rich manipulation, tool use, and constrained motion
+(Fig. 3). Our evaluation addresses two complementary ques-
+tions. First, how reliably can GTA-2 generate executable
+skills without task-specific examples, and how effectively
+can agent-level feedback recover unsuccessful generations?
+Second, how well do the initial and refined skills generalize
+across scene configurations compared with VLA and Code-as-
+Policies baselines? We first describe the common experimental
+setup and comparison methods before presenting these two
+studies.
+A. Experimental Setup
+Table II summarizes the controller library used in our ex-
+periments. Controllers may be composed concurrently within
+a subtask to express simultaneous position, orientation, force,
+and gripper objectives, and the same library is available across
+all evaluated tasks.
+We use Gemini 3.1 Pro [29] for all four VLM agents.
+The agents therefore share the same underlying model and
+differ only in their role-specific instructions, contextual inputs,
+and structured output representations. We use no task-specific
+demonstrations or model fine-tuning.
+Physical experiments are conducted with a UR5e manipu-
+lator equipped with a Robotiq 2F-85 parallel-jaw gripper and
+a fixed ZED 2i stereo camera calibrated to the robot base
+frame. RGB observations provide visual context for the VLM
+agents, while the corresponding point cloud supplies metric
+3D keypoints and geometrically derived task axes, including
+surface normals and directions between grounded keypoints.
+B. Baseline Methods
+We compare GTA-2 against an end-to-end vision-language-
+action policy and two Code-as-Policies (CaP) baselines. All
+methods receive the same task instructions and scene obser-
+vations.
+VLA baseline (π0.5): We use the π0.5 DROID-finetuned
+version as a representative generalist VLA policy for open-
+world manipulation [5], [30]. Like GTA-2, it uses language
+and vision to generate high-level subtasks, but it ultimately
+follows an end-to-end formulation that maps observations and
+instructions to robot actions. We implemented this baseline on
+the Franka Emika robot for improved performance.
+
+
+7
+Fig. 3: Representative real-robot executions across the 14 manipulation tasks used in our evaluation. Each example shows key
+aspects of the task diversity handled by GTA-2, including pick-and-place, articulated-object interaction, tool use, contact-rich
+manipulation, and constrained motion.
+Task-axis controller baseline (CaP-TAC): CaP-TAC is a
+Code-as-Policies-style baseline in which a VLM directly gen-
+erates executable robot policy code from the task instruction
+and scene observation [6]. To isolate the contribution of GTA-
+2’s structured abstraction-to-grounding pipeline, CaP-TAC is
+given access to the same sub-atomic task-axis controllers.
+The generated program may compose multiple controllers
+concurrently into multiple subtasks. However, CaP-TAC must
+select perceptual queries, determine the required task geom-
+etry, and compose the controller sequence directly within a
+single generated robot script, without GTA-2’s intermediate
+task abstractions or structured grounding procedure.
+Primitive-action
+baseline
+(CaP-Primitive):
+CaP-
+Primitive follows the same code-generation and perception
+protocol as CaP-TAC but replaces task-axis controllers with
+three conventional robot primitives: absolute Cartesian TCP
+motion, gripper actuation, and Cartesian motion under a
+specified contact force. This baseline tests whether direct
+policy-code generation is sufficient when provided with
+standard robot primitives, while comparison with CaP-TAC
+isolates the effect of exposing task-axis controllers.
+Both CaP baselines use the same policy-generation model
+and the vision module (Gemini-3.1-Pro) as GTA-2. Both
+baselines are supported by a few-shot setting using three
+fixed demonstrations covering pick-and-place, force-controlled
+surface contact, and point traversal. The demonstrations are
+matched in task content across the two APIs and do not include
+the benchmark tasks themselves
+C. Zero-Shot Generation and Targeted Refinement
+We first evaluate two central properties of GTA-2: its
+ability to generate executable manipulation skills without task-
+specific examples and its ability to refine unsuccessful gener-
+ations through localized feedback. For each of the 14 tasks,
+we perform 15 skill-generation runs and validate the resulting
+skills through physical execution. Each run begins without
+task-specific feedback. When an execution reveals an error,
+
+
+8
+Fig. 4: Zero-shot plan-generation performance and feedback-based recovery of GTA-2 across 14 manipulation tasks.
+Each task is evaluated over 15 independent runs. Green segments indicate successful executions, while the remaining segments
+denote runs requiring feedback at that stage and are colored by the module receiving feedback.
+feedback is directed only to the responsible module, while in-
+termediate representations that remain valid are preserved. The
+experiment therefore evaluates structured refinement rather
+than repeated unconstrained regeneration of the complete skill.
+As shown in Fig. 4, GTA-2 succeeds without feedback in
+154 of the 210 independent runs (73.3%), including tasks
+involving sustained contact and tool use. Although pouring
+and sweeping require more refinement than direct transport
+behaviors, their successful zero-shot runs demonstrate that
+the generated task-axis representation can express these be-
+haviors without task demonstrations or manually specified
+skill structures. Human feedback increases the cumulative
+number of successful runs to 181/210 (86.2%) after one round
+and 208/210 (99.0%) after two rounds, with all 210 runs
+succeeding within three. Task complexity therefore increases
+the amount of refinement required, but does not require new
+primitives, training, or reconstruction of the complete skill.
+A small number of high-level corrections is sufficient to turn
+independently generated failures into successful executions.
+The feedback distribution further shows that GTA-2’s agent
+boundaries correspond to meaningful and independently cor-
+rectable failure modes. Initial feedback is directed primarily
+to the Skill Generator, indicating that the task is generally
+interpreted correctly and that the main remaining challenge is
+translating this intent into an appropriate task-axis controller
+composition. Once these structural decisions are corrected,
+the remaining feedback shifts predominantly to the Vision
+Module, while no further abstract planning corrections are
+required. This ordered transition mirrors GTA-2’s abstraction-
+to-grounding pipeline: it establishes manipulation structure
+first, after which residual scene-specific grounding errors can
+be isolated and corrected. The specialized agents therefore
+provide not only interpretable intermediate outputs but also
+explicit refinement interfaces, allowing each correction to
+address the current error source without discarding decisions
+already resolved by other stages.
+D. Task Generalization and Baseline Comparison
+We next evaluate task generalization across 14 manipulation
+tasks and varying scene configurations, using 20 trials per task
+and method. The GTA-2 results correspond to two stages of
+the preceding refinement experiment. GTA-2 Zero-Shot uses
+the initial skill before feedback, shown by the first bar for
+each task in Fig. 4. GTA-2 One-Success uses the refined skill
+after feedback has produced a successful execution, shown by
+the final bar. In both conditions, the resulting skill structure
+is retained and regrounded for each evaluation scene. We
+compare them with π0.5, CaP-TAC, and CaP-Primitive under
+the common protocol described above.
+As shown in Fig. 5, GTA-2 Zero-Shot achieves an average
+success rate of 73.9%, exceeding the strongest baseline, CaP-
+Primitive at 42.5%, by 31.4 percentage points. GTA-2 One-
+Success further raises the average success rate to 90.7%.
+The improvement remains effective over subsequent scene
+configurations, indicating that refinement corrects reusable
+components of the skill rather than only the execution in which
+feedback was provided.
+CaP-Primitive illustrates both the appeal and the limitation
+of monolithic primitives. By packaging common manipulation
+behaviors into a small number of function calls, they simplify
+planning and can perform well when a task matches the
+expected geometric pattern, particularly for top-down manip-
+ulation. However, action sequencing, parameter selection, and
+visual grounding must still be determined jointly within a
+single generated program. This coupling makes the resulting
+policy sensitive to small errors in the planning aspect of
+program generation. GTA-2 instead assigns these decisions
+to specialized agents and communicates their outputs through
+explicit intermediate representations. Its advantage therefore
+comes not from simplifying the available actions, but from
+reducing the coupling between reasoning stages.
+CaP-TAC receives the same task-axis controller interface
+as GTA-2 but must select, parameterize, ground, and com-
+pose the controllers within a single program. Its lower over-
+
+
+9
+Fig. 5: Task-generalization performance of GTA-2 and the evaluated baselines across 14 manipulation tasks. Bars report
+success rates for GTA-2 under the One-Success and Zero-Shot settings, together with Pi-0.5, CaP-TAC, and CaP-Primitive. All
+results are presented on a common 0–100% scale and evaluated over 20 runs. Values above the bars show the corresponding
+success rates.
+all performance than CaP-Primitive is therefore expected:
+task-axis controllers provide a richer action space but also
+require more structured reasoning. Nevertheless, CaP-TAC
+outperforms CaP-Primitive on pouring, cutting, and sweep-
+ing, where execution depends on contact constraints, object-
+relative motion, and tool geometry. These results identify
+two complementary contributions: task-axis representations
+provide an effective abstraction for contact-rich manipulation
+and tool use, while GTA-2’s specialized multi-agent pipeline
+makes this abstraction reliable by separately resolving task
+decomposition, controller composition, parameterization, and
+visual grounding.
+V. LIMITATIONS AND FUTURE WORK
+Although GTA-2 generates manipulation skills without task-
+specific demonstrations, skill synthesis remains constrained
+by the expressivity of the task-axis representation and the
+available controller library. GTA-2 can generate task-specific
+keypoint and axis definitions, but objectives that cannot be
+expressed through the available interface require extending its
+feature or controller libraries. Moreover, the sparse geometric
+representation assumes that the required scene-object features
+can be observed or inferred from a single RGB-D observation.
+These constraints primarily reflect the current instantiation of
+GTA-2: its modular pipeline could accommodate additional
+feature definitions, controller types, and sensing modalities
+without changing its overall structure.
+Scene-object features are currently grounded before execu-
+tion and are not updated online. While the task-axis controllers
+operate in closed loop with respect to the robot state and force
+measurements, the feature groundings and subtask structure
+are not continuously revised during execution. Object motion,
+slippage, or other contact-induced scene changes that invali-
+date the initial groundings therefore require a new grounding
+or refinement cycle before re-execution. The observed shift
+of feedback toward the Vision Module in later refinement
+rounds further indicates that perceptual grounding becomes
+an important residual source of failure once the manipulation
+structure has been established.
+Our physical evaluation uses a single tabletop robot, gripper,
+and sensing configuration. Although the task-axis represen-
+tation separates generated skills from the robot-specific exe-
+cution backend, experiments across additional embodiments
+and sensing configurations are needed to establish its broader
+generality. Future work will also investigate an orchestrator
+VLM that monitors execution observations, diagnoses failures,
+identifies the stage requiring revision, and directs targeted
+feedback to the corresponding specialized agent. Such an
+orchestrator could reduce reliance on human feedback and en-
+able an autonomous process for iterative execution monitoring
+and skill refinement.
+VI. CONCLUSION
+We presented GTA-2, a modular multi-VLM framework that
+bridges language-level task intent and robot execution through
+an explicit object-centric task-axis skill representation. By sep-
+arating task decomposition, controller composition, parameter
+setting, and visual grounding, GTA-2 constructs executable
+manipulation behaviors from reusable controllers without task-
+specific demonstrations, policy training, or fine-tuning. This
+structure also makes the generated behavior interpretable and
+enables human feedback to be directed to the responsible stage
+while preserving decisions that are already correct.
+Across 14 diverse real-robot manipulation tasks, GTA-2
+demonstrated stronger and more consistent zero-shot perfor-
+mance than the evaluated VLA and Code-as-Policies base-
+lines. Targeted refinement efficiently recovered unsuccessful
+generations and produced skills that remained effective across
+subsequent scene configurations. The results further show
+that task-axis controllers are most effective when paired with
+specialized reasoning stages and explicit intermediate rep-
+resentations. Together, these findings establish GTA-2 as a
+practical step toward open-world manipulation systems that
+can construct, inspect, and adapt new behaviors rather than
+relying on fixed skill primitives or opaque end-to-end policies.
+
+
+10
+REFERENCES
+[1] M. Shridhar, L. Manuelli, and D. Fox, “Perceiver-actor: A multi-task
+transformer for robotic manipulation,” in Conference on Robot Learning.
+PMLR, 2023, pp. 785–799.
+[2] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, J. Dabis, C. Finn,
+K. Gopalakrishnan, K. Hausman, A. Herzog, J. Hsu, et al., “Rt-1:
+Robotics transformer for real-world control at scale,” arXiv preprint
+arXiv:2212.06817, 2022.
+[3] B. Zitkovich, T. Yu, S. Xu, P. Xu, T. Xiao, F. Xia, J. Wu, P. Wohlhart,
+S. Welker, A. Wahid, et al., “Rt-2: Vision-language-action models
+transfer web knowledge to robotic control,” in Conference on Robot
+Learning.
+PMLR, 2023, pp. 2165–2183.
+[4] O. M. Team, D. Ghosh, H. Walke, K. Pertsch, K. Black, O. Mees,
+S. Dasari, J. Hejna, T. Kreiman, C. Xu, et al., “Octo: An open-source
+generalist robot policy,” arXiv preprint arXiv:2405.12213, 2024.
+[5] P. Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess,
+A. Esmail, M. Equi, C. Finn, N. Fusai, et al., “π0.5 : a vision-
+language-action model with open-world generalization,” arXiv preprint
+arXiv:2504.16054, 2025.
+[6] J. Liang, W. Huang, F. Xia, P. Xu, K. Hausman, B. Ichter, P. Florence,
+and A. Zeng, “Code as policies: Language model programs for embodied
+control,” in 2023 IEEE International Conference on Robotics and
+Automation (ICRA).
+IEEE, 2023, pp. 9493–9500.
+[7] D. H. Ballard, “Task frames in robot manipulation.” in AAAI, 1984.
+[8] M. T. Mason, “Compliance and force control for computer controlled
+manipulators,” IEEE Transactions on Systems, Man, and Cybernetics,
+vol. 11, no. 6, pp. 418–432, 1981.
+[9] M. H. Raibert and J. J. Craig, “Hybrid position/force control of manip-
+ulators,” 1981.
+[10] S. Manschitz, M. Gienger, J. Kober, and J. Peters, “Learning sequential
+force interaction skills,” Robotics, vol. 9, no. 2, p. 45, 2020.
+[11] T. Migimatsu and J. Bohg, “Object-centric task and motion planning in
+dynamic environments,” IEEE RAL, 2020.
+[12] J. E. King, M. Cognetti, and S. S. Srinivasa, “Rearrangement planning
+using object-centric and robot-centric action spaces,” in 2016 IEEE
+International Conference on Robotics and Automation (ICRA), 2016.
+[13] D. Berenson, S. Srinivasa, and J. Kuffner, “Task space regions: A
+framework for pose-constrained manipulation planning,” IJRR, 2011.
+[14] M. Sharma, J. Liang, J. Zhao, A. LaGrassa, and O. Kroemer, “Learning
+to compose hierarchical object-centric controllers for robotic manipula-
+tion,” arXiv preprint arXiv:2011.04627, 2020.
+[15] M. Sharma and O. Kroemer, “Generalizing object-centric task-axes
+controllers using keypoints,” in IEEE ICRA, 2021, pp. 7548–7554.
+[16] M. Y. Seker, S. Aggarwal, and O. Kroemer, “Grounded task axes: Zero-
+shot semantic skill generalization via task-axis controllers and visual
+foundation models,” in 2025 IEEE-RAS 24th International Conference
+on Humanoid Robots (Humanoids).
+IEEE, 2025, pp. 791–798.
+[17] B. Ichter, A. Brohan, Y. Chebotar, C. Finn, K. Hausman, A. Herzog,
+D. Ho, J. Ibarz, A. Irpan, E. Jang, R. Julian, D. Kalashnikov, S. Levine,
+Y. Lu, C. Parada, K. Rao, P. Sermanet, A. T. Toshev, V. Vanhoucke,
+F. Xia, T. Xiao, P. Xu, M. Yan, N. Brown, M. Ahn, et al., “Do as i can,
+not as i say: Grounding language in robotic affordances,” in Proceedings
+of The 6th Conference on Robot Learning, ser. Proceedings of Machine
+Learning Research, vol. 205.
+PMLR, 2023, pp. 287–318.
+[18] W. Huang, F. Xia, T. Xiao, H. Chan, J. Liang, P. Florence, A. Zeng,
+J. Tompson, I. Mordatch, Y. Chebotar, P. Sermanet, T. Jackson,
+N. Brown, L. Luu, S. Levine, K. Hausman, and B. Ichter, “Inner mono-
+logue: Embodied reasoning through planning with language models,” in
+Proceedings of The 6th Conference on Robot Learning, ser. Proceedings
+of Machine Learning Research, vol. 205. PMLR, 2023, pp. 1769–1782.
+[19] I. Singh, V. Blukis, A. Mousavian, A. Goyal, D. Xu, J. Tremblay, D. Fox,
+J. Thomason, and A. Garg, “Progprompt: Generating situated robot
+task plans using large language models,” in 2023 IEEE International
+Conference on Robotics and Automation (ICRA).
+IEEE, 2023, pp.
+11 523–11 530.
+[20] S. H. Vemprala, R. Bonatti, A. Bucker, and A. Kapoor, “Chatgpt for
+robotics: Design principles and model abilities,” IEEE Access, vol. 12,
+pp. 55 682–55 696, 2024.
+[21] Y. Mu, J. Chen, Q.-L. Zhang, S. Chen, Q. Yu, C. Ge, R. Chen, Z. Liang,
+M. Hu, C. Tao, P. Sun, H. Yu, C. Yang, W. Shao, W. Wang, J. Dai,
+Y. Qiao, M. Ding, and P. Luo, “Robocodex: Multimodal code generation
+for robotic behavior synthesis,” in Proceedings of the 41st International
+Conference on Machine Learning, ser. Proceedings of Machine Learning
+Research, vol. 235.
+PMLR, 2024, pp. 36 434–36 454.
+[22] K. Burns, A. Jain, K. Go, F. Xia, M. Stark, S. Schaal, and K. Hausman,
+“Genchip: Generating robot policy code for high-precision and contact-
+rich manipulation tasks,” in 2024 IEEE/RSJ International Conference on
+Intelligent Robots and Systems (IROS).
+IEEE, 2024, pp. 9596–9603.
+[23] S. Xie, H. Wang, Z. Xiao, R. Wang, and X. Chen, “Robotic programmer:
+Video instructed policy code generation for robotic manipulation,” arXiv
+preprint arXiv:2501.04268, 2025.
+[24] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair,
+R. Rafailov, E. P. Foster, P. R. Sanketi, Q. Vuong, T. Kollar, B. Burchfiel,
+R. Tedrake, D. Sadigh, S. Levine, P. Liang, and C. Finn, “OpenVLA: An
+open-source vision-language-action model,” in Proceedings of The 8th
+Conference on Robot Learning, ser. Proceedings of Machine Learning
+Research, vol. 270.
+PMLR, 2025, pp. 2679–2713.
+[25] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai,
+L. Groom, K. Hausman, B. Ichter, S. Jakubczak, T. Jones, L. Ke,
+S. Levine, A. Li-Bell, M. Mothukuri, S. Nair, K. Pertsch, L. X. Shi,
+J. Tanner, Q. Vuong, A. Walling, H. Wang, and U. Zhilinsky, “π0:
+A vision-language-action flow model for general robot control,” in
+Proceedings of Robotics: Science and Systems, Los Angeles, CA, USA,
+June 2025.
+[26] H. Liu, S. Ruan, J. Long, J. Wu, J. Hou, H. Tang, T. Jiang, W. Zhou,
+and W. Yao, “Eva-VLA: Evaluating Vision-Language-Action mod-
+els’ robustness under real-world physical variations,” arXiv preprint
+arXiv:2509.18953, 2025.
+[27] S. Fei, S. Wang, J. Shi, Z. Dai, J. Cai, P. Qian, L. Ji, X. He, S. Zhang,
+Z. Fei, J. Fu, J. Gong, and X. Qiu, “LIBERO-Plus: In-depth robustness
+analysis of Vision-Language-Action models,” in Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), 2026.
+[28] Z. Wang, Z. Zhou, J. Song, Y. Huang, Z. Shu, and L. Ma, “VLATest:
+Testing and evaluating Vision-Language-Action models for robotic ma-
+nipulation,” Proceedings of the ACM on Software Engineering, vol. 2,
+no. FSE, pp. 1615–1638, 2025.
+[29] Google
+DeepMind,
+“Gemini
+3.1
+pro:
+Model
+card,”
+https://storage.googleapis.com/deepmind-media/Model-Cards/
+Gemini-3-1-Pro-Model-Card.pdf,
+Feb.
+2026,
+published
+February
+19, 2026.
+[30] A. Khazatsky, K. Pertsch, S. Nair, A. Balakrishna, S. Dasari, S. Karam-
+cheti, S. Nasiriany, M. K. Srirama, L. Y. Chen, K. Ellis, P. D. Fagan,
+J. Hejna, M. Itkina, M. Lepert, Y. J. Ma, P. T. Miller, J. Wu, S. Belkhale,
+S. Dass, H. Ha, A. Jain, A. Lee, Y. Lee, M. Memmel, S. Park,
+I. Radosavovic, K. Wang, A. Zhan, K. Black, C. Chi, K. B. Hatch,
+S. Lin, J. Lu, J. Mercat, A. Rehman, P. R. Sanketi, A. Sharma,
+C. Simpson, Q. Vuong, H. R. Walke, B. Wulfe, T. Xiao, J. H. Yang,
+A. Yavary, T. Z. Zhao, C. Agia, R. Baijal, M. G. Castro, D. Chen,
+Q. Chen, T. Chung, J. Drake, E. P. Foster, J. Gao, D. A. Herrera,
+M. Heo, K. Hsu, J. Hu, D. Jackson, C. Le, Y. Li, R. Lin, Z. Ma,
+A. Maddukuri, S. Mirchandani, D. Morton, T. Nguyen, A. O’Neill,
+R. Scalise, D. Seale, V. Son, S. Tian, E. Tran, A. E. Wang, Y. Wu,
+A. Xie, J. Yang, P. Yin, Y. Zhang, O. Bastani, G. Berseth, J. Bohg,
+K. Goldberg, A. Gupta, A. Gupta, D. Jayaraman, J. J. Lim, J. Malik,
+R. Mart´ın-Mart´ın, S. Ramamoorthy, D. Sadigh, S. Song, J. Wu, M. C.
+Yip, Y. Zhu, T. Kollar, S. Levine, and C. Finn, “DROID: A Large-Scale
+In-The-Wild Robot Manipulation Dataset,” in Proceedings of Robotics:
+Science and Systems, Delft, Netherlands, July 2024.

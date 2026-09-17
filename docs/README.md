@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-15</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-17</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 33 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>21</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-15 19:43:24 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-17 19:44:41 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-15 日报精选 19 篇，精读 7 篇、速读 12 篇，聚焦具身智能与游戏世界模型。最值得看的是两篇 9.0 分工作：用动作条件世界模型自动生成可导航游戏地图，以及双世界模型驱动机器人穿越障碍。普通读者可从游戏地图生成和机器人越障两个应用场景入手理解世界模型。</p>
+<p>2026-09-17 日报：33 篇论文完成筛选，精读 21 篇、速读 12 篇，其中两篇满分工作聚焦手内物体6D位姿泛化抓取与一步去噪的世界动作模型。最值得关注的是精读中的《Learning In-Hand Object Reaching to General 6D Poses》和《DIDO》，前者指向通用6D抓取，后者把交互动态蒸馏进一步去噪；速读里还有JEPA世界模型规划、超小操作策略和连续环境VLN拓扑图等方向。普通读者可先读这两篇满分论文，再按兴趣挑速读中的世界模型或轻量策略了解趋势。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">21 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Valerant: An Automatic Navigable Game Map Generator via Action-Conditioned World Model Exploration">Valerant: An Automatic Navigable Game Map Generator via Action-Conditioned World Model Exploration</span></li><li><span class="dpr-home-dashboard-paper-title" title="DWMP: Leveraging Dual World Models for Humanoid Obstacle Traversal">DWMP: Leveraging Dual World Models for Humanoid Obstacle Traversal</span></li><li><span class="dpr-home-dashboard-paper-title" title="ArtManip: Category-Level Articulated In-Hand Manipulation">ArtManip: Category-Level Articulated In-Hand Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Learning In-Hand Object Reaching to General 6D Poses">Learning In-Hand Object Reaching to General 6D Poses</span></li><li><span class="dpr-home-dashboard-paper-title" title="DIDO: Distilling Interaction-Centric Dynamics into One-Step Denoising for World Action Models">DIDO: Distilling Interaction-Centric Dynamics into One-Step Denoising for World Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="World-Action Models for Robot Learning and Control: A Survey">World-Action Models for Robot Learning and Control: A Survey</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>14</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>7</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LabDex: A Hierarchical Benchmark for Dexterous Manipulation in Laboratories">LabDex: A Hierarchical Benchmark for Dexterous Manipulation in Laboratories</span></li><li><span class="dpr-home-dashboard-paper-title" title="GOAG: Generative and Object-Agnostic Grasp Planner for Dexterous Robotic Manipulation">GOAG: Generative and Object-Agnostic Grasp Planner for Dexterous Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="EmbodiedSkills: A Unified Framework for Orchestrating, Training, and Deploying VLA Agents">EmbodiedSkills: A Unified Framework for Orchestrating, Training, and Deploying VLA Agents</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Toward Physically Grounded JEPA World Models for Goal-Conditioned Robotic Planning">Toward Physically Grounded JEPA World Models for Goal-Conditioned Robotic Planning</span></li><li><span class="dpr-home-dashboard-paper-title" title="MINERVA: How Small Can a Manipulation Policy Be and Still Solve LIBERO?">MINERVA: How Small Can a Manipulation Policy Be and Still Solve LIBERO?</span></li><li><span class="dpr-home-dashboard-paper-title" title="Revisiting Topological Graphs for Macro Action based Closed-loop Reinforcement Learning of Vision Language Navigation in Continuous Environment">Revisiting Topological Graphs for Macro Action based Closed-loop Reinforcement Learning of Vision Language Navigation in Continuous Environment</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>8</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
 </section>
 </div>
 
