@@ -1,0 +1,1183 @@
+X-WBC: A Cross-Embodiment Foundation Model for
+Humanoid Whole-Body Control
+Juntong Zhang1,3
+Chun Gu2,3
+Li Zhang2,3,∗
+1Tongji University
+2School of Data Science, Fudan University
+3Shanghai Innovation Institute
+∗Corresponding author.
+Project website: https://logosroboticsgroup.github.io/x-wbc/
+Figure 1: X-WBC. Multiple humanoid robots jointly train a shared whole-body controller in simula-
+tion. Shared modules learn reusable human-motion semantics, while robot-specific modules handle
+embodiment-dependent execution. Real-robot VR teleoperation demonstrates a common human-
+centered interface across substantially different bodies.
+Abstract: Scaling humanoid whole-body control toward general-purpose deploy-
+ment requires large human motion corpora and training experience shared across
+robot bodies. Existing methods usually train one policy per robot, leaving mo-
+tion experience isolated across embodiments. We introduce X-WBC, a cross-
+embodiment foundation framework that separates relatively shared human motion
+semantics from embodiment-specific physical execution. Human-centered com-
+mand tokens align full human motion, robot reference motion, and sparse VR ob-
+servations. A causal Transformer learns reusable temporal structure from mixed
+multi-robot rollouts, while lightweight robot-specific modules map the shared rep-
+resentation to each robot’s proprioception and action space. Across nine simulated
+embodiments, external motions, and four real robots, experiments show that joint
+training improves tracking, the aligned representation supports consistent con-
+trol across command sources, and the learned policy remains competitive beyond
+the training corpus. These results support heterogeneous humanoids as joint data
+sources and establish cross-embodiment joint training as a practical route toward
+whole-body control foundation models.
+Keywords: Whole-body control, Humanoid robots, Cross-embodiment learning
+10th Conference on Robot Learning (CoRL 2026), Austin TX, USA.
+arXiv:2609.15213v1  [cs.RO]  14 Sep 2026
+
+
+1
+Introduction
+Does motor intelligence admit a representation that can transfer across bodies? Humans can learn
+motor skills by observing others despite differences in height, limb length, strength, and joint range.
+A martial arts student need not share the instructor’s exact body proportions to understand the intent
+behind a kick, a turn, or a squat. We ask whether humanoid whole-body control (WBC) can learn
+a similar cross-embodiment motion representation. Such a representation would allow experience
+collected with one body to improve control learning for others instead of remaining tied to a single
+platform.
+Recent humanoid WBC uses large human motion corpora and motion tracking to support teleop-
+eration, skill learning, and autonomy [1, 2, 3, 4, 5]. These systems move WBC beyond hand-
+designed behaviors, but their training unit is still usually a single robot.
+Each platform retar-
+gets motions, trains policies, and tunes deployment around its own morphology, so the diver-
+sity in datasets such as AMASS, LAFAN1, and BONES-SEED [6, 7, 8] becomes isolated robot-
+specific motion data. In parallel, robotics foundation models pursue cross-embodiment data shar-
+ing, using heterogeneous robot datasets to train shared backbones with embodiment-aware inter-
+faces [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]. Whether this idea can benefit humanoid WBC
+remains largely unexplored.
+Our central insight is that human motion data carries relatively embodiment-independent motion
+semantics, while the robot motion used to execute those semantics is embodiment-specific. Walk-
+ing, kicking, squatting, and reaching share temporal structure and geometric intent across bodies;
+humanoids mainly differ in how these intents become executable motion through their kinematics,
+joint limits, actuation, and body layout. A cross-embodiment WBC system should therefore sepa-
+rate shared motion semantics from robot-specific motion generation. Retargeting one human motion
+across robots provides distinct realizations of the same intent, so robot diversity complements mo-
+tion diversity as supervision for the shared backbone. If this separation holds, training signals from
+different robots can optimize a common motion model instead of remaining isolated in separate
+controllers.
+We introduce X-WBC, a cross-embodiment WBC framework evaluated on nine humanoid robots.
+The framework casts training as multi-robot motion tracking, where rollouts from different hu-
+manoids jointly supervise a shared policy backbone. Its key design is a human-motion-centered
+command-token space that aligns full human motion, robot reference motion, and sparse VR motion
+as different views of the same underlying motion intent. A shared temporal Transformer learns the
+history-dependent motion structure needed for cross-robot understanding, while lightweight robot-
+specific modules adapt this representation to each robot’s proprioception and action space. Training
+mixes transitions from all robots in one PPO [20] batch, with command token alignment and adap-
+tive motion sampling to stabilize joint optimization.
+We validate X-WBC through simulation and deployment on multiple humanoid robots. Controlled
+comparisons examine whether sharing multi-robot experience improves tracking and whether the
+aligned command routes support consistent control. An external-motion evaluation tests the frozen
+policy beyond its training corpus, while token-space retrieval and real humanoid teleoperation exam-
+ine the learned representation and its deployment on different robot bodies. Together, these results
+support multi-robot motion tracking as a practical foundation task for sharing whole-body motion
+experience across heterogeneous humanoids.
+This paper makes three contributions: (1) a cross-embodiment WBC formulation that shifts the
+training unit from isolated per-robot policies to joint training across multiple humanoid robots. (2)
+A human-motion-centered policy architecture that separates shared motion semantics from robot-
+specific execution through aligned command tokens, a shared temporal backbone, and lightweight
+robot-specific modules. (3) Experiments showing the effects of joint training and core components,
+consistent multi-source control, competitive external-motion tracking, token-space retrieval, and
+real-world deployment.
+2
+
+
+2
+Related work
+Whole-body control. Recent humanoid whole-body control increasingly uses motion tracking as a
+low-level interface for teleoperation, skill learning, and autonomy. H2O [1], OmniH2O [2], and Hu-
+manPlus [3] build RGB and VR teleoperation, dexterous loco-manipulation, robot shadowing, and
+autonomous-skill collection on this interface, while BeyondMimic [4] and SONIC [5] scale motion
+tracking toward composable behaviors and motion foundation tasks. These systems, however, are
+still organized around a single embodiment: each platform retargets motion data and trains policies
+for its own morphology. We study whether multiple humanoid bodies can instead share one WBC
+framework while retaining robot-specific execution.
+Cross-embodiment robot foundation models. Robot foundation models increasingly treat het-
+erogeneous robot data as a scalable training mixture, with generalist policies such as RT-2 [9],
+OpenVLA [10], π0 [11], π0.5 [21], GR00T [12], and π0.7 [22] learning reusable vision, language,
+and action mappings from large datasets such as Open X-Embodiment [13], DROID [14], Robo-
+MIND [15], and AgiBot [16]. This mixture exposes heterogeneity in morphology, sensing, propri-
+oception, action spaces, and data protocols, which HPT [17], CrossFormer [18], and X-VLA [19]
+address with embodiment-aware stems, shared policies, or soft prompts. These works motivate a
+trainable interface between shared representations and robot-specific inputs and outputs, but they
+mainly target manipulation and general vision-language-action settings. We bring this perspective
+to closed-loop humanoid WBC, where shared motion representations must also respect balance,
+dynamics, and joint-space control.
+Human motion representation for humanoid control. Motion resources such as AMASS [6],
+LAFAN1 [7], BONES-SEED [8], and SMPL [23] provide reusable motion semantics, but WBC
+must map them to robot morphology. This problem has been studied for articulated characters [24,
+25, 26, 27, 28, 29] and in humanoid robotics through geometric matching, scaling, and inverse
+kinematics [30, 31, 32, 33, 34, 35, 36]. GMR [37] further shows that retargeting quality strongly
+affects tracking and provides cleaner humanoid reference motions. We use these robot motions not
+as isolated per-robot targets, but as one command route aligned with full human motion and sparse
+VR motion.
+3
+Method
+As shown in Figure 2, the framework treats cross-embodiment whole-body control as human-
+motion-centered representation learning rather than isolated policy training for each humanoid mor-
+phology. A shared motion Transformer learns relatively embodiment-independent motion seman-
+tics, while robot-specific modules realize these semantics under each robot’s proprioception, dy-
+namics, and action space. We first formulate the multi-robot tracking problem (Section 3.1), then
+describe command encoding (Section 3.2), the shared backbone and robot-specific modules (Sec-
+tion 3.3), and the joint training procedure (Section 3.4).
+3.1
+Cross-embodiment whole-body motion tracking
+We separate relatively embodiment-independent human motion semantics from embodiment-
+specific robot motion generation. To make this separation learnable, we cast training as a multi-robot
+motion-tracking problem, where related motions executed by different humanoids provide supervi-
+sion for a shared motion Transformer rather than remaining isolated in robot-specific controllers.
+Formally, each robot i defines an MDP Mi = (Si, Ai, Ti, R, γ), where the state space Si, action
+space Ai, and transition dynamics Ti are embodiment-specific, while the reward family R and dis-
+count factor γ are shared across robots. We optimize the shared tracking objective over rollouts from
+all robots with PPO [20].
+Observations. We use an asymmetric actor-critic observation design. The actor observation si
+t
+consists of robot proprioception sp,i
+t
+and one motion command sc
+t. The proprioception sp,i
+t
+=
+(qi
+t, ˙qi
+t, ωi
+t, gi
+t, ai
+t−1) contains joint positions qi
+t, joint velocities ˙qi
+t, base angular velocity ωi
+t, gravity
+3
+
+
+Humanoid Motions
+Robot Command Encoders
+State Encoders
+Shared VR Token
+Shared Human Token
+Human Command Encoder
+VR Command Encoder
+Action Decoders
+Retarget
+Extract
+Human Motions
+Sparse VR Motions
+Robot-specific Token
+Universal Command space
+State Token
+PPO
+Action Token
+Randomly
+Mixed batch
+History token
+Queried by 
+robot ID
+Unitree 
+H2
+31dof
+RobotID: 0
+Align
+Align
+Cmd Token
+Figure 2: Overview of X-WBC. Full human motion, robot motion commands, and sparse VR
+commands are encoded into a shared motion-token space. A shared Transformer backbone integrates
+the mixed token batch with robot proprioception and history, while robot-specific modules route each
+sample to the proper embodiment interface and decode executable joint actions.
+projected in the body frame gi
+t, and the previous action ai
+t−1. The command sc
+t is selected from
+robot motion, full human motion, and sparse VR motion. Position, orientation, and velocity com-
+mands are expressed in a root-centered or robot-centric frame by default. The critic receives the
+actor observation plus privileged terms for value estimation, including robot body-link positions and
+orientations in the body frame and base linear velocity.
+Actions. Each policy output is interpreted in the action space of the active robot. For robot i, the
+policy outputs valid joint actions that are converted to torques by a low-level PD controller. Since
+robots have different observation and action dimensions, these vectors are padded to the maximum
+dimensions in the robot set during training so that transitions from multiple robots can be mixed in
+one batch. At execution time, the robot-specific decoder keeps only the valid action dimensions of
+the corresponding robot.
+Rewards. The reward uses the same tracking semantics across robots. For robot i, the reward can
+be summarized as ri
+t = Rtrack + P, where ri
+t is the scalar reward at time t, Rtrack groups tracking
+terms for root orientation, body-link pose, and body velocity, and P groups penalties for action-rate
+changes, joint-limit violations, and undesired contacts. The full reward list is provided in Appendix.
+3.2
+Human-centered command encoding
+We align motion commands from different sources into a human-centered motion-token space. Hu-
+man motion provides a common description before robot-specific retargeting, while the shared pol-
+icy aggregates experience from different robot bodies. Alignment makes the command routes com-
+patible with that shared policy. We use three command encoder routes: full human motion provides
+shared motion semantics, robot motion provides reference motions in robot body spaces, and sparse
+VR provides a deployable human control interface.
+Human motion command encoder. This shared encoder maps full-body human motion to a hu-
+man motion token. Its input comes from motion capture and provides a unified humanoid motion
+description. Because this token is not tied to any robot joint definition, it serves as the semantic
+anchor for command alignment while preserving human motion intent and temporal structure.
+Robot motion command encoder. This encoder maps reference motions in robot body spaces to
+robot motion tokens. These references usually come from human-to-robot retargeting, but can also
+come from robot recordings, generated motions, or other robot motion sources. Since robots differ
+in body definitions, joint orderings, and executable constraints, this encoder is robot-specific.
+4
+
+
+Sparse VR command encoder. This shared encoder maps sparse observations of human motion to
+a sparse VR token. During training, we extract five human keypoints, the head and four limb end-
+points, from full human motion. During deployment, the same signal format can be obtained from
+VR devices in real time. Five tracked points provide a low-bandwidth control interface without re-
+quiring full motion capture or per-motion retargeting at deployment. Dense robot references remain
+necessary for training supervision, and this interface does not remove robot-specific calibration or
+control setup.
+Across all routes, target motion is represented with body positions, orientations, and velocities
+rather than only robot joint angles, providing the spatial and velocity information needed for pre-
+cise tracking. Before entering the encoders, these quantities are normalized in a root-centered or
+robot-centered frame, so the tokens focus on relative motion structure and remain robust to global-
+coordinate shifts and different operator body sizes. During training, command token alignment
+encourages human, robot, and sparse VR tokens that describe the same underlying motion to be
+used consistently by the shared policy backbone.
+3.3
+Shared policy backbone and robot-specific modules
+Many humanoid motion-tracking policies use MLPs to predict actions from the current state and
+reference motion. This single-step mapping is effective for local tracking on one robot, but cross-
+embodiment control must learn shared motion structure across multiple robots and command forms.
+Historical context is therefore important for resolving motion phase, velocity trends, and tempo-
+ral dependencies. We use an attention-based temporal backbone over observation-token histories,
+allowing the shared policy to learn reusable temporal motion patterns from rollouts across all robots.
+The shared policy backbone is implemented as a causal Transformer [38]. For robot i, each control
+step first combines the selected command token zc,t and the robot-specific proprioception token zi
+p,t
+into the current observation token. The Transformer aggregates current and past observation tokens
+within a causal history window of length L and outputs an action token for action decoding:
+hi
+t = Bθ
+ {[zc,τ; zi
+p,τ]}t
+τ=t−L+1
+
+,
+(1)
+where Bθ is the policy backbone shared by all robots, and hi
+t is the action token output at the current
+observation-token position. During online rollout, a KV cache stores the keys and values of previous
+tokens, so each control step only processes the new observation token and updates the cache instead
+of recomputing the full history window. This substantially reduces computation for real-time control
+while preserving multi-frame context.
+Proprioception encoding and action decoding are robot-specific because humanoids differ in state
+dimensions, joint ordering, actuator limits, and action spaces. Like the robot motion command en-
+coder, both are lightweight robot-specific modules selected by robot ID: the former maps padded
+proprioceptive observations to a fixed-dimensional proprioception token, and the latter maps the
+action token hi
+t to valid joint actions for robot i. This division lets the shared Transformer learn
+reusable cross-embodiment motion semantics, while the robot-specific modules translate those se-
+mantics into executable joint actions for each robot.
+3.4
+Training
+Multi-robot joint training. We use Isaac Lab [39] to construct a multi-robot training environment.
+Multiple robots perform rollouts within the same training framework, while each robot keeps its
+own state, action, contact, and termination logic. Transitions from all robots are collected after each
+simulation step and mixed into the same PPO [20] batch, which jointly updates the shared modules
+and the active robot-specific modules.
+Optimization. For each motion clip, the policy encodes robot motion, full human motion, and
+sparse VR motion into three command tokens. During rollout, one token is sampled with a 1:1:1
+ratio and used as the Transformer backbone input throughout the episode. The training objective
+5
+
+
+combines the PPO tracking objective with command token alignment:
+L = LPPO + λalignLalign.
+(2)
+Here LPPO includes the clipped policy loss, value regression, and entropy regularization. Lalign
+computes pairwise MSE among the three normalized command tokens from the same motion clip
+before they enter the backbone. Full training hyperparameters are listed in Appendix.
+Termination. Episode termination removes clear tracking failures and improves training efficiency.
+We terminate an episode when root vertical position, root orientation, or end-effector vertical po-
+sition error exceeds its threshold. These events also provide failure statistics for adaptive motion
+sampling. The training thresholds are listed in Appendix A.2; the common external-evaluation rule
+is specified in Section 4.1.
+Adaptive motion sampling. Following failure-rate-based sampling used in motion tracking [4,
+5], we increase the probability of motion segments that frequently trigger early termination. This
+focuses training on difficult clips while retaining coverage of the full motion set. Because persistent
+failures can also indicate bad retargeting, incorrect contacts, or physically infeasible segments, we
+remove consistently low-success segments from the training pool. The sampling and hard-removal
+parameters are listed in Appendix.
+Domain randomization. To improve sim-to-real robustness and disturbance recovery, we use mod-
+erate domain randomization. We randomize contact parameters, default joint positions, and base
+center-of-mass offsets, and periodically apply root velocity perturbations. All random variables are
+sampled from uniform distributions, with ranges listed in Appendix.
+4
+Experiments
+We evaluate X-WBC from four complementary perspectives: policy design and joint training, trans-
+fer to external motions, the structure of the learned command space, and real-robot deployment.
+Together, these experiments test whether multi-robot training produces a reusable control backbone
+while preserving robot-specific execution.
+4.1
+Experimental setup
+We train in Isaac Lab on nine humanoid embodiments: Unitree G1 variants, H1, H1-2, R1, and
+H2, together with Fourier GR3, Booster T1, and Adam Lite. Training uses about 200 hours of
+BONES-SEED motion [8], resampled at 50 Hz. We adapt the GMR retargeting pipeline [37] through
+smoothing and robot-specific parameters. All policies use PPO, with 1024 parallel environments per
+robot on 8 NVIDIA H100 GPUs. The final model is trained for approximately two days, runs at 50
+Hz, and uses a 32-step history. Joint training mixes the active robots’ rollouts into a shared update
+batch. Appendix A provides implementation details.
+Evaluation data. Table 1 evaluates Unitree G1 and H2 on the BONES-SEED motions used for
+training. These results measure in-distribution architecture and fitting behavior, rather than gener-
+alization to an independent motion corpus. For external evaluation, 100STYLE [40] contains one
+actor performing 100 locomotion styles. Our fixed grid pairs each style with eight movement cate-
+gories, giving 800 clips and 133.02 minutes at 50 Hz. Table 2 evaluates the complete grid with all
+policy weights frozen.
+Protocol and metrics. All systems use the same G1 reference trajectories, clip windows, and
+method-independent scoring. A clip terminates when pelvis-height error exceeds 0.25 m, the verti-
+cal projected-gravity components differ by more than 0.8, or any wrist or ankle height error exceeds
+0.25 m. We use one deterministic rollout per clip (seed 42, flat terrain, no evaluation randomization),
+with completion taking priority at the final frame. Success rate (SR) and mean clip completion mea-
+sure rollout survival; MPKPE and body velocity error are averaged over all active steps, including
+failed partial rollouts. Early failures censor these errors, so tracking errors are interpreted together
+with SR and completion.
+6
+
+
+Table 1: Motion tracking on BONES-SEED training motions. Transformer is the default back-
+bone; X-WBC (MLP) replaces the shared Transformer with an MLP, while Single robot uses the
+same Transformer architecture as X-WBC but is trained per robot. Src. denotes the evaluation
+command source. SR is success rate (%), and Empkpe (m), Evel (m/s), Ep
+root (m), and ER
+root (rad)
+measure mean per-keypoint position, body velocity, root position, and root rotation errors over all
+evaluated rollouts.
+Setting
+Unitree G1 (29DoF)
+Unitree H2
+Model
+Src.
+SR(%) ↑Empkpe ↓Evel ↓Ep
+root ↓ER
+root ↓SR(%) ↑Empkpe ↓Evel ↓Ep
+root ↓ER
+root ↓
+Policy architecture and joint training
+X-WBC
+VR
+98.60
+0.0412
+0.2120
+0.9936
+0.4354
+93.22
+0.0629
+0.4172
+1.4716
+0.4535
+X-WBC (MLP)
+VR
+97.70
+0.0411
+0.2272
+0.9433
+0.4465
+91.33
+0.0652
+0.4542
+1.4316
+0.4833
+Single robot
+VR
+97.69
+0.0412
+0.2195
+0.9756
+0.4431
+92.22
+0.0698
+0.4417
+1.7709
+0.4978
+Command source consistency
+X-WBC
+Robot
+98.21
+0.0409
+0.2164
+1.1591
+0.3554
+92.08
+0.0634
+0.4274
+1.6865
+0.3758
+X-WBC
+Human
+98.66
+0.0397
+0.2098
+0.9562
+0.4053
+93.02
+0.0610
+0.4124
+1.4069
+0.4270
+Ablations
+w/o human and robot routes
+VR
+95.34
+0.0492
+0.2494
+1.1032
+0.5093
+85.71
+0.0722
+0.5016
+1.6970
+0.5299
+w/o human route
+VR
+95.17
+0.0500
+0.2508
+1.1437
+0.5125
+83.84
+0.0763
+0.5244
+1.7784
+0.5342
+w/o robot route
+VR
+95.33
+0.0503
+0.2461
+1.1760
+0.5046
+85.21
+0.0757
+0.5106
+1.7719
+0.5229
+w/o alignment loss
+VR
+95.41
+0.0496
+0.2469
+1.1128
+0.5029
+85.68
+0.0735
+0.5100
+1.6512
+0.5297
+w/o robot-specific modules
+VR
+96.54
+0.0474
+0.2241
+1.0611
+0.4793
+88.65
+0.0724
+0.4575
+1.5091
+0.4875
+Table 2: External-motion evaluation on the complete 800-clip 100STYLE grid (G1). X-WBC
+uses its default sparse-VR command source; external systems retain their native inputs and low-level
+controllers. Errors include all active steps before termination; position is in m and velocity in m/s.
+Model
+Src.
+SR(%) ↑
+Comp.(%) ↑
+Empkpe ↓
+Evel ↓
+X-WBC
+VR5
+91.13
+91.66
+0.0649
+0.5400
+SONIC
+SMPL
+93.00
+93.35
+0.0687
+0.3419
+TWIST
+SMPL–GMR
+75.62
+78.18
+0.0565
+0.5261
+4.2
+Architecture, joint training, and ablations
+Table 1 separates policy architecture and joint training, command-source consistency, and compo-
+nent removal on the BONES-SEED training motions.
+Architecture and joint training. On G1, X-WBC reaches 98.60% SR, compared with 97.70% for
+X-WBC (MLP) and 97.69% for Single robot. On H2, the corresponding rates are 93.22%, 91.33%,
+and 92.22%. The full model also gives the lowest body-velocity error on both robots. Similar G1
+position errors but better success and velocity tracking indicate improved closed-loop stability, while
+the larger H2 gap shows the value of shared supervision on a harder embodiment. Transfer beyond
+the training motions is examined separately below.
+Command sources. For the same full model, the VR, robot-motion, and full-human routes achieve
+similar training-motion success on both G1 and H2, showing that the aligned encoders provide
+compatible inputs to the shared backbone. Human commands are slightly stronger on several body
+metrics, whereas robot commands give lower root-rotation error because they are already in the
+target reference space. Sparse VR remains close despite using only five keypoints. Robot commands
+here are an inference-time input to the jointly trained model, not a separately trained robot-only
+policy.
+Component removal. Removing either or both dense command routes, the alignment loss, or
+the robot-specific modules lowers training-motion SR on both robots. The largest H2 reductions
+occur when a dense command route is removed. The relatively strong result without robot-specific
+modules suggests that proprioception itself carries useful embodiment information. Together, these
+results support the complete design on the evaluated training distribution.
+4.3
+External-motion evaluation
+Table 2 compares X-WBC using its default sparse-VR interface with released SONIC [5] and
+TWIST [36] under common scoring. The external systems retain their native inputs and low-level
+controllers: SMPL for SONIC and SMPL-derived motion through GMR for TWIST. The evaluated
+7
+
+
+G1-29
+G1-23
+H1
+H1-2
+R1
+H2
+T1
+Adam
+GR3
+70
+80
+90
+100
+Success rate (%)
+Success rate
+MPKPE
+0
+40
+80
+120
+MPKPE (mm)
+Source
+Robot
+0
+50
+100
+86.0
+61.3
+94.2
+76.1
+Same phase
+Same motion
+Figure 3: Embodiment coverage and command-token semantics. Left: per-robot success rate
+and MPKPE on BONES-SEED training motions under sparse VR commands. Right: command-
+token retrieval Recall@1 across command sources and robot embodiments; cross-robot retrieval
+uses robot-motion tokens. Random baselines are 0.17% and 1.04%.
+(b) Lower body control
+(a) Upper body control
+Figure 4: Real-world deployment. X-WBC controls four humanoid robots of different sizes. Panel
+(a) shows sparse-VR upper-body poses; panel (b) shows soccer kicking and grass-field running.
+releases and checkpoints available in our pipeline cover Unitree G1, so we conduct the matched
+external comparison on that platform. Neither baseline reports 100STYLE as a training source.
+On the complete 100STYLE grid, X-WBC with VR5 commands completes 729 clips (91.13% SR),
+SONIC 744 (93.00%), and TWIST 605 (75.62%). SONIC has lower velocity error, whereas TWIST
+has lower MPKPE but substantially lower completion. Because stepwise errors stop accumulating
+after termination, TWIST’s lower MPKPE should be read alongside its 15.51-point SR deficit to
+X-WBC. X-WBC therefore trades a small position-error gap for much broader rollout survival on
+the complete grid, while remaining close to SONIC in success.
+4.4
+Embodiment coverage and command-token semantics
+Figure 3 reports the final shared Transformer’s training-motion performance across all nine robots.
+Success and MPKPE vary across platforms, but the shared policy achieves broad coverage across
+markedly different bodies. Their rankings need not coincide: success measures whether a rollout
+avoids termination, whereas MPKPE measures tracking accuracy during active steps. Reporting
+both distinguishes robust rollout survival from precise motion tracking.
+The right panel evaluates whether the learned tokens retain motion identity across input sources and
+robot embodiments. Cross-source retrieval reaches 86.0% Recall@1 for the same motion phase and
+94.2% for the same motion. Cross-robot retrieval reaches 61.3% and 76.1%, above the correspond-
+ing random baselines. The consistently higher same-motion recall indicates that motion identity is
+8
+
+
+more stable than exact temporal phase. Lower cross-robot than cross-source recall further suggests
+that embodiment-specific execution information remains in the tokens. These results show that the
+aligned token space captures shared motion structure while retaining the embodiment information
+needed for execution.
+4.5
+Real-world deployment
+We deploy X-WBC on Unitree G1, R1, H1-2, and H2 using the same policy architecture and sparse-
+VR interface. Figure 4 shows upper-body pose control and lower-body motions on robots with
+different sizes and joint counts. Across platforms, the operator uses the same command format,
+while robot-specific branches map it to each robot’s proprioception and action space. These demon-
+strations show that the same human-centered command interface and shared backbone can support
+robots with substantially different scales and kinematic structures. Quantitative cross-method hard-
+ware comparisons and cross-manufacturer deployment remain directions for broader evaluation.
+5
+Conclusion
+X-WBC reframes humanoid whole-body control as a cross-embodiment learning problem.
+Its
+shared motion Transformer learns temporal structure from mixed multi-robot experience, aligned
+human-centered command tokens connect dense motion references with deployable sparse inputs,
+and lightweight robot-specific modules translate the shared representation into executable actions.
+Across simulation, external-motion evaluation, token-space analysis, and deployment on four real
+humanoids, the results show that a single jointly trained backbone can improve tracking, remain
+competitive beyond the training motions, and provide one control interface across bodies with sub-
+stantially different sizes and kinematics. These findings establish multi-robot motion tracking as a
+practical route toward foundation models that accumulate, rather than isolate, whole-body control
+experience across humanoid platforms.
+6
+Limitations
+The current study focuses on humanoid robots, so the extent to which the learned motion representa-
+tion transfers to more diverse morphologies, body proportions, and joint layouts remains open. Al-
+though the shared backbone accumulates experience across robots, X-WBC still uses robot-specific
+command and proprioception encoders, action decoders, control logic, and per-robot motion re-
+targeting to preserve each platform’s executable action space. These interfaces remain part of the
+deployment pipeline, and their reduction should be evaluated without weakening control fidelity.
+Real-world deployment has been validated on four Unitree robots and a limited set of upper- and
+lower-body behaviors. Broader hardware evidence should include other manufacturers, longer task
+sequences, and more varied contacts and terrains. Future work will study how transfer scales across
+broader robot sets, reduce robot-specific preparation, and systematically evaluate robustness to sens-
+ing dropouts, communication delay, state-estimation noise, and persistent disturbances. A further
+direction may be zero-shot X-WBC, in which a policy trained across known embodiments controls
+an unseen humanoid without training a new robot-specific module. Achieving this goal may require
+morphology-conditioned interfaces that derive sensing and action mappings from a robot description
+while preserving stable closed-loop execution.
+Acknowledgments
+This work was supported in part by the New Generation Artificial Intelligence–National Science and
+Technology Major Project (2025ZD0123004), the National Natural Science Foundation of China
+(Grant No. 62376060), and the Ningbo grant (2025Z038). We thank Professor Xin Ruan of the
+College of Civil Engineering at Tongji University for helpful discussions and support.
+9
+
+
+References
+[1] T. He, Z. Luo, W. Xiao, C. Zhang, K. Kitani, C. Liu, and G. Shi. Learning human-to-humanoid
+real-time whole-body teleoperation. In 2024 IEEE/RSJ International Conference on Intelligent
+Robots and Systems (IROS), pages 8944–8951. IEEE, 2024. doi:10.1109/IROS58592.2024.
+10801984. URL https://doi.org/10.1109/IROS58592.2024.10801984.
+[2] T. He, Z. Luo, X. He, W. Xiao, C. Zhang, W. Zhang, K. Kitani, C. Liu, and G. Shi. Omnih2o:
+Universal and dexterous human-to-humanoid whole-body teleoperation and learning, 2024.
+URL https://arxiv.org/abs/2406.08858.
+[3] Z. Fu, Q. Zhao, Q. Wu, G. Wetzstein, and C. Finn. Humanplus: Humanoid shadowing and
+imitation from humans, 2024. URL https://arxiv.org/abs/2406.10454.
+[4] Q. Liao, T. E. Truong, X. Huang, Y. Gao, G. Tevet, K. Sreenath, and C. K. Liu. Beyondmimic:
+From motion tracking to versatile humanoid control via guided diffusion, 2025. URL https:
+//arxiv.org/abs/2508.08241.
+[5] Z. Luo, Y. Yuan, T. Wang, C. Li, S. Chen, F. Casta˜neda, Z.-A. Cao, J. Li, D. Minor, Q. Ben,
+X. Da, R. Ding, C. Hogg, L. Song, E. Lim, E. Jeong, T. He, H. Xue, W. Xiao, Z. Wang, S. Yuen,
+J. Kautz, Y. Chang, U. Iqbal, L. J. Fan, and Y. Zhu. Sonic: Supersizing motion tracking for
+natural humanoid whole-body control, 2025. URL https://arxiv.org/abs/2511.07820.
+[6] N. Mahmood, N. Ghorbani, N. F. Troje, G. Pons-Moll, and M. J. Black. AMASS: Archive
+of motion capture as surface shapes. In International Conference on Computer Vision, pages
+5441–5450, Oct. 2019. doi:10.1109/ICCV.2019.00554. URL https://doi.org/10.1109/
+ICCV.2019.00554.
+[7] F. G. Harvey, M. Yurick, D. Nowrouzezahrai, and C. Pal. Robust motion in-betweening. ACM
+Transactions on Graphics, 39(4), 2020. doi:10.1145/3386569.3392480. URL https://doi.
+org/10.1145/3386569.3392480.
+[8] Bones Studio. BONES-SEED: Skeletal everyday embodiment dataset. Hugging Face dataset,
+2026. URL https://huggingface.co/datasets/bones-studio/seed.
+[9] B. Zitkovich, T. Yu, S. Xu, P. Xu, T. Xiao, F. Xia, et al. Rt-2: Vision-language-action models
+transfer web knowledge to robotic control. In Proceedings of The 7th Conference on Robot
+Learning, volume 229 of Proceedings of Machine Learning Research, 2023. URL https:
+//proceedings.mlr.press/v229/zitkovich23a.html.
+[10] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair, R. Rafailov, E. Foster,
+P. Sanketi, et al. Openvla: An open-source vision-language-action model. In Proceedings of
+The 8th Conference on Robot Learning, 2024. URL https://arxiv.org/abs/2406.09246.
+[11] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, L. Groom, K. Haus-
+man, B. Ichter, S. Jakubczak, T. Jones, L. Ke, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair,
+K. Pertsch, L. Shi, L. Smith, J. Tanner, Q. Vuong, A. Walling, H. Wang, and U. Zhilinsky.
+π0: A vision-language-action flow model for general robot control. In Robotics: Science and
+Systems XXI, 2025. doi:10.15607/RSS.2025.XXI.010. URL https://doi.org/10.15607/
+RSS.2025.XXI.010.
+[12] J. Bjorck, F. Casta˜neda, N. Cherniadev, X. Da, R. Ding, L. Fan, Y. Fang, D. Fox, F. Hu,
+S. Huang, et al. Gr00t n1: An open foundation model for generalist humanoid robots. arXiv
+preprint arXiv:2503.14734, 2025. URL https://arxiv.org/abs/2503.14734.
+[13] A. O’Neill, A. Rehman, A. Maddukuri, A. Gupta, A. Padalkar, A. Lee, A. Pooley, A. Gupta,
+A. Mandlekar, A. Jain, et al. Open x-embodiment: Robotic learning datasets and rt-x models:
+Open x-embodiment collaboration 0. In 2024 IEEE International Conference on Robotics and
+Automation (ICRA), pages 6892–6903. IEEE, 2024. doi:10.1109/ICRA57147.2024.10611477.
+URL https://doi.org/10.1109/ICRA57147.2024.10611477.
+10
+
+
+[14] A. Khazatsky, K. Pertsch, S. Nair, A. Balakrishna, S. Dasari, S. Karamcheti, S. Nasiriany,
+M. K. Srirama, L. Y. Chen, K. Ellis, et al. Droid: A large-scale in-the-wild robot manipulation
+dataset. In Robotics: Science and Systems XX, 2024. doi:10.15607/RSS.2024.XX.120. URL
+https://doi.org/10.15607/RSS.2024.XX.120.
+[15] K. Wu, C. Hou, J. Liu, Z. Che, X. Ju, Z. Yang, M. Li, Y. Zhao, Z. Xu, G. Yang, et al.
+Robomind: Benchmark on multi-embodiment intelligence normative data for robot manipu-
+lation. In Robotics: Science and Systems XXI, 2025. doi:10.15607/RSS.2025.XXI.152. URL
+https://doi.org/10.15607/RSS.2025.XXI.152.
+[16] Q. Bu, J. Cai, L. Chen, X. Cui, Y. Ding, S. Feng, S. Gao, X. He, X. Hu, X. Huang, et al.
+Agibot world colosseo: A large-scale manipulation platform for scalable and intelligent em-
+bodied systems. In 2025 IEEE/RSJ International Conference on Intelligent Robots and Sys-
+tems (IROS), pages 3549–3556. IEEE, 2025. doi:10.1109/IROS60139.2025.11247088. URL
+https://doi.org/10.1109/IROS60139.2025.11247088.
+[17] L. Wang, X. Chen, J. Zhao, and K. He.
+Scaling proprioceptive-visual learning with het-
+erogeneous pre-trained transformers.
+In Advances in Neural Information Processing Sys-
+tems, volume 37, pages 124420–124450, 2024. doi:10.52202/079017-3952. URL https:
+//doi.org/10.52202/079017-3952.
+[18] R. Doshi, H. Walke, O. Mees, S. Dasari, and S. Levine.
+Scaling cross-embodied learn-
+ing: One policy for manipulation, navigation, locomotion and aviation.
+arXiv preprint
+arXiv:2408.11812, 2024.
+[19] J. Zheng, J. Li, Z. Wang, D. Liu, X. Kang, Y. Feng, Y. Zheng, J. Zou, Y. Chen, J. Zeng,
+Y.-Q. Zhang, J. Pang, J. Liu, T. Wang, and X. Zhan. X-vla: Soft-prompted transformer as
+scalable cross-embodiment vision-language-action model, 2025. URL https://arxiv.org/
+abs/2510.10274.
+[20] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov. Proximal policy optimization
+algorithms. arXiv preprint arXiv:1707.06347, 2017. URL https://arxiv.org/abs/1707.
+06347.
+[21] Physical Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail,
+M. Equi, C. Finn, N. Fusai, et al. pi0.5: a vision-language-action model with open-world
+generalization. arXiv preprint arXiv:2504.16054, 2025. URL https://arxiv.org/abs/
+2504.16054.
+[22] Physical Intelligence, B. Ai, A. Amin, R. Aniceto, A. Balakrishna, G. Balke, K. Black,
+G. Bokinsky, S. Cao, T. Charbonnier, V. Choudhary, F. Collins, K. Conley, G. Connors,
+J. Darpinian, K. Dhabalia, M. Dhaka, J. DiCarlo, D. Driess, M. Equi, A. Esmail, Y. Fang,
+C. Finn, C. Glossop, T. Godden, I. Goryachev, L. Groom, H. Habeeb, H. Hancock, K. Haus-
+man, G. Hussein, V. Hwang, B. Ichter, C. Jacobsen, S. Jakubczak, R. Jen, T. Jones, G. Kam-
+merer, B. Katz, L. Ke, M. Khadikov, C. Kuchi, M. Lamb, D. LeBlanc, B. LeCount, S. Levine,
+X. Li, A. Li-Bell, V. Lialin, Z. Liang, W. Lim, Y. Lu, E. Luo, V. Mano, N. Marwaha,
+A. Mongush, L. Murphy, S. Nair, T. Patterson, K. Pertsch, A. Z. Ren, G. Schelske, C. Sharma,
+B. Shi, L. X. Shi, L. Smith, J. T. Springenberg, K. Stachowicz, W. Stoeckle, J. Tang, J. Tan-
+ner, S. Tekeste, M. Torne, K. Vedder, Q. Vuong, A. Walling, H. Wang, J. Wang, X. Wang,
+C. Whalen, S. Whitmore, B. Williams, C. Xu, S. Yoo, L. Yu, W. Zhang, Z. Zhang, and
+U. Zhilinsky. π0.7: a steerable generalist robotic foundation model with emergent capabili-
+ties, 2026. URL https://arxiv.org/abs/2604.15483.
+[23] M. Loper, N. Mahmood, J. Romero, G. Pons-Moll, and M. J. Black. SMPL: A skinned multi-
+person linear model. ACM Trans. Graphics (Proc. SIGGRAPH Asia), 34(6):248:1–248:16,
+Oct. 2015. doi:10.1145/2816795.2818013. URL https://doi.org/10.1145/2816795.
+2818013.
+11
+
+
+[24] K.-J. Choi and H.-S. Ko. On-line motion retargetting. In Proceedings. Seventh Pacific Con-
+ference on Computer Graphics and Applications (Cat. No.PR00293), pages 32–42, 1999. doi:
+10.1109/PCCGA.1999.803346. URL https://doi.org/10.1109/PCCGA.1999.803346.
+[25] Z. Popovi´c and A. Witkin. Physically based motion transformation. In Proceedings of the 26th
+Annual Conference on Computer Graphics and Interactive Techniques, SIGGRAPH ’99, pages
+11–20, USA, 1999. ACM Press/Addison-Wesley Publishing Co. doi:10.1145/311535.311536.
+URL https://doi.org/10.1145/311535.311536.
+[26] S. Tak and H.-S. Ko. A physically-based motion retargeting filter. ACM Trans. Graph., 24
+(1):98–117, Jan. 2005. doi:10.1145/1037957.1037963. URL https://doi.org/10.1145/
+1037957.1037963.
+[27] R. Villegas, J. Yang, D. Ceylan, and H. Lee. Neural kinematic networks for unsupervised
+motion retargetting. In Proceedings of the IEEE conference on computer vision and pattern
+recognition, pages 8639–8648, 2018. doi:10.1109/CVPR.2018.00901. URL https://doi.
+org/10.1109/CVPR.2018.00901.
+[28] K. Aberman, P. Li, D. Lischinski, O. Sorkine-Hornung, D. Cohen-Or, and B. Chen. Skeleton-
+aware networks for deep motion retargeting. ACM Transactions on Graphics (TOG), 39(4):
+62–1, 2020. doi:10.1145/3386569.3392462. URL https://doi.org/10.1145/3386569.
+3392462.
+[29] L. Hu, Z. Zhang, C. Zhong, B. Jiang, and S. Xia. Pose-aware attention network for flexible
+motion retargeting by body part. IEEE Transactions on Visualization and Computer Graphics,
+30(8):4792–4808, 2024. doi:10.1109/TVCG.2023.3277918. URL https://doi.org/10.
+1109/TVCG.2023.3277918.
+[30] L. Penco, B. Cl´ement, V. Modugno, E. M. Hoffman, G. Nava, D. Pucci, N. G. Tsagarakis,
+J.-B. Mouret, and S. Ivaldi. Robust real-time whole-body motion retargeting from human
+to humanoid. In 2018 IEEE-RAS 18th International Conference on Humanoid Robots (Hu-
+manoids), pages 425–432. IEEE, 2018.
+doi:10.1109/HUMANOIDS.2018.8624943.
+URL
+https://doi.org/10.1109/HUMANOIDS.2018.8624943.
+[31] K. Darvish, Y. Tirupachuri, G. Romualdi, L. Rapetti, D. Ferigo, F. J. A. Chavez, and
+D. Pucci.
+Whole-body geometric retargeting for humanoid robots.
+In 2019 IEEE-RAS
+19th International Conference on Humanoid Robots (Humanoids), pages 679–686. IEEE,
+2019. doi:10.1109/HUMANOIDS43949.2019.9035059. URL https://doi.org/10.1109/
+HUMANOIDS43949.2019.9035059.
+[32] A. Tang, T. Hiraoka, N. Hiraoka, F. Shi, K. Kawaharazuka, K. Kojima, K. Okada, and M. Inaba.
+Humanmimic: Learning natural locomotion and transitions for humanoid robot via wasserstein
+adversarial imitation. In 2024 IEEE International Conference on Robotics and Automation
+(ICRA), pages 13107–13114. IEEE, 2024. doi:10.1109/ICRA57147.2024.10610449. URL
+https://doi.org/10.1109/ICRA57147.2024.10610449.
+[33] Z. Luo, J. Cao, A. W. Winkler, K. Kitani, and W. Xu. Perpetual humanoid control for real-time
+simulated avatars. In International Conference on Computer Vision (ICCV), pages 10861–
+10870, 2023.
+doi:10.1109/ICCV51070.2023.01000.
+URL https://doi.org/10.1109/
+ICCV51070.2023.01000.
+[34] C. Tessler, J. Juravsky, Y. Guo, Y. Jiang, E. Coumans, and X. B. Peng. Protomotions: Physics-
+based character animation. https://github.com/NVLabs/ProtoMotions/, 2024.
+[35] W. Xie, J. Han, J. Zheng, H. Li, X. Liu, J. Shi, W. Zhang, C. Bai, and X. Li.
+Kung-
+fubot: Physics-based humanoid whole-body control for learning highly-dynamic skills. arXiv
+preprint arXiv:2506.12851, 2025. URL https://arxiv.org/abs/2506.12851.
+12
+
+
+[36] Y. Ze, Z. Chen, J. P. Ara´ujo, Z. ang Cao, X. B. Peng, J. Wu, and C. K. Liu.
+Twist:
+Teleoperated whole-body imitation system. arXiv preprint arXiv:2505.02833, 2025. URL
+https://arxiv.org/abs/2505.02833.
+[37] J. P. Araujo, Y. Ze, P. Xu, J. Wu, and C. K. Liu. Retargeting matters: General motion retargeting
+for humanoid motion tracking, 2025. URL https://arxiv.org/abs/2510.02252.
+[38] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez, Ł. Kaiser, and
+I. Polosukhin. Attention is all you need. Advances in neural information processing sys-
+tems, 30, 2017. URL https://proceedings.neurips.cc/paper_files/paper/2017/
+hash/3f5ee243547dee91fbd053c1c4a845aa-Abstract.html.
+[39] M. Mittal, P. Roth, J. Tigue, A. Richard, O. Zhang, P. Du, A. Serrano-Munoz, X. Yao,
+R. Zurbr¨ugg, N. Rudin, et al. Isaac lab: A gpu-accelerated simulation framework for multi-
+modal robot learning. arXiv preprint arXiv:2511.04831, 2025. URL https://arxiv.org/
+abs/2511.04831.
+[40] I. Mason, S. Starke, and T. Komura. Real-time style modelling of human locomotion via
+feature-wise transformations and local motion phases. Proceedings of the ACM on Computer
+Graphics and Interactive Techniques, 5(1), may 2022. doi:10.1145/3522618.
+A
+Appendix
+This appendix reports supplementary implementation details for the X-WBC model, including re-
+ward and termination settings, training configuration, sampling and domain randomization, and net-
+work details.
+A.1
+Reward
+The same reward family is used for all robots so that different embodiments provide comparable
+tracking supervision to the shared policy backbone. The tracking terms measure root position and
+orientation, body pose, and body velocity in the command frame, while regularization terms dis-
+courage abrupt actions, joint-limit violations, and contacts on non-allowed links. Table A1 lists the
+reward terms.
+Table A1: Reward design. Superscript g denotes the goal or command reference, superscript p
+denotes the current robot state, B is the tracked body set, and Callow is the set of bodies allowed to
+make contact.
+Reward term
+Equation
+Weight
+Tracking rewards
+Root position
+rroot
+pos (t) = exp
+ −∥pg
+t,root −pp
+t,root∥2
+2/0.32
+0.5
+Root orientation
+rroot
+ori (t) = exp
+ −∥og
+t,root −op
+t,root∥2
+2/0.42
+0.5
+Body pos (rel.)
+rbody
+pos (t) = exp
+ −
+1
+|B|
+P
+b∈B ∥pg,rel
+t,b
+−pp,rel
+t,b ∥2
+2/0.32
+1.0
+Body ori (rel.)
+rbody
+ori
+(t) = exp
+ −
+1
+|B|
+P
+b∈B ∥og,rel
+t,b
+−op,rel
+t,b ∥2
+2/0.42
+1.0
+Body lin. vel
+rbody
+lin
+(t) = exp
+ −
+1
+|B|
+P
+b∈B ∥vg
+t,b −vp
+t,b∥2
+2/1.02
+1.0
+Body ang. vel
+rbody
+ang (t) = exp
+ −
+1
+|B|
+P
+b∈B ∥ωg
+t,b −ωp
+t,b∥2
+2/3.142
+1.0
+Penalty terms
+Action rate
+ract(t) = ∥at −at−1∥2
+2
+-0.1
+Joint limit
+rjlim(t) = P
+j 1[qt,j /∈[qmin
+j
+, qmax
+j
+]]
+-10.0
+Undesired contacts
+rcontact(t) = P
+k /∈Callow 1[∥fk∥> 1.0N]
+-0.1
+A.2
+Training termination
+Episode termination removes clear tracking failures from rollout collection and provides failure
+statistics for adaptive sampling. We use three robot-independent training checks: root height error,
+13
+
+
+root orientation error, and vertical end-effector error relative to the command reference. Table A2
+lists these settings.
+Table A2: Training termination settings. Superscripts follow Table A1; E is the checked end-
+effector set, and dR computes angular distance between orientations.
+Condition
+Error measure
+Threshold
+Root vertical position error
+|(pp
+t,root −pg
+t,root)z|
+0.25 m
+Root orientation error
+dR(op
+t,root, og
+t,root)
+0.8 rad
+End-effector vertical position error maxe∈E |(pp
+t,e −pg
+t,e)z|
+0.25 m
+A.3
+Training hyperparameters
+Optimizer-level PPO parameters used in the main experiments are listed in Table A3. The normal-
+ized pairwise token-alignment loss uses λalign = 1.0, with equal weight for all three token pairs.
+Architecture, padding, command routing, sampling, and randomization settings are reported in the
+following appendix sections.
+Table A3: PPO hyperparameters. Values are the default settings used for the main multi-robot
+Transformer policy unless otherwise stated.
+Item
+Value
+Item
+Value
+Parallel environments per robot
+1024
+Rollout steps per environment
+24
+Command route sampling ratio
+1:1:1
+Learning epochs
+5
+Number of minibatches
+4
+Discount factor γ
+0.99
+GAE λ
+0.95
+PPO clip ratio
+0.2
+Desired KL
+0.01
+Entropy coefficient λe
+0.005
+Value loss coefficient λv
+1.0
+Shared PPO learning rate
+1e-3
+Adaptive learning rate range
+[1e-5, 1e-3]
+Max gradient norm
+1.0
+Initial action noise std
+1.0
+Actor std min clamp
+1e-6
+A.4
+Adaptive motion sampling
+Adaptive motion sampling is used to avoid spending most updates on already solved motion seg-
+ments while still retaining broad coverage of the motion dataset. We first maintain a motion-level
+working set to control memory use. Within the active working set, each motion is divided into tem-
+poral bins, and the bin-level sampling probability is increased for segments that frequently trigger
+early termination. When drawing a new working set, bin probabilities are aggregated to the motion
+level and normalized by the number of bins in each motion, preventing long clips from dominating
+only because they contain more bins. A small uniform mixture is retained for exploration. Segments
+that remain persistently infeasible are removed from the active pool by hard removal, which mainly
+filters severe retargeting artifacts and physically implausible snippets.
+Table A4: Adaptive sampling. The values summarize the failure-rate-based sampling schedule
+used for the main policy.
+Item
+Value
+Role
+Motion working-set size
+1024 motions
+Limits the active motion pool
+Working-set refresh interval
+1 × 109 transitions
+Makes reloads effectively rare
+Bin duration
+1.0 s
+Defines the failure-statistics window
+Pre-failure sampling window
+4.0 s
+Samples before recent failures
+Initial bin probability
+smoothed prior (1.0)
+Starts close to uniform
+Failure-rate cap
+50× mean
+Limits failure-driven emphasis
+Uniform mixture
+0.1
+Preserves broad motion coverage
+Maximum bin probability
+50/Nvalid
+Caps each valid bin
+Minimum evaluation count
+96 attempts
+Requires enough samples
+Failure rate for removal
+0.98
+Excludes consistently failed bins
+Hard-bin minimum cap hits
+32
+Requires repeated cap hits
+Global hard-bin warmup
+500 PPO iterations
+Delays global exclusion
+14
+
+
+A.5
+Domain randomization
+Domain randomization is applied during training to improve robustness to model mismatch, external
+perturbations, and noisy motion commands.
+Table A5: Domain randomization. U[·] denotes a uniform distribution.
+Domain randomization
+Sampling distribution
+Physical parameters
+Static friction coefficients
+µs ∼U[0.3, 1.6]
+Dynamic friction coefficients
+µd ∼U[0.3, 1.2]
+Restitution coefficient
+e ∼U[0, 0.5]
+Default joint positions
+q0 ←q0 + U[−0.01, 0.01]
+Base COM offset (x, y, z)
+∆x ∼U[−0.075, 0.075], ∆y, ∆z ∼U[−0.1, 0.1]
+Root velocity perturbations
+Root linear velocity (x, y, z)
+vx, vy ∼U[−0.5, 0.5], vz ∼U[−0.2, 0.2]
+Push duration
+∆t ∼U[1, 3] s
+Root angular velocity
+ωroll, ωpitch ∼U[−0.52, 0.52], ωyaw ∼U[−0.78, 0.78]
+Table A6: Robot embodiment summary. Action dimensions are reported before shared padding;
+heights and masses are approximate public specifications.
+Robot
+Dim. Height Mass
+Robot
+Dim. Height Mass
+Unitree G1-29DOF
+29
+132 cm 35 kg
+Unitree H2
+27
+182 cm 70 kg
+Unitree G1-23DOF
+23
+132 cm 35 kg
+Booster T1
+23
+118 cm 30 kg
+Unitree H1
+19
+180 cm 47 kg
+Fourier GR3
+32
+165 cm 71 kg
+Unitree H1-2
+27
+178 cm 70 kg
+PND Adam Lite
+31
+167 cm 60 kg
+Unitree R1
+28
+123 cm 29 kg
+A.6
+Network details
+The default policy maps each command source and the robot proprioception into compact tokens,
+then applies a Transformer backbone for history-dependent control. The full-human and VR com-
+mand encoders are shared across robots, while the robot-command encoder, proprioception encoder,
+and output heads are routed by robot domain.
+Table A7: Input dimensions. For motion commands, each body or keypoint contributes 12 values:
+position 3, 6D orientation 6, and linear velocity 3.
+Input item
+Dim.
+Source
+Full-human motion command
+264
+22 joints × 12
+Sparse-VR motion command
+60
+5 keypoints × 12
+Robot motion command
+168
+14 robot bodies × 12
+Proprioception
+102
+padded robot state features
+Privileged critic observation
+399
+asymmetric critic input
+Action
+32
+padded joint action
+Table A8: Network architecture. The default Transformer uses separate actor and critic backbones
+with causal sliding-window attention. The MLP baseline keeps the same encoders and changes the
+backbone paths.
+Module
+Type
+Size or configuration
+Transformer-backbone
+Command/state encoders (4)
+MLP
+each [256, 256, 64]
+Actor fusion / critic embedding
+Linear
+[128 →224] / [399 →224]
+Actor / critic backbones
+Transformer
+separate [224] backbones; depth 3, heads 8, head dim 32,
+window 32
+Actor / critic output heads
+Linear
+[224 →32] / [224 →1]
+MLP-backbone
+Actor fusion / critic embedding
+Linear
+[128 →256] / [399 →256]
+Actor / critic backbones
+MLP
+separate [1024, 768, 384] backbones
+Actor / critic output heads
+Linear
+[384 →32] / [384 →1]
+15

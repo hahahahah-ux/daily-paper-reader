@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-17</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-18</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 33 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 25 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>21</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>13</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-17 19:44:41 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-18 19:12:02 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-17 日报：33 篇论文完成筛选，精读 21 篇、速读 12 篇，其中两篇满分工作聚焦手内物体6D位姿泛化抓取与一步去噪的世界动作模型。最值得关注的是精读中的《Learning In-Hand Object Reaching to General 6D Poses》和《DIDO》，前者指向通用6D抓取，后者把交互动态蒸馏进一步去噪；速读里还有JEPA世界模型规划、超小操作策略和连续环境VLN拓扑图等方向。普通读者可先读这两篇满分论文，再按兴趣挑速读中的世界模型或轻量策略了解趋势。</p>
+<p>今日扫完 25 篇机器人智能论文，精读 13 篇、速读 12 篇，具身智能世界模型与双臂灵巧操作成为双高分焦点。最值得看的是 Pelican-Sim 1.0 这类通用世界模型模拟器（9.0）和 Bench2Dex 的视触觉双臂灵巧操作基准（9.0），速读中的失败恢复与数据筛选也值得跟进。普通读者可先挑这两篇精读的摘要和评测部分看，再按兴趣追速读里的失败恢复方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">21 篇</strong>
+    <strong class="dpr-home-dashboard-count">13 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Learning In-Hand Object Reaching to General 6D Poses">Learning In-Hand Object Reaching to General 6D Poses</span></li><li><span class="dpr-home-dashboard-paper-title" title="DIDO: Distilling Interaction-Centric Dynamics into One-Step Denoising for World Action Models">DIDO: Distilling Interaction-Centric Dynamics into One-Step Denoising for World Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="World-Action Models for Robot Learning and Control: A Survey">World-Action Models for Robot Learning and Control: A Survey</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Pelican-Sim 1.0: A General World Model Simulator for Embodied Intelligence">Pelican-Sim 1.0: A General World Model Simulator for Embodied Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="Bench2Dex: Benchmarking Visuo-Tactile Bimanual Dexterous Manipulation Across Dexterous Hands">Bench2Dex: Benchmarking Visuo-Tactile Bimanual Dexterous Manipulation Across Dexterous Hands</span></li><li><span class="dpr-home-dashboard-paper-title" title="SAVLA: Symmetry-Aware Vision-Language-Action Models for Robotic Manipulation">SAVLA: Symmetry-Aware Vision-Language-Action Models for Robotic Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>14</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>7</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>10</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>3</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Toward Physically Grounded JEPA World Models for Goal-Conditioned Robotic Planning">Toward Physically Grounded JEPA World Models for Goal-Conditioned Robotic Planning</span></li><li><span class="dpr-home-dashboard-paper-title" title="MINERVA: How Small Can a Manipulation Policy Be and Still Solve LIBERO?">MINERVA: How Small Can a Manipulation Policy Be and Still Solve LIBERO?</span></li><li><span class="dpr-home-dashboard-paper-title" title="Revisiting Topological Graphs for Macro Action based Closed-loop Reinforcement Learning of Vision Language Navigation in Continuous Environment">Revisiting Topological Graphs for Macro Action based Closed-loop Reinforcement Learning of Vision Language Navigation in Continuous Environment</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LIBERO-RECOVER: Beyond Task Success Towards Failure Recovery in Robotic Manipulation Models">LIBERO-RECOVER: Beyond Task Success Towards Failure Recovery in Robotic Manipulation Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Identifying Habit, Physics, and Nuisance in Robot World Models">Identifying Habit, Physics, and Nuisance in Robot World Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="RoboDrop: Curating VLA Post-Training Data via Local Gradient Compatibility">RoboDrop: Curating VLA Post-Training Data via Local Gradient Compatibility</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>9</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>3</strong></span></div>
 </section>
 </div>
 
