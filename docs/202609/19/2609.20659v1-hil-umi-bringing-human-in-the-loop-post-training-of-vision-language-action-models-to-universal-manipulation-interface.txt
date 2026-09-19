@@ -1,0 +1,1195 @@
+HIL-UMI: Bringing Human-in-the-Loop Post-Training of
+Vision-Language-Action Models to Universal Manipulation Interface
+Zimu Han∗1,4, Yiming Zeng∗1,4, Jiyao Zhang∗‡1,2,3, Zihao Zhao1, Yuanfei Wang1,2,3, Yixiang Jin5
+Shiqi Li5, Shuangben Chen1, Wei Huang1, Ruodai Li5, Hui Shen5 and Hao Dong†1,2,3
+≈
+≈
+Real Robot HG-DAgger
+Low-Efficiency
+ 
+ 
+ 
+ 
+ 
+Task Progress Scor
+Consistent Improvement: Almost 100 TPS !
+e
+Post-training Stage
+SFT
+HIL-UMI
+0
+25
+50
+75
+100
+Base
+S1
+S2
+S3
+Higher Efficiency:
+Data Collection 5.63x Faster than HG-DAgger!
+Online Data Collection 
+w. OOD Detector
+Robot-Free
+Collection
+Human-in-the-Loop Robot-Free Post-training
+Fig. 1.
+Teaser. Real-robot HG-DAgger requires policy rollouts and human intervention on the robot, resulting in low collection efficiency. In contrast,
+HIL-UMI performs policy-guided, robot-free data collection with an online OOD detector, achieving higher performance with 5.63× faster data collection.
+Abstract— Large-scale vision-language-action (VLA) models
+provide powerful priors for robot manipulation, yet adapting
+them to a specific deployment remains challenging. Supervised
+fine-tuning (SFT) on task-specific demonstrations provides a
+step toward deployment, but faces two persistent limitations:
+static data provide limited coverage of out-of-distribution states,
+and standard imitation objectives do not distinguish progressing
+behavior from less useful data. Interactive post-training can
+address these limitations, but typically requires repeated policy
+execution and human intervention on a physical robot. We
+introduce HIL-UMI, a policy-guided Universal Manipulation
+Interface (UMI) framework for robot-free human-in-the-loop
+VLA post-training. During handheld UMI demonstrations, HIL-
+UMI queries the current policy on the same observation stream
+without executing its predictions. The Energy Score compares
+the human action trajectory with policy inference and triggers
+collection when their discrepancy indicates an out-of-distribution
+region. In a separate feedback loop, low online advantage
+predictions identify essential segments for refining a progress-
+based advantage estimator. The updated estimator then guides
+advantage-conditioned behavioral cloning using a balanced
+mixture of base demonstrations and new policy data. This design
+preserves the iterative and policy-aware nature of human-in-
+the-loop learning while decoupling data collection from robot
+deployment. Experiments on four real-world tasks spanning
+long-horizon and precise manipulation show that HIL-UMI
+achieves consistent improvement over SFT and benefits from
+both targeted collection and advantage refinement. Moreover,
+HIL-UMI outperforms HG-DAgger on Clean Up Table with
+* Equal contribution. ‡ Project lead.
+† Corresponding author. Correspondence to hao.dong@pku.edu.cn.
+1 Center on Frontier Computing Studies, School of Computer Science,
+Peking University, China, 2National Key Laboratory for Multimedia Infor-
+mation Processing, School of Computer Science, Peking University, China,
+3PrimeBot, China, 4Xi’an Jiaotong University, China, 5JD Technology, China
+lower per-frame collection time, suggesting a scalable path for
+VLA post-training across operators and locations. Project page:
+https://hil-umi.github.io.
+I. INTRODUCTION
+Large-scale vision-language-action (VLA) models [1], [2],
+[3] acquire broad manipulation priors from diverse robot
+and vision–language data [4], providing strong initializations
+for downstream robot learning. Beyond acquiring individual
+behaviors, such pretraining enables skill reuse across tasks
+and generalization across objects and scenes. Yet broad
+competence does not guarantee reliable execution in a
+particular deployment: the target embodiment, observation
+setup, workspace, dynamics, and required precision can
+differ from those seen during pretraining. Task-specific post-
+training is therefore a critical bridge between general-purpose
+representations and robust closed-loop behavior in real-world
+deployments [5], [6], [7], [8]. It adapts a pretrained policy
+to concrete operating conditions and is especially important
+for long-horizon and precise manipulation, where small local
+errors can determine overall task success [9], [10], [11].
+The dominant paradigm for this adaptation collects task
+demonstrations on physical robots and applies supervised fine-
+tuning (SFT) [5], [12]. However, SFT leaves two core prob-
+lems unresolved. First, behavioral cloning is susceptible to
+covariate shift and compounding errors: small errors lead the
+policy to states poorly covered by static demonstrations [13],
+[14]. Static demonstrations mainly cover expert-visited states,
+so more nominal data may still miss the out-of-distribution
+(OOD) states reached by the learned policy. Second, SFT
+arXiv:2609.20659v1  [cs.RO]  17 Sep 2026
+
+
+weights all demonstration samples equally, regardless of their
+contribution to task progress [15], [16], [17], [18].
+Human-in-the-loop post-training addresses these limitations
+more directly [19], [20], [6]. DAgger queries expert actions
+at learner-visited states and aggregates them into the training
+set, directly expanding coverage to states induced by policy
+errors [13]. Related human-gated [21], [22], [23], [24] and
+real-robot variants [25], [26], [27] similarly focus on teleop-
+eration, rollouts, interventions, or reward feedback around
+policy failures. Building on this interactive paradigm, RL
+with Experience and Corrections via Advantage-conditioned
+Policies (RECAP) incorporates demonstrations, autonomous
+on-robot experience, and expert teleoperated corrections
+into advantage-conditioned policy training [28], [15], [9],
+[29]. On-policy experience exposes learner-induced OOD
+states, while advantage conditioning distinguishes data utility;
+RECAP thereby addresses both problems and achieves strong
+performance on challenging real-world tasks. This success,
+however, requires repeated physical-robot deployment, mak-
+ing collection expensive and difficult to parallelize across
+operators and locations [26], [8]. Teleoperation also makes
+long-horizon and high-precision demonstrations difficult to
+collect at scale [30].
+To remove this dependency, we draw inspiration from the
+Universal Manipulation Interface (UMI), whose portable, low-
+cost handheld grippers collect robot-compatible observations
+and actions without access to the target robot [31], [32], [33].
+Direct hand demonstrations let operators express complex
+and precise behaviors naturally, while portability enables
+collection across operators and locations [34].
+We therefore propose HIL-UMI, a UMI-based human-in-
+the-loop framework for robot-free VLA post-training, where a
+human demonstrates the task while the current policy predicts
+actions from the same observation stream without executing
+those predictions on a robot. The discrepancy between policy
+inference and human demonstration determines whether the
+current state is OOD and whether additional data should
+be collected here. This design combines policy-conditioned
+feedback with robot-free, parallelizable collection, extending
+UMI collection to target the current policy’s blind spots and
+improve its training data.
+Specifically, in each round, we collect two separate UMI
+datasets for distinct purposes. For policy post-training, we
+repeatedly run the current policy on the UMI observation
+stream and retain segments whose human actions deviate
+from the policy’s trajectory distribution beyond a threshold
+as OOD data. Separately, we run the advantage model online
+and collect dedicated training data whenever its predicted
+advantage falls, treating these low-scoring segments as hard
+cases for improving the advantage model. We update the
+advantage model with this second dataset, then perform
+advantage-conditioned behavioral cloning (ACBC) on a
+mixture of the base and collected OOD data.
+Our contributions are threefold:
+• We introduce a UMI-based human-in-the-loop frame-
+work that moves iterative VLA post-training off the
+robot, decoupling policy improvement from physical
+deployment and opening a path toward scalable, parallel
+data collection across operators and locations.
+• We propose a real-time OOD detection method that
+compares human action trajectories against the policy’s
+trajectory distribution during UMI collection, together
+with an iterative workflow that updates an advantage
+model and performs ACBC in every round.
+• We validate the framework on four challenging long-
+horizon or precise tasks. Results show that HIL-UMI
+achieves substantial gains over SFT, better performance
+and higher collection efficiency than HG-DAgger.
+II. RELATED WORK
+A. VLA Post-Training and Interactive Policy Improvement
+Supervised fine-tuning (SFT) adapts pretrained VLA poli-
+cies, yet expert data offer limited state coverage, leaving
+policies vulnerable to compounding errors [13], [14], [5],
+[12]. Existing methods differ in the source of corrective
+signals [6], [7]. On the static-data side, GR-RL uses offline
+reinforcement learning to estimate task progress and filter
+suboptimal demonstrations [35], while χ0 combines model
+arithmetic and stage advantage to reconcile heterogeneous
+data distributions [9]. Interactive deployment methods instead
+obtain supervision from learner-induced experience: DAgger
+queries expert actions at states visited by the learner and
+aggregates them into the training set [13], [19], [26], [20];
+HIL-SERL couples real-robot reinforcement learning with
+real-time human interventions [25], [27], [6]; and RECAP
+trains π∗
+0.6 from demonstrations, autonomous on-robot expe-
+rience, and teleoperated corrections [28], [8]. Despite their
+effectiveness, their final correction or alignment still relies on
+physical-robot rollouts or interventions, incurring hardware
+and operator costs and limiting parallel scaling across users
+and locations [26], [30], [8].
+B. Robot-Free Data Collection with UMI
+UMI replaces robot teleoperation with a portable handheld
+gripper that records robot-compatible observations and actions,
+enabling in-the-wild teaching and deployment across robot
+embodiments [31], [33]. FastUMI simplifies the hardware
+and deployment stack to support scalable, robot-independent
+collection [32], while MV-UMI adds a third-person view to
+provide richer spatial context and mitigate cross-embodiment
+observation shift [36]. HiFi-UMI further improves trajectory
+fidelity, bimanual relative-pose estimation, synchronization,
+and field of view, showing that UMI-only post-training can
+approach the performance of real-robot teleoperation [34].
+However, its real-time feedback targets sensing and capture
+quality rather than predictions from the current policy.
+Consequently, collection remains centered on data fidelity and
+general coverage rather than policy-conditioned selection of
+demonstrations that address the policy’s specific blind spots.
+C. UMI-Based Human-in-the-Loop Post-Training
+Recent work has begun to close the loop between UMI
+collection and policy improvement. RoboPocket visualizes
+predicted policy trajectories to solicit robot-free corrections
+
+
+Policy Weak, Collect!
+Policy Good, Not Collect!
+Energy Score Calculation
+Policy
+OOD 
+Detector
+Policy OOD Detector
+Visual Observation
+Inference N times
+t
+UMI Movement
+t
+  
+Adv. OOD Detector
+Obs. at t
+Obs. at t-K
+Adv. 
+OOD
+Detector
+Adv. Weak,
+Collect!
+Adv. Good,
+Not Collect!
+Advantage Update 
+Policy Update 
+Robot-Free
+Collection
+Yes
+Collect!
+No
+Not collect!
+OOD Detector
+Adv. Data
+Policy Data
+Finetune
+Adv.
+HIL-UMI Pipeline
+Online Data Collection
+Sec. III-B
+Sec. III-A
+Sec. III-C
+ACBC
+Policy
+Old
+New
+Mixture of Policy Data
+Policy Data
+Good
+Bad
+“Positive”
+label
+“Negative”
+label
+Finetune
+Advantage Conditioned Behavior Clone (ACBC)
+Base
+Data
+Finetune
+ACBC
+Base Adv.
+Base Policy
+Initialize
+Initialize
+Policy
+Fig. 2.
+Overview of HIL-UMI. In each round, we first run advantage OOD detector online to collect advantage data. We then run the current policy OOD
+detector and collect policy data from segments. Next, we update the advantage estimator then using it to construct the advantage-labeled training dataset and
+update policy through ACBC.
+and fine-tune the policy, but weakness identification relies
+on human interpretation and its learning objective does not
+estimate the utility of individual segments [37]. EgoGuide
+uses dataset-level visual-geometric novelty to guide demon-
+strations toward under-covered initial states, but its feedback
+is not conditioned on the current policy and therefore does not
+directly target policy-specific blind spots [38]. In contrast, our
+framework detects policy-conditioned OOD segments through
+trajectory prediction and iteratively learns an advantage model
+to label selected data by utility during ACBC.
+III. METHOD
+We consider a task instruction c and an initial UMI [31]
+dataset D0 = {τi}M
+i=1, where τi = {(oi,t, ai,t)}Li−1
+t=0
+contains
+synchronized observations and human actions. These base
+demonstrations are first assigned progress targets and used
+to initialize a two-observation advantage estimator fψ0. We
+then use fψ0 to assign binary advantage labels to the
+same demonstrations and directly obtain the base policy by
+advantage-conditioned behavior cloning (ACBC),
+θ0 = arg min
+θ
+E(o,a,b)∼D0
+
+ℓBC
+ πθ(· | o, cb), a
+
+,
+(1)
+where ℓBC denotes the native action-prediction loss of the
+policy and b is the advantage label. The progress supervision
+and ACBC are detailed in Secs. III-B and III-C.
+Post-training proceeds for rounds r = 1, . . . , R with
+separate datasets for advantage refinement and policy im-
+provement. Let DA
+r and DP
+r denote the data newly collected
+for these two purposes in round r, respectively. In each
+post-training round, we allocate equal frame budgets to
+the two collection streams, such that |DA
+r | = |DP
+r |. We
+define DP
+0 = D0 and let DA
+0 be its progress-labeled version.
+In each round, we first run fψr−1 online to collect DA
+r .
+We then run the current policy πθr−1 alongside a human
+UMI demonstration and collect DP
+r from segments where
+the policy’s action distribution is identified as OOD. Next,
+we update the advantage estimator by continuing training
+from ψr−1 on a balanced training mixture, obtaining ψr.
+Finally, using fψr, we construct the advantage-labeled training
+dataset and continue ACBC from θr−1 to obtain θr. Figure 2
+summarizes this data-collection and model-update loop.
+A. Online Data Collection
+OOD Definition. In this work, we use OOD to describe
+task situations poorly represented in the training data of the
+corresponding model. We flag OOD through inconsistencies
+between model predictions and human demonstrations: a large
+discrepancy between the demonstrated action chunk and the
+policy’s predicted action distribution, or a low advantage
+prediction despite demonstrated task progress.
+1) Policy Data Collection: At observation ot, the operator
+produces a human action chunk Ht = (ht,1, . . . , ht,T ) [11],
+[10]. In parallel, we perform N = 10 stochastic policy
+inferences at the same observation and instruction,
+A(n)
+t
+∼πθr−1(· | ot, c),
+n = 1, . . . , N,
+(2)
+which form an empirical approximation to the policy’s action-
+chunk distribution [39], [2]. The human and predicted chunks
+are compared only after the corresponding human chunk has
+been observed, while policy sampling itself is performed
+concurrently with UMI collection.
+For pose actions, write the k-th action of a chunk as ak =
+(pk, Rk, gk), comprising end-effector position, orientation,
+and gripper command. We compare action chunks A and B
+in a common coordinate frame using
+ρ2(A, B) = 1
+T
+T
+X
+k=1
+
+λp∥pA
+k −pB
+k ∥2
+2 + λRdR(RA
+k , RB
+k )2
++ λg∥gA
+k −gB
+k ∥2
+2
+
+,
+(3)
+where the coefficients λp, λR, and λg balance the action
+components. To measure the difference between orientations,
+we use the geodesic distance on SO(3),
+dR(R1, R2) = arccos
+tr(R⊤
+1 R2) −1
+2
+
+.
+(4)
+
+
+We represent the discrepancy between the single human
+chunk and the predicted distribution with the empirical Energy
+Score [40], [41], [42]:
+ES(Ht) = 1
+N
+N
+X
+n=1
+ρ(A(n)
+t
+, Ht)
+−
+1
+2N(N −1)
+X
+n̸=m
+ρ(A(n)
+t
+, A(m)
+t
+).
+(5)
+The first term measures how far the policy samples lie from
+the human action. The second accounts for the dispersion of
+the policy samples and prevents the criterion from reducing
+to an average pointwise error. Their balance makes the score
+sensitive to both location and predictive spread: excessive
+spread raises the sample-to-human distances, whereas a
+collapsed distribution away from the human action receives
+no diversity correction. The score requires neither a Gaussian
+assumption nor an explicit likelihood, making it suitable
+for flow-based policies. A large Energy Score indicates
+strong disagreement between the demonstrated action and
+the policy’s predictive distribution; we operationally treat the
+corresponding state region as OOD.
+We consequently define the HIL-UMI OOD detector as
+δP
+t = I[ES(Ht) > τP ] ,
+(6)
+where τP is the policy OOD detection threshold shared across
+all tasks. When a completed chunk triggers δP
+t
+= 1, the
+operator records an expert demonstration from the current
+state until the current subtask is completed. Repeating this
+procedure yields DP
+r , which concentrates the policy update
+on states where the current action distribution does not cover
+the human solution without requiring policy execution.
+2) Advantage Data Collection: During advantage-data
+collection in round r, we estimate relative task progress
+from an observation pair with a K-frame temporal offset
+whenever t ≥K, as follows:
+bAonline
+t
+= fψr−1(ot−K, ot, c),
+δA
+t = I
+h
+bAonline
+t
+< τA
+i
+,
+(7)
+where τA is calibrated per task using the initial advantage
+estimator fψ0. We evaluate fψ0 on observation pairs separated
+by K frames from the task’s base dataset D0. Let κ0 denote
+the empirical cutoff selecting the top η fraction of predicted
+advantages (η = 0.3), which is also used for base-data
+advantage labeling in Sec. III-C. We set τA = κ0/2, adapting
+the collection threshold to differences in progress scale across
+tasks over the fixed temporal interval. Assuming the operator
+is demonstrating task-progressing behavior, predictions below
+this calibrated threshold identify segments where the estimator
+may underestimate task progress. Upon such a trigger, the
+operator records a new demonstration from the current state
+through the end of the subtask. These segments form DA
+r
+and receive the progress labels described in Sec. III-B.
+B. Advantage Model Training
+Rather than deriving relative task progress from the
+difference of two independently predicted values, we train
+fψ(ou, ov, c) to predict relative task progress from ou to ov,
+which can reduce the compounding error of estimation [9].
+To accommodate both full base episodes and the segmental
+episodes collected in post-training rounds, we design a linear
+progress target. For base episodes, the progress target is:
+zi,t =
+t
+Li −1,
+t = 0, . . . , Li −1,
+(8)
+and we define the average base-episode length as
+L0 = 1
+M
+M
+X
+i=1
+Li.
+(9)
+An iterative segment σr,j has length Lr,j and is intentionally
+terminated when its current subtask is completed. Since it
+is not a complete episode, assigning it the full range [0, 1]
+would overstate its progress. Instead, we use
+zr,j,t =
+t
+Lr,j −1
+Lr,j
+L0
+,
+t = 0, . . . , Lr,j −1,
+(10)
+so that the segment spans 0 to Lr,j/L0 and has a temporal
+progress scale consistent with the base data.
+For two distinct frames u and v uniformly sampled from
+the same trajectory or segment, the signed regression target
+is yu,v = zv −zu. Sampling multiple temporal spans during
+training, we optimize the following objective:
+LA(ψ) = E(ou,ov,yu,v)
+h fψ(ou, ov, c) −yu,v
+2i
+.
+(11)
+To balance hard cases found in the current round against
+data collected before, we define the mix operator
+Mix(Dnew, Dhist) ≜α · Unif(Dnew) + (1 −α) · Unif(Dhist),
+(12)
+where Unif(D) is uniform sampling from a dataset, and α
+is the coefficient balancing current-round and historical data.
+The dataset for updating advantage is
+eDA
+r = Mix
+
+DA
+r ,
+[
+j<r
+DA
+j
+
+.
+(13)
+Continuing from ψr−1, we minimize Eq. (11) on eDA
+r to
+obtain ψr.
+C. Policy Update with ACBC
+For each post-training round, to balance the historical data
+and the current-round data, we let the dataset for updating
+policy be:
+eDP
+r = Mix
+
+DP
+r ,
+[
+j<r
+DP
+j
+
+.
+(14)
+The updated estimator scores every eligible sample in D0
+over the same future horizon,
+bAr,t = fψr(ot, ot+K, c),
+t + K < L,
+(15)
+where L is the containing trajectory length. This definition
+also applies to base initialization with r = 0. Let κr be the
+empirical cutoff that selects the top η ∈(0, 1) fraction of
+
+
+1. Meta Quest 3 Controller
+2. Intel RealSense D405
+(Wrist Camera) 
+4. AgiBot OmniPicker 
+3. Connector
+5. Meta Quest 3 Headset
+6. Intel RealSense D455
+（Front Camera) 
+Fig. 3.
+Hardware setup. Components of the custom UMI device and the corresponding data-collection setup.
+base-data predictions. For each training sample (ot, at), we
+define
+br,t =
+
+
+
+
+
+I[ bAr,t ≥κr],
+(ot, at) ∈D0,
+1,
+(ot, at) ∈
+r[
+j=1
+DP
+j .
+(16)
+Thus, base initialization uses only D0, with fψ0 assigning
+positive labels to its top-η predictions and negative labels
+to the remainder. In later rounds, base samples retain this
+thresholding rule, while all newly collected policy samples
+receive positive labels. We append a positive label to c when
+br,t = 1 and a negative label otherwise, denoting the resulting
+prompt by cbr,t. The round-r policy objective is
+LACBC(θ) = E(o,a,b)∼e
+DP
+r
+
+ℓBC
+ πθ(· | o, cb), a
+
+.
+(17)
+Policy training continues from θr−1, while inference uses the
+positive-advantage prompt to favor task-progressing behaviors.
+The updated policy θr and advantage estimator ψr are then
+used in the next collection round.
+IV. EXPERIMENTS
+A. HIL-UMI Hardware Setup
+We collect robot-compatible demonstrations at 30 Hz using
+the custom UMI device shown in Figure 3, without executing
+policy outputs on the physical robot [31]. The device couples
+an AgiBot OmniPicker gripper to a Meta Quest 3 controller
+through a custom connector. The Meta Quest 3 headset–
+controller tracking system measures the device pose in real
+time, providing the human action trajectories required for
+online OOD detection. An Intel RealSense D405 mounted on
+the device captures wrist-view observations, while an Intel
+RealSense D455 provides a fixed third-person view.
+We use a local workstation with NVIDIA RTX 4090D to
+facilitate real-time policy and advantage inference. In our
+policy OOD detector implementation, N stochastic policy
+samples are generated in parallel to decrease inference latency.
+The latency of policy OOD detector and advantage OOD
+detector are 112 ms and 93 ms respectively, supporting the
+human-in-the-loop policy and advantage data collection.
+B. Real-world Experiments
+We evaluate whether HIL-UMI collection improves iterative
+post-training over conventional demonstration collection,
+whether advantage refinement provides an additional benefit,
+and how effectively each method turns human collection time
+into task progress. Figure 4 summarizes the four real-world
+manipulation tasks.
+1) Real-world Tasks: We conduct all evaluations on a
+single Franka arm using the setup shown in Figure 4, and
+consider the following four tasks:
+• Fold Towel: This long-horizon task requires the robot to
+flatten a randomly initialized towel, fold it twice while
+eliminating wrinkles, and place it in a basket.
+• Clean Up Table: The robot first opens the yellow drawer,
+sorts three pens into color-matched slots and closes the
+drawer. Then it opens the blue drawer, puts away three
+toys, and closes the drawer. This task features long-
+horizon manipulation in a housework scenario.
+• Stack Cube: This precise task requires the robot to
+grasp a purple cube and place it on top of a red cube.
+• Stamp: The robot grasps a stamp and aligns it inside
+a marked box on paper. The length and width of the
+marked box are both 1cm larger than the stamp body,
+featuring precise manipulation.
+2) Evaluation Protocol: For a fair comparison, we evaluate
+each policy checkpoint for 10 trials per task under the
+same protocol. For each trial, we vary the initial object
+placement within a 30 cm × 60 cm workspace to evaluate
+spatial generalization. We report the mean Task Progress Score
+(TPS), which assigns partial credit to predefined subtasks on
+a scale from 0 to 100. Table I specifies the complete scoring
+criteria for each task.
+3) Training Data and Comparisons: We adapt the open-
+source π0.5 policy [3] to each task. We use a fixed base dataset
+and a fixed budget for newly collected data in each post-
+training round. For the long-horizon tasks (Fold Towel and
+Clean Up Table), the base dataset contains 50 demonstrations,
+and the per-round data budget is 12,000 frames. For the
+remaining tasks, the base dataset contains 80 demonstrations,
+and the per-round data budget is 2,500 frames.
+We compare HIL-UMI with the SFT baseline based on
+the data budgets described above. SFT collects conventional
+UMI demonstrations and applies supervised fine-tuning. HIL-
+UMI refines the advantage estimator and performs advantage-
+conditioned behavior cloning as described in Secs. III-B
+and III-C. The shared implementation settings are summarized
+
+
+Clean Up Table
+Stack Cube
+Stamp
+Fold Towel
+Fig. 4.
+Real-world evaluation tasks. We evaluate our HIL-UMI on four challenging real-world manipulation tasks with the Franka Panda robot arm.
+TABLE I
+TASK PROGRESS SCORE CRITERIA.
+Task
+Subtask
+Score
+Fold Towel
+Flatten the towel
++25
+Complete the first fold
++25
+Complete the second fold
++25
+Place the folded towel in the basket
++25
+Clean Up Table
+Place a pen in its color-matched slot
++10 each (×3)
+Put away a toy
++10 each (×3)
+Correctly open the drawer
++10 each (×2)
+Correctly close the drawer
++10 each (×2)
+Stack Cube
+Grasp the purple cube
++30
+Move the purple cube near the red cube
++30
+Place the purple cube on the red cube
++40
+Stamp
+Grasp the stamp
++20
+Move the stamp near the marked box
++20
+Adjust the stamp orientation correctly
++20
+Stamp contact with the paper
++20
+Stamp body inside the marked box
++20
+Scoring notes. For Fold Towel, 5 points are deducted if the towel is
+wrinkled or misaligned for every subtask. For Stack Cube, 15 points are
+deducted if the robot grasps only one corner of the cube.
+in Table II.
+4) Results and Analysis: Figure 5 compares HIL-UMI
+with SFT under the same per-round data budget. Across all
+four tasks, SFT yields only limited improvement, whereas
+HIL-UMI improves consistently throughout post-training.
+This suggests that simply collecting additional nominal
+demonstrations is insufficient to reliably address the states
+encountered by the current policy.
+In contrast, HIL-UMI explicitly targets policy-specific
+OOD regions during data collection and further exploits the
+collected data through advantage-conditioned policy updates.
+TABLE II
+IMPLEMENTATION HYPERPARAMETERS.
+Hyperparameter
+Value
+Policy & Advantage Training
+Input image resolution
+224 × 224
+Action horizon
+20
+Optimizer
+AdamW
+Policy learning rate
+1.0 × 10−5
+Advantage learning rate
+5.0 × 10−5
+Learning rate schedule
+Cosine
+Warm-up steps
+500
+Batch size
+128
+Weight decay
+1.0 × 10−10
+Update steps per round
+5000
+Online collection and ACBC
+Number of stochastic policy samples N
+10
+Energy score weight λp, λR, λg
+0.5, 0.25, 0.25
+Advantage-evaluation interval K
+50
+Data mixture ratio α
+0.5
+Positive-advantage fraction η
+0.3
+As a result, the same collection budget is concentrated on
+supervision that is more relevant to the policy’s current
+weaknesses. The consistent gains on both long-horizon and
+precise tasks indicate that this strategy provides a more
+effective use of additional human demonstrations than SFT.
+C. Ablation Experiments
+1) Ablation on Advantage: We remove the advantage
+model in HIL-UMI, and replace the ACBC update with
+simple finetuning on the mixed dataset. As shown in Figure 5,
+HIL-UMI without advantage shows significant performance
+drop, because it fails to label policy data by utility and treat
+the task-progressing and suboptimal examples as the same.
+
+
+Base
+Iter1
+Iter2
+Iter3
+Fold Towel
+0
+25
+50
+75
+100
+Task Progress Score
+SFT
+HIL-UMI w/o Adv.
+HIL-UMI
+Base
+Iter1
+Iter2
+Iter3
+Clean Up Table
+0
+25
+50
+75
+100
+Task Progress Score
+SFT
+HIL-UMI w/o Adv.
+HIL-UMI
+Base
+Iter1
+Iter2
+Iter3
+Stack Cube
+0
+25
+50
+75
+100
+Task Progress Score
+SFT
+HIL-UMI w/o Adv.
+HIL-UMI
+Base
+Iter1
+Iter2
+Iter3
+Stamp
+0
+25
+50
+75
+100
+Task Progress Score
+SFT
+HIL-UMI w/o Adv.
+HIL-UMI
+Base
+Iter1
+Iter2
+Iter3
+Average
+0
+25
+50
+75
+100
+Task Progress Score
+SFT
+HIL-UMI w/o Adv.
+HIL-UMI
+Fig. 5.
+Real-world Experiment Results. We measure the task progress score (TPS) across post-training rounds on four long-horizon or high-precision
+real-world tasks for SFT, HIL-UMI without advantage, and HIL-UMI. We report the average over 4 tasks on the far right.
+0
+1000
+2000
+Cumulative Time (s)
+0
+25
+50
+75
+100
+Task Progress Score
+(a)
+SFT
+HIL-UMI
+Base
+S1
+S2
+S3
+Post-training Stage
+0
+25
+50
+75
+100
+Task Progress Score
+(b)
+SFT
+HG-DAgger
+HIL-UMI
+Fig. 6.
+Collection-time efficiency and comparison with HG-DAgger. (a)
+We report the average TPS and corresponding time cost over 4 real-world
+tasks for SFT and HIL-UMI collection. (b) We compare SFT, HG-DAgger
+and HIL-UMI on Clean Up Table and report the TPS for each round.
+2) Ablation on Data Collection Thresholds: We study the
+sensitivity of the two online collection triggers on Stack Cube,
+by varying one threshold at a time while fixing the other at
+the selected setting, (τP , τA) = (1.2, 0.2).
+TABLE III
+ABLATION OF ONLINE COLLECTION THRESHOLDS.
+(τP , τA)
+Base
+Round 1
+Round 2
+Round 3
+(1.2, 0.2)
+84
+86
+90
+100
+(2.0, 0.2)
+84
+76
+86
+96
+(0.5, 0.2)
+84
+80
+72
+90
+(1.2, 0.3)
+84
+76
+82
+96
+(1.2, 0.1)
+84
+82
+82
+92
+As shown in Table III, moderate thresholds consistently
+perform best. For the policy OOD detector, an overly
+permissive threshold collects less informative states where
+the policy already agrees reasonably well with the human,
+whereas an overly conservative threshold can miss useful
+policy failures. The advantage detector exhibits a similar trade-
+off: excessive triggering introduces redundant refinement data,
+while insufficient triggering misses informative estimator
+errors. Overall, both detectors benefit from balancing coverage
+and selectivity. HIL-UMI also consistently outperforms SFT
+across the tested settings, indicating that its improvement is
+not sensitive to a narrowly tuned threshold.
+D. Collection Time Efficiency Experiments
+We compare the collection-time efficiency of SFT and HIL-
+UMI. Figure 6(a) plots the four-task mean TPS against the
+cumulative mean collection time across post-training rounds.
+Although the targeted collection for HIL-UMI takes longer
+per recorded frame (Table IV), its mean TPS rises steadily
+while SFT plateaus and temporarily regresses. These experi-
+ment results indicate that the additional online selection over-
+head is therefore offset by collecting around policy-specific
+blind spots and prioritizing task-progressing supervision.
+TABLE IV
+COLLECTION EFFICIENCY COMPARISON.
+Task
+SFT (ms/frame)
+HIL-UMI (ms/frame)
+Fold Towel
+69.43
+91.92
+Clean Up Table
+41.70
+73.40
+Stack Cube
+77.04
+89.89
+Stamp
+64.30
+101.02
+E. Comparison with HG-DAgger
+Figure 6(b) compares real-robot HG-DAgger with HIL-
+UMI on Clean Up Table under the same per-stage budget.
+HIL-UMI consistently achieves higher TPS across all stages
+and finishes with a TPS approximately five points higher than
+that of HG-DAgger. This improvement is consistent with
+the design of ACBC, which allows the policy to favor high-
+advantage behaviors at inference time while still leveraging
+suboptimal data during training. In addition, HIL-UMI is
+substantially more efficient in data collection: HG-DAgger
+requires 412.99 ms per frame, which is 5.63× the 73.40 ms
+per frame required by HIL-UMI. This gap demonstrates the
+collection efficiency gain from avoiding robot rollouts.
+V. CONCLUSION
+We introduced HIL-UMI, a human-in-the-loop framework
+for iterative VLA post-training without robot rollouts. During
+handheld UMI demonstrations, HIL-UMI targets policy OOD
+states and iteratively refines an advantage estimator to label
+collected data for advantage-conditioned behavior cloning.
+Across four long-horizon and precise manipulation tasks, HIL-
+UMI consistently outperformed SFT, and it also achieved
+significantly higher collection efficiency than HG-DAgger.
+Future work will develop HIL-UMI into a distributed
+post-training system in which operators collect policy-guided
+UMI data concurrently across locations. Therefore, HIL-UMI
+points toward scalable VLA post-training driven by distributed
+human data without repeated robot deployment.
+
+
+VI. ACKNOWLEDGMENT
+We thank Zhewei Gui and Junhan Wang for their insightful
+discussion. This research was supported by Beijing Natural
+Science Foundation (26L080330) and National Natural Sci-
+ence Foundation of China (62376006).
+REFERENCES
+[1] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair,
+R. Rafailov, E. P. Foster, P. R. Sanketi, Q. Vuong, T. Kollar, B. Burchfiel,
+R. Tedrake, D. Sadigh, S. Levine, P. Liang, and C. Finn, “OpenVLA: An
+open-source vision-language-action model,” in Proceedings of the 8th
+Conference on Robot Learning, ser. Proceedings of Machine Learning
+Research, vol. 270.
+PMLR, 2025, pp. 2679–2713.
+[2] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai,
+L. Groom, K. Hausman, B. Ichter et al., “π0: A vision-language-action
+flow model for general robot control,” in Proceedings of Robotics:
+Science and Systems, Los Angeles, CA, USA, June 2025.
+[3] K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail,
+M. Equi, C. Finn, N. Fusai, M. Y. Galliker, D. Ghosh, L. Groom,
+K. Hausman, B. Ichter, S. Jakubczak, T. Jones, L. Ke, D. LeBlanc,
+S. Levine, A. Li-Bell, M. Mothukuri, S. Nair, K. Pertsch, A. Z. Ren,
+L. X. Shi, L. Smith, J. T. Springenberg, K. Stachowicz, J. Tanner,
+Q. Vuong, H. Walke, A. Walling, H. Wang, L. Yu, and U. Zhilinsky,
+“π0.5: a vision-language-action model with open-world generalization,”
+in Proceedings of the 9th Conference on Robot Learning, ser. Pro-
+ceedings of Machine Learning Research, vol. 305.
+PMLR, 2025, pp.
+17–40.
+[4] D. Ghosh, H. R. Walke, K. Pertsch, K. Black, O. Mees, S. Dasari,
+J. Hejna, T. Kreiman, C. Xu, J. Luo, Y. L. Tan, L. Y. Chen, Q. Vuong,
+T. Xiao, P. R. Sanketi, D. Sadigh, C. Finn, and S. Levine, “Octo:
+An open-source generalist robot policy,” in Proceedings of Robotics:
+Science and Systems, Delft, Netherlands, July 2024.
+[5] M. J. Kim, C. Finn, and P. Liang, “Fine-tuning vision-language-action
+models: Optimizing speed and success,” in Proceedings of Robotics:
+Science and Systems, Los Angeles, CA, USA, June 2025.
+[6] Y. Chen, S. Tian, S. Liu, Y. Zhou, H. Li, and D. Zhao, “ConRFT: A
+reinforced fine-tuning method for VLA models via consistency policy,”
+in Proceedings of Robotics: Science and Systems, Los Angeles, CA,
+USA, June 2025.
+[7] H. Zang, M. Wei, S. Xu, Y. Wu, Z. Guo, Y. Wang, H. Lin, P. Wang,
+H. Yuan, Y. Zhang, L. Shi, Y. Xie, Z. Xu, Z. Liu, K. Chen, W. Tang,
+Q. Zhang, W. Zhang, C. Yu, and Y. Wang, “RLux-VLA: A unified
+and efficient framework for reinforcement learning of vision-language-
+action models,” in Proceedings of Robotics: Science and Systems,
+2026.
+[8] M. Pan, S. Feng, Q. Zhang, X. Li, J. Song, C. Qu, Y. Wang,
+C. Li, Z. Xiong, Z. Chen, Y. Liu, and J. Luo, “SOP: A scalable
+online post-training system for vision-language-action models,” 2026,
+arXiv:2601.03044.
+[9] C. Yu, C. Sima, G. Jiang, H. Zhang, H. Mai, H. Li, H. Wang, J. Chen,
+K. Wu, L. Chen, L. Zhao, M. Shi, P. Luo, Q. Bu, S. Peng, T. Li,
+and Y. Yuan, “χ0: Resource-aware robust manipulation via taming
+distributional inconsistencies,” 2026, arXiv:2602.09021.
+[10] J. Zhang, Z. Han, J. Wang, X. Wu, S. Lin, J. Li, H. Fan, R. Wu, D. Li,
+and H. Dong, “HiPolicy: Hierarchical multi-frequency action chunking
+for policy learning,” 2026, arXiv:2604.06067.
+[11] T. Z. Zhao, V. Kumar, S. Levine, and C. Finn, “Learning fine-grained
+bimanual manipulation with low-cost hardware,” in Proceedings of
+Robotics: Science and Systems, Daegu, Republic of Korea, July 2023.
+[12] A. Mandlekar, D. Xu, J. Wong, S. Nasiriany, C. Wang, R. Kulkarni,
+L. Fei-Fei, S. Savarese, Y. Zhu, and R. Mart´ın-Mart´ın, “What matters in
+learning from offline human demonstrations for robot manipulation,” in
+Proceedings of the 5th Conference on Robot Learning, ser. Proceedings
+of Machine Learning Research, vol. 164. PMLR, 2022, pp. 1678–1690.
+[13] S. Ross, G. Gordon, and D. Bagnell, “A reduction of imitation learning
+and structured prediction to no-regret online learning,” in Proceedings
+of the Fourteenth International Conference on Artificial Intelligence
+and Statistics, ser. Proceedings of Machine Learning Research, vol. 15.
+PMLR, 2011, pp. 627–635.
+[14] M. Laskey, J. Lee, R. Fox, A. Dragan, and K. Goldberg, “DART:
+Noise injection for robust imitation learning,” in Proceedings of the 1st
+Annual Conference on Robot Learning, ser. Proceedings of Machine
+Learning Research, vol. 78.
+PMLR, 2017, pp. 143–156.
+[15] X. B. Peng, A. Kumar, G. Zhang, and S. Levine, “Advantage-weighted
+regression: Simple and scalable off-policy reinforcement learning,”
+2019, arXiv:1910.00177.
+[16] A. Nair, A. Gupta, M. Dalal, and S. Levine, “AWAC: Accelerating
+online reinforcement learning with offline datasets,” in International
+Conference on Learning Representations, 2021.
+[17] Z. Wang, A. Novikov, K. Zolna, J. S. Merel, J. T. Springenberg, S. E.
+Reed, B. Shahriari, N. Siegel, C. Gulcehre, N. Heess, and N. de Freitas,
+“Critic regularized regression,” in Advances in Neural Information
+Processing Systems, vol. 33, 2020.
+[18] I. Kostrikov, A. Nair, and S. Levine, “Offline reinforcement learning
+with implicit q-learning,” in International Conference on Learning
+Representations, 2022.
+[19] J. Spencer, S. Choudhury, M. Barnes, M. Schmittle, M. Chiang,
+P. Ramadge, and S. Srinivasa, “Learning from interventions: Human-
+robot interaction as both explicit and implicit feedback,” in Proceedings
+of Robotics: Science and Systems, 2020.
+[20] H. Cai, Z. Peng, and B. Zhou, “Robot-gated interactive imitation
+learning with adaptive intervention mechanism,” in Proceedings of the
+42nd International Conference on Machine Learning, ser. Proceedings
+of Machine Learning Research, vol. 267. PMLR, 2025, pp. 6243–6256.
+[21] M. Kelly, C. Sidrane, K. R. Driggs-Campbell, and M. J. Kochenderfer,
+“HG-DAgger: Interactive imitation learning with human experts,” in
+2019 International Conference on Robotics and Automation.
+IEEE,
+2019, pp. 8077–8083.
+[22] A. Mandlekar, D. Xu, R. Mart´ın-Mart´ın, Y. Zhu, L. Fei-Fei, and
+S. Savarese, “Human-in-the-loop imitation learning using remote
+teleoperation,” 2020, arXiv:2012.06733.
+[23] R. Hoque, A. Balakrishna, E. Novoseller, A. Wilcox, D. S. Brown, and
+K. Goldberg, “ThriftyDAgger: Budget-aware novelty and risk gating
+for interactive imitation learning,” in Proceedings of the 5th Conference
+on Robot Learning, ser. Proceedings of Machine Learning Research,
+vol. 164.
+PMLR, 2022, pp. 598–608.
+[24] H. Liu, S. Nasiriany, L. Zhang, Z. Bao, and Y. Zhu, “Robot learning on
+the job: Human-in-the-loop autonomy and learning during deployment,”
+The International Journal of Robotics Research, vol. 44, no. 10–11,
+pp. 1727–1742, 2025.
+[25] J. Luo, C. Xu, J. Wu, and S. Levine, “Precise and dexterous robotic
+manipulation via human-in-the-loop reinforcement learning,” Science
+Robotics, vol. 10, no. 105, p. eads5033, 2025.
+[26] R. Hoque, L. Y. Chen, S. Sharma, K. Dharmarajan, B. Thananjeyan,
+P. Abbeel, and K. Goldberg, “Fleet-DAgger: Interactive robot fleet
+learning with scalable human supervision,” in Proceedings of the 6th
+Conference on Robot Learning, ser. Proceedings of Machine Learning
+Research, vol. 205.
+PMLR, 2023, pp. 368–380.
+[27] Y. Jiang, C. Wang, R. Zhang, J. Wu, and L. Fei-Fei, “TRANSIC: Sim-to-
+real policy transfer by learning from online correction,” in Proceedings
+of the 8th Conference on Robot Learning, ser. Proceedings of Machine
+Learning Research, vol. 270.
+PMLR, 2025, pp. 1691–1729.
+[28] Physical Intelligence, “π∗
+0.6: A VLA that learns from experience,” 2025,
+technical report, arXiv:2511.14759.
+[29] R. Yang, H. Wang, Z. Wu, C. Liu, X. Yan, X. Du, S. Yue, C. Zhang,
+Y. Wang, Y. Liu, L. Qi, Y. Chen, W. Shan, and M. Yao, “ALOE:
+Action-level off-policy evaluation for vision-language-action model
+post-training,” 2026, arXiv:2602.12691v3.
+[30] S. Dass, K. Pertsch, H. Zhang, Y. Lee, J. J. Lim, and S. Nikolaidis,
+“PATO: Policy assisted teleoperation for scalable robot data collection,”
+in Proceedings of Robotics: Science and Systems, Daegu, Republic of
+Korea, July 2023.
+[31] C. Chi, Z. Xu, C. Pan, E. Cousineau, B. Burchfiel, S. Feng, R. Tedrake,
+and S. Song, “Universal manipulation interface: In-the-wild robot
+teaching without in-the-wild robots,” in Proceedings of Robotics:
+Science and Systems, Delft, Netherlands, July 2024.
+[32] Z. Zhaxizhuoma, K. Liu, C. Guan, Z. Jia, Z. Wu, X. Liu, T. Wang,
+S. Liang, P. Chen, P. Zhang, H. Song, D. Qu, D. Wang, Z. Wang,
+N. Cao, Y. Ding, B. Zhao, and X. Li, “FastUMI: A scalable and
+hardware-independent universal manipulation interface with dataset,” in
+Proceedings of the 9th Conference on Robot Learning, ser. Proceedings
+of Machine Learning Research, vol. 305. PMLR, 2025, pp. 3069–3093.
+[33] H. Ha, Y. Gao, Z. Fu, J. Tan, and S. Song, “UMI on legs: Making
+manipulation policies mobile with manipulation-centric whole-body
+controllers,” in Proceedings of the 8th Conference on Robot Learning,
+ser. Proceedings of Machine Learning Research, vol. 270.
+PMLR,
+2025, pp. 5254–5270.
+
+
+[34] Y. Wei, J. Ma, J. Wang, W. Zhou, Y. Zuo, K. Rui, M. Li, J. Zhang,
+Z. Pan, X. Wang, H. Jia, H. Du, Z. Zeng, J. Ma, G. Qin, D. Zhang, and
+X. Li, “HiFi-UMI: Learning deployable manipulation policies from
+high-fidelity UMI data alone,” 2026, arXiv:2607.25895.
+[35] Seed Robotics, “GR-RL: Going dexterous and precise for long-horizon
+robotic manipulation,” 2025, technical report, arXiv:2512.01801.
+[36] O. Rayyan, J. Abanes, M. Hafez, A. Tzes, and F. Abu-Dakka, “MV-
+UMI: A scalable multi-view interface for cross-embodiment learning,”
+2025, arXiv:2509.18757.
+[37] J. Fang, W. Chen, H. Xue, F. Zhou, T. Le, Y. Wang, Y. Zhang, J. Lv,
+C. Wen, and C. Lu, “RoboPocket: Improve robot policies instantly
+with your phone,” 2026, arXiv:2603.05504.
+[38] Y. Xu, M. Nie, T. Li, H. Li, Y. Luo, S. Huang, and Y.-L. Li, “EgoGuide:
+Egocentric guidance for efficient robot-free demonstration collection
+and learning,” 2026, arXiv:2606.14665.
+[39] C. Chi, S. Feng, Y. Du, Z. Xu, E. Cousineau, B. C. M. Burchfiel,
+and S. Song, “Diffusion policy: Visuomotor policy learning via action
+diffusion,” in Proceedings of Robotics: Science and Systems, Daegu,
+Republic of Korea, July 2023.
+[40] T. Gneiting and A. E. Raftery, “Strictly proper scoring rules, prediction,
+and estimation,” Journal of the American Statistical Association, vol.
+102, no. 477, pp. 359–378, 2007.
+[41] T. Gneiting, L. I. Stanberry, E. P. Grimit, L. Held, and N. A. Johnson,
+“Assessing probabilistic forecasts of multivariate quantities, with an
+application to ensemble predictions of surface winds,” TEST, vol. 17,
+no. 2, pp. 211–235, 2008.
+[42] G. J. Sz´ekely and M. L. Rizzo, “Energy statistics: A class of statistics
+based on distances,” Journal of Statistical Planning and Inference, vol.
+143, no. 8, pp. 1249–1272, 2013.

@@ -1,0 +1,1915 @@
+WLA3: WORLD LATENT ACTION MODELING
+FOR SEMANTICS, DYNAMICS, AND KINEMATICS
+Peidong Liu∗,†, Zhiyuan Xiang∗, Mingyang Li, Wenhao Li, Jiale Zhang, Jiahao Sun, Jiawei Li†
+Joy Future Academy, JD Group
+lpd19@tsinghua.org.cn li-jw15@tsinghua.org.cn
+∗Equal contribution. †Corresponding authors.
+ABSTRACT
+Scaling generalist policy models with heterogeneous data is limited by the lack of
+unified, low-noise action supervision. Human egocentric videos are abundant, but
+only a small fraction comes with high-quality hand-action labels. Observed world
+transitions offer a common source of action-related supervision across data sources.
+We introduce WLA3 (World Latent Action Modeling for Semantics, Dynamics,
+and Kinematics), a unified generalist policy model framework built around repre-
+sentations learned by a World Latent Action Model (WLAM). WLAM first learns
+how multimodal world states change over a local interval, encoding synchronized
+camera views and available embodiment-state changes into a compact local latent
+action and a richer transition feature. Reconstruction from partial modalities and
+consistency across overlapping windows encourage robust transition representa-
+tions. WLA3 reuses them across semantics, dynamics, and kinematics: local latent
+actions support action-sensitive physical-dynamics modeling, segment-level fea-
+tures directly supervise the VLM through a Semantic Latent Aggregate (SLA), and
+an action expert jointly predicts latent actions together with embodiment-specific
+robot controls. Human videos provide scalable transition supervision, while robot
+trajectories ground the shared representation in executable native controls. On
+LARYBench, the final 32D latent action reaches 67.89% average classification
+accuracy. WLA3 achieves 81.9% average success across six real-robot tasks versus
+66.2% for π0.5. Performance improves as generalist policy model mid-training
+data scales, and human videos support human-to-robot transfer. Project page can
+be found at https://wla-3.github.io/.
+1
+INTRODUCTION
+Generalist policy models provide a general interface from visual observations and language instruc-
+tions to robot control, yet scaling them with larger volumes of data from heterogeneous embodiments
+is limited by the lack of unified, low-noise action labels. High-quality robot trajectories remain
+scarce, and their native controls are tied to specific hardware configurations. In contrast, human
+videos offer abundant interactions, but existing 3D hand-pose estimates remain noisy and provide
+limited low-noise supervision. State transitions directly record the physical outcomes of interaction,
+including embodiment motion, contact changes, and evolving spatial geometry. They therefore
+provide a common basis for representing action across data sources, while native controls preserve
+the embodiment-specific information needed for execution.
+Latent Action Models (LAMs) exploit this insight by compressing state transitions into latent
+actions (Ye et al., 2024; Bu et al., 2025). However, existing LAMs face two critical limitations.
+First, they typically infer latents from single-view image pairs, where occlusion and perspective
+projection render distinct physical interactions visually ambiguous. Recent methods improve physical
+grounding through contrastive learning in CLAP (Zhang et al., 2026a), state decoding in villa-X (Chen
+et al., 2025b), or auxiliary viewpoints for primary-view learning in MVP-LAM (Lee et al., 2026);
+these methods still construct latent actions primarily from primary-view transitions and overlook
+the additional world-state information that other views and states could contribute. Second, prior
+works typically tailor latent actions to isolated downstream roles rather than treating them as a
+1
+arXiv:2609.15870v1  [cs.RO]  14 Sep 2026
+
+
+Robot Data
+Human Data
+Simulation Data
+UMI Data
+SemAntics
+DynAmics
+KinemAtics
+LAC-WM
+VLM
+Action Expert
+Observation
+&
+Instruction
+Observation
+&
+Instruction
+Latent
+Action
+∙∙∙
+Latent
+Action
+World Next State 
+Prediction
+Noised 
+Action
+Latent
+Action
+Robot 
+Action
+~ 84100 Hours
+Mixture Data
+Generalization
+Standard
+Spatial
+Illumination
+Background
+Policy Performance
+Figure 1: Overview of WLA3. WLAM learns compact local latent actions and segment-level
+transition features from heterogeneous world-state transitions. These representations support latent
+action-conditioned dynamics learning, direct SLA supervision of the VLM, and joint latent–robot
+action generation.
+shared interface across the full generalist policy model stack. Different components require transition
+knowledge at distinct temporal scales: physical dynamics and low-level control benefit from compact
+local targets, while a condensed segment-level target provides a more direct gradient for grounding
+the VLM’s instruction-conditioned representation in the physical transition of a policy segment.
+To address these challenges, as Figure 1 shows, we introduce WLA3 (World Latent Action Modeling
+for Semantics, Dynamics, and Kinematics), a unified generalist policy model framework that connects
+latent action modeling, world modeling, and policy learning. At its foundation, a World Latent Action
+Model (WLAM) introduces world-state modeling into latent action learning by jointly encoding
+synchronized camera views and, when available, proprioceptive states. Cross-modal dropout prevents
+reliance on any single modality by requiring partial transition evidence to reconstruct the recorded
+endpoint modalities. A cosine-distance objective further encourages consistent latent-action directions
+across overlapping temporal windows (Tang et al., 2026; Wang et al., 2026).
+After WLAM training, WLA3 uses its transition representations at different granularities through LAC-
+WM pre-training, generalist policy model mid-training, and generalist policy model post-training. A
+Latent Action-Conditioned World Model (LAC-WM) conditions on compact continuous latents to
+capture action-sensitive physical dynamics, while a Semantic Latent Aggregate (SLA) mean-pools
+WLAM features over a policy segment and directly supervises the VLM to predict this segment-level
+transition feature from current observations and instructions. A Latent-Action and Robot-Action
+(LARA) expert jointly predicts latent actions and executable robot actions. The latent branch retains
+consistent transition semantics across training stages and embodiments, allowing heterogeneous robot
+data to share a common latent-action target. Human videos provide visual transition-derived latent
+supervision, while robot trajectories enrich the same representation with proprioceptive transitions
+and ground it in executable native controls, enabling scalable human-to-robot transfer.
+We evaluate policy performance through real-robot manipulation success rates, data scaling, and
+human-to-robot alignment, and evaluate the learned latent action representations on LARYBench.
+The final 32D latent action reaches 67.89% average classification accuracy on LARYBench, while
+WLA3 achieves 81.9% average success across six real-robot tasks versus 66.2% for π0.5; success
+2
+
+
+rises from 57.6% to 81.9% as generalist policy model mid-training data scales from 5K to 20K hours.
+Our main contributions are:
+• World Latent Action Modeling. WLAM introduces world-state modeling into latent
+action learning by jointly encoding primary and hand-view observations with available
+proprioceptive states. Cross-modal dropout and a cosine-distance objective over overlapping
+temporal windows regularize the latent action space.
+• Generalist Policy Design. Motivated by the distinct ways transition knowledge supports
+semantics, dynamics, and kinematics, we organize policy learning around LAC-WM for
+latent action-conditioned physical dynamics, Semantic Latent Aggregate (SLA) supervision
+that condenses transition evidence into a direct training target for the VLM, and LARA for
+joint latent and robot action generation.
+• Extensive Evaluation. We evaluate real-robot manipulation success rates, scaling with
+heterogeneous data, and human-to-robot alignment, and further assess the learned latent
+action representations on LARYBench.
+2
+RELATED WORK
+2.1
+LATENT ACTION MODELING
+Latent Action Models (LAMs) infer action representations from observation transitions, providing
+supervision from videos and trajectories without requiring a shared native control space. Genie (Bruce
+et al., 2024) learns discrete latent actions for controllable video generation, while LAPA (Ye et al.,
+2024) and UniVLA (Bu et al., 2025) use video-derived or task-centric latent actions for generalist
+policy model pre-training. CLAM (Liang et al., 2025) and CoMo (Yang et al., 2025) instead learn
+continuous latent action or motion representations, and Motus (Bi et al., 2025) couples latent actions
+with world modeling. Other works improve the grounding or organization of latent actions: villa-
+X (Chen et al., 2025b) introduces robot-state decoding, CLAP (Zhang et al., 2026a) and ConLA (Dai
+et al., 2026) use contrastive alignment, and MVP-LAM (Lee et al., 2026) uses cross-viewpoint
+reconstruction to encourage action-centric representations. HiLAM (Kim et al., 2026) introduces
+temporal hierarchy, RotVLA (Li et al., 2026b) imposes rotational structure, DiLA (Zhang et al.,
+2026c) disentangles latent factors, and ALAM (Tang et al., 2026) promotes algebraic consistency.
+Building on these advances, WLAM jointly encodes synchronized camera views and available
+proprioceptive states, applies cross-modal dropout, and regularizes overlapping temporal windows
+with a cosine objective. It produces both a compact continuous latent action for local physical
+dynamics and control and a pre-bottleneck transition feature that can be condensed into a direct
+semantic training target for the VLM.
+2.2
+GENERALIST POLICY LEARNING
+Recent generalist policies adapt pretrained vision-language models (VLMs) into generalist policy
+models for language-conditioned control. These methods differ in action representation, embodiment
+alignment, and predictive supervision. Open-world generalization is pursued through heteroge-
+neous co-training in π0.5 (Black et al., 2025), embodied reasoning in Gemini Robotics (Gemini
+Robotics Team et al., 2025), and cross-embodiment transfer in X-VLA (Zheng et al., 2025a) and
+Gemini Robotics 1.5 (Gemini Robotics Team, 2025). LingBot-VLA (Wu et al., 2026) and Galaxea
+G0.5 (Galaxea Team, 2026) emphasize scalable pre-training and autoregressive actions, while Qwen-
+RobotManip (Yuan et al., 2026) and Being-H0.5 (Luo et al., 2026a) align representations across
+embodiments. Hy-Embodied-0.5-VLA (Zhang et al., 2026b) and π0.7 (Physical Intelligence, 2026)
+target deployment and steering, whereas InternVLA-A1 (Cai et al., 2026) and Wall-OSS-0.5 (Yu
+et al., 2026) unify understanding, generation, and action.
+A parallel direction equips generalist policies with predictive world models. IRASim (Zhu et al.,
+2025b) and Unified World Models (Zhu et al., 2025a) learn action-conditioned visual dynamics,
+while UP-VLA (Zhang et al., 2025) and WorldVLA (Cen et al., 2025) connect future prediction
+with policy learning. VideoVLA (Shen et al., 2025) and FLARE (Zheng et al., 2025b) transfer
+generative or implicit dynamics priors to control; Motus (Bi et al., 2025) and LingBot-VA (Li et al.,
+2026a) more directly unify video, language, and action prediction. LDA-1B (Lyu et al., 2026) and
+3
+
+
+DreamDojo (Gao et al., 2026) scale dynamics learning across heterogeneous embodied or human
+video data, whereas VLA-JEPA (Sun et al., 2026) and FRAPPE (Zhao et al., 2026) align policy
+representations with future features. JoyAI-RA 0.5 (JoyAI-RA Team, 2026) combines latent-action-
+conditioned dynamics with dual action alignment for heterogeneous policy learning. WLA3 uses
+multimodal world-transition representations at multiple granularities across semantics, physical
+dynamics, and control.
+2.3
+CROSS-EMBODIMENT LEARNING
+Recent cross-embodiment learning scales heterogeneous robot and human data through shared
+motion representations and flexible policy architectures. Gemini Robotics 1.5 (Gemini Robotics
+Team, 2025) introduces Motion Transfer for zero-shot skill transfer across robot embodiments, while
+π0.7 (Physical Intelligence, 2026) demonstrates out-of-the-box control on a new embodiment through
+diverse context-conditioned training. Qwen-RobotManip (Yuan et al., 2026) uses a canonical state–
+action space, camera-frame end-effector motions, and human-to-robot synthesis across multiple
+embodiments, and GR00T N1.7 (NVIDIA, 2026) combines a relative end-effector interface with
+large-scale egocentric-video pre-training. Being-H0.5 (Luo et al., 2026a) uses semantically aligned
+action slots and shared and embodiment-specific flow experts, whereas Being-H0.7 (Luo et al., 2026b)
+learns future-aware latent reasoning from egocentric videos.
+WLA3 uses a complementary transition-centered representation: multimodal local latent actions
+provide a common motion target across data sources, while robot controls retain their embodiment-
+specific coordinates. The same WLAM representations support the VLM, world model, and policy at
+different temporal scales.
+3
+WLA3: WORLD LATENT ACTION MODELING
+3.1
+WORLD LATENT ACTION MODEL
+WLAM is trained on the heterogeneous mixture in Section 4, which contains human videos and
+state-bearing robot, simulation, and UMI trajectories. At time t, It denotes the available camera
+observations, rt the recorded embodiment state, and e the embodiment profile. We write the world
+state as st = (It, rt, e) and omit modalities that are not recorded. All four data families contribute to
+a shared transition representation. The WLAM architecture is shown in Figure 2.
+World-Transition Encoding.
+Given the endpoint states st and st+h, the transition encoder jointly
+processes their visual observations and available embodiment states, conditioned on the embodiment
+profile e. We take the output of a learned [CLS] token as the 1024D transition feature
+gt,h =
+
+Etrans
+ϕ
+(st, st+h)
+
+[CLS] ∈R1024.
+(1)
+The feature parameterizes a Gaussian posterior over a compact continuous latent action (Kingma &
+Welling, 2014):
+zt,h ∼qϕ( · | gt,h) ≡qϕ( · | st, st+h),
+zt,h ∈Rdz,
+dz = 32.
+(2)
+We use posterior samples for reconstruction and the posterior mean ¯zt,h = Eqϕ( ·|st,st+h)[z] as the
+deterministic target for consistency regularization and downstream training. For a segment spanning
+t to t + T, we mean-pool the local transition features:
+cseg
+t
+=
+1
+T −h + 1
+T −h
+X
+k=0
+gt+k,h ∈R1024.
+(3)
+During WLAM pre-training, the endpoint offset h may exceed one step. For offline target construction
+in subsequent stages, we set h = 1 and extract consecutive transitions over one control interval. Here,
+T denotes the segment horizon and h is the endpoint offset of each local transition. The deterministic
+latent action ¯zt,h provides a local target for latent-action prediction and latent-action-conditioned
+dynamics, while cseg
+t
+provides the segment-level SLA target for direct VLM supervision. Section 3.2
+describes how the policy uses both representations. Posterior parameterization and input tokenization
+are detailed in Appendix A.
+4
+
+
+WLAM Decoder
+WLAM Encoder
+Latent Action
+"!
+Latent Action
+"!$+
+)*
+)*,J
+&)*,J
+)*,;
+)*,;,J
+&)*,;,J
+ℒIK5LMNO
+Visual
+Observation
+Robot
+Context
+#!
+"
+#!$-
+#!$+
+#!$+$-
+Predict
+Statê
+#!$-̂
+#!$+$-
+Predict
+Observation
+"
+"
+"
+Figure 2: World latent action modeling. WLAM jointly encodes camera transitions and, when
+available, embodiment-state transitions into a compact latent action, then reconstructs the endpoint
+observations. Cross-modal transition dropout promotes a shared representation of physical transitions
+across views and embodiment states. For overlap consistency, two h-step transition windows start δ
+steps apart, where 0 < δ < h, and thus overlap for h −δ steps.
+Cross-Modal World-State Reconstruction.
+WLAM applies cross-modal transition dropout so that
+the latent action can be inferred from different subsets of the recorded transition. During training, we
+randomly drop available camera or embodiment-state streams while retaining at least one stream. The
+same mask is applied at t and t + h, preventing a missing input from appearing as a physical change.
+We denote the masked endpoints by est and est+h. The decoder receives the recorded initial state and
+reconstructs all available endpoint modalities. Modalities absent from a source are omitted from both
+the encoder input and the corresponding reconstruction terms. Complete transitions are used when
+extracting offline targets. Appendix A specifies the masking and missing-modality handling.
+Regularization and Training Objective.
+Temporally shifted windows often contain largely over-
+lapping physical changes. During WLAM pre-training, overlap consistency is applied when h > 1.
+For two length-h windows separated by 0 < δ < h, we minimize the cosine distance between their
+posterior means (Tang et al., 2026; Wang et al., 2026):
+Loverlap = Et,h,δ: 0<δ<h
+"
+1 −
+¯z⊤
+t,h¯zt+δ,h
+∥¯zt,h∥2∥¯zt+δ,h∥2 + εcos
+#
+,
+εcos > 0.
+(4)
+This regularizer favors locally consistent latent directions without directly constraining transition
+magnitude. The reconstruction term Lrec reconstructs the observed scene and, when available,
+embodiment-state changes. Together with overlap consistency and the variational regularizer, the
+WLAM objective is
+LWLAM = Lrec + λoverlapLoverlap + βDKL(qϕ( · | est, est+h) ∥N(0, Idz)) .
+(5)
+The decomposition of Lrec and the temporal-window construction are provided in Appendix A.
+3.2
+GENERALIST POLICY MODEL
+The generalist policy model uses WLAM representations at two temporal scales. Compact latent
+actions describe the physical change over one control interval, while mean-pooled transition features
+summarize a 30-step policy segment as a Semantic Latent Aggregate (SLA) target. Together, they
+connect segment-level semantics and local dynamics to executable robot control.
+5
+
+
+∙∙∙
+Action Expert
+State
+LAC-WM
+“fold the 
+T-shirt”
+ϋϯ+1 , … ϋT 
+ݼ
+❄️
+VLM
+ݼ
+ݼ
+Observation
+“fold the 
+T-shirt”
+Ϧ, ϱ
+Predicted SLA
+ϟϯ
+푠ϡϣ
+Query
+Noised Actions
+∙∙∙
+∙∙∙
+Stage 1
+Stage 2
+∙∙∙
+∙∙∙
+Instruction
+Instruction
+∙∙∙
+Latent Actions 
+ϵϯ, … ϵϖ
+ϋϯ
+WLAM
+Encoder
+VAE
+Bottleneck
+ϋϯ+1
+ϋϯ
+ϋϯ+ϖ
+ϋϯ+T−1
+∙∙∙
+∙∙∙
+Transition
+Features
+WLAM-derived 
+SLA Target
+ϟϯ
+푠ϡϣ
+❄️
+ϋϯ+2
+ϋϯ+1
+pool
+∙∙∙
+WLAM
+Encoder
+VAE
+Bottleneck
+❄️
+WLAM
+Encoder
+VAE
+Bottleneck
+❄️
+WLAM-derived Supervision 
+and Condition
+Latent Action Labels 
+ϵϯ, … ϵϖ
+Latent Actions 
+ϵϯ, … ϵϯ+ϊ−1
+Robot Actions
+ϝϯ, … ϝϯ+ϊ−1
+Ϧ, ϱ
+Ϧ, ϱ
+ϭϯ
+ϡ
+ϭϯ+1
+ϭϯ+1
+ϡ
+ϭϯ+2
+ϭϯ+ϖ−1
+ϡ
+ϭϯ+ϖ
+Figure 3: LAC-WM pre-training and generalist policy model mid-training. During LAC-WM
+pre-training, the frozen WLAM extracts latent actions from world-state transitions, which condition
+LAC-WM with the current observation and instruction. During generalist policy model mid-training,
+pooled WLAM features form the SLA target for direct VLM supervision, while local latent actions
+supervise LARA. The action expert combines VLM and frozen LAC-WM features to predict latent
+and robot actions jointly. Fire and snowflake symbols denote trainable and frozen modules.
+Before generalist policy model post-training, training proceeds through LAC-WM pre-training and
+generalist policy model mid-training. LAC-WM pre-training uses WLAM-provided local latent
+actions to condition the Latent Action-Conditioned World Model (LAC-WM) (JoyAI-RA Team,
+2026). Generalist policy model mid-training uses SLA to supervise the VLM directly and trains
+a Latent-Action and Robot-Action (LARA) expert to jointly predict latent-action and robot-action
+chunks. LARA conditions on semantic features from the VLM and dynamics features from the frozen
+LAC-WM. The resulting policy is then adapted during generalist policy model post-training.
+Dynamics: Latent Action-Conditioned World Modeling.
+As illustrated by LAC-WM pre-training
+in Figure 3, the current observation and instruction alone may correspond to multiple possible physical
+transitions. The frozen WLAM annotates each sequence with one compact latent action per control
+interval; conditioning future prediction on these latents helps LAC-WM distinguish the physical
+effects of different interactions. Given the current visual feature ft = Evis(It), task instruction ℓ, and
+an Hv-step latent-action chunk Zt = (¯zt,h, . . . , ¯zt+Hv−1,h), let κt contain the retained subset of the
+language and latent-action conditions. Let y = ft+1:t+Hv be the target future visual feature, ϵ be
+standard Gaussian noise of the same shape, and τ ∼U(0, 1). Conditional Flow Matching uses the
+interpolation and target velocity
+xτ = (1 −τ)ϵ + τy,
+v⋆
+τ = y −ϵ.
+(6)
+For the noised future feature xτ, LAC-WM predicts the velocity field
+bvτ = uψ(xτ, τ; ft, κt) ,
+κt ⊆{ℓ, Zt}.
+(7)
+Latent actions specify local transition cues, language specifies the task, and their joint condition con-
+nects an instruction to its physical dynamics. Language and latent actions are dropped independently
+during pre-training, exposing joint, language-only, latent-only, and observation-only conditioning
+modes. In particular, language-only samples train the observation–language pathway used during
+generalist policy model mid-training.
+6
+
+
+Following DreamDojo (Gao et al., 2026), LAC-WM is trained with velocity regression and temporal-
+difference regularization:
+Lpre
+WM = E
+
+∥bvτ −v⋆
+τ∥2
+2 + λtemporal∥∆posbvτ −∆posv⋆
+τ∥2
+2
+
+,
+(8)
+where, for position i, ∆posvτ,i = vτ,i+1 −vτ,i. The first term trains conditional future-feature
+prediction, while the second encourages neighboring velocity predictions to vary coherently.
+After LAC-WM pre-training, LAC-WM is frozen and provides dynamics-aware context from the
+current visual feature and instruction during generalist policy model mid-training. We denote its
+causal first-frame features by Hwm
+t
+. The VLM receives the current observation directly; future
+observations and WLAM outputs are used to construct offline targets.
+Semantics: Semantic Latent Aggregate Supervision.
+SLA directly supervises the VLM at the
+segment level. WLAM transition features are mean-pooled over a 30-step policy segment to form the
+1024D SLA target cseg
+t
+in Eq. 3. During generalist policy model mid-training, a learned semantic
+query is appended to the VLM input. Given the current observation and instruction, the query state
+and its projected SLA prediction are
+Hvlm
+t
+= Vξ(It, ℓ, qsem),
+bcseg
+t
+= Psem
+ Hvlm
+t
+[qsem]
+
+.
+(9)
+The projection head maps the semantic-query state to the SLA dimension. Direct supervision of this
+prediction transfers segment-level transition evidence into the VLM representation:
+Lsem = ∥bcseg
+t
+−cseg
+t
+∥2
+2 .
+(10)
+Lsem constitutes the semantic-supervision term in the overall mid-training objective defined in Eq. 15.
+Kinematics: Latent Action-Guided Robot Control.
+Native robot actions differ across embodi-
+ments in dimension and control meaning, and their coordinates remain embodiment-specific. Latent
+actions provide a shared local transition target, while a separate robot-action branch grounds this
+representation in executable controls for each embodiment.
+For embodiment e, the policy uses separate fixed 32-dimensional interfaces for state conditioning
+and robot-action prediction. The native state is zero-padded to form the policy condition rpol
+t
+, while
+human-video samples use rpol
+t
+= 032. The native action has dimension de ≤32 and occupies the
+leading coordinates of the robot-action interface; the remaining coordinates are filled with zeros and
+masked out of the loss:
+arob
+k
+=
+h
+a(e),native
+k
+; 032−de
+i
+∈R32,
+mrob
+k
+= [1de; 032−de] .
+(11)
+The mask selects valid coordinates for the robot-action loss, which are interpreted in the target
+embodiment’s native format at inference.
+The SLA segment and LARA action chunk cover the same 30 control steps, so T = Hact = 30. At
+each step, the deterministic local transition target and robot action form a joint vector:
+xk =
+¯zk,h ∥arob
+k
+
+∈R64,
+Xt = (xt, . . . , xt+Hact−1).
+(12)
+Here ¯zk,h represents the local transition from step k to k + h. Before action prediction, frozen
+LAC-WM features are projected to the VLM hidden dimension and concatenated with the VLM
+context:
+Hpol
+t
+=
+
+Hvlm
+t
+; LN(Pwm(Hwm
+t
+))
+
+.
+(13)
+We model the joint action chunk with conditional Flow Matching (Lipman et al., 2023). The time-
+conditioned Perceiver action expert (Jaegle et al., 2021) receives Gaussian noise ϵ ∈RHact×64, a
+noised joint-action chunk at τ ∼U(0, 1), the state condition, and the fused policy context, and
+predicts two output branches:
+eXt,τ = (1 −τ)ϵ + τXt,
+V⋆
+t,τ = Xt −ϵ,
+bVt,τ = Fη
+
+eXt,τ, rpol
+t
+, Hpol
+t
+, τ
+
+=
+h
+bVlat
+t,τ ∥bVrob
+t,τ
+i
+.
+(14)
+Numerical integration of this velocity field produces the predicted latent-action and robot-action
+chunk. The two branches use masked Flow Matching losses, and each branch is normalized by
+7
+
+
+its own exponential moving average so that their relative scales remain balanced during training.
+Appendix B gives the masked branch losses and EMA normalization explicitly.
+Latent-only trajectories contribute to the latent branch, while trajectories with both targets, including
+UMI data, contribute to both branches. The generalist policy model mid-training objective combines
+the latent-action, robot-action, and SLA losses:
+Lpolicy = λlat eLlat + λrob eLrob + λsemLsem.
+(15)
+Generalist policy model post-training retains the latent-action and robot-action prediction branches
+while removing the semantic query, SLA prediction head, and semantic loss. At deployment,
+numerical integration produces both branches, but only the valid coordinates of the robot-action
+branch are executed in the target embodiment’s native action format.
+4
+DATASETS
+Figure 4 summarizes the corpus composition, representative observations, and key data attributes,
+while Table 1 provides the dataset-level breakdown and indicates which training stages use each
+source.
+0
+200
+400
+600
+800
+1000
+1200
+Episode Count (K)
+Tableware
+Containers
+Food
+Tools
+Furniture
+Storage Units
+Electronics
+Bottles
+Clothing
+Toys
+Fixtures
+Appliances
+Object Counts
+0
+250
+500
+750
+1000
+1250
+1500
+1750
+Episode Count (K)
+Place
+Grasp
+Transport
+Handle
+Rotate
+Clean
+Push
+Arrange
+Pour
+Remove
+Action Counts
+1
+2-5
+6-7
+8-9
+10-12
+13+
+Subtasks Per Episode
+0%
+10%
+20%
+30%
+40%
+50%
+Episodes (%)
+Subtask Counts
+Real Robot 16.8%
+UMI 5.2%
+Simulation 13.9%
+Human Video 64.1%
+ABC-130K 4.9%
+AgiBot World 2.8%
+LET-Base-Dataset 2.8%
+RoboMIND 2.0 1.2%
+Baihu Dataset 1.2%
+MolmoAct2 0.9%
+In-House Robot Data 0.8%
+Galaxea 0.6%
+RoboCOIN 0.6%
+RoboMIND 0.6%
+DROID 0.3%
+ActionNet 0.2%
+Hy-UMI-10K 2.5%
+SynData 2.2%
+WIYH 0.6%
+InternData-A1 8.7%
+InternData-M1 3.3%
+BEHAVIOR 1.4%
+Genie Sim 0.2%
+RoboCasa 0.10%
+RoboTwin 2.0 0.04%
+LET-Base-Dataset 0.03%
+Egocentric-100K 35.7%
+EgoLive 23.8%
+EgoVerse 1.4%
+Xperience-10M 1.3%
+EgoDex 0.9%
+Ego4D 0.7%
+Ego-Exo4D 0.2%
+EPIC-KITCHENS 0.1%
+84.1K
+Hours
+Block Building
+Table Sorting
+Wipe Stain
+Wall Control
+Part Grasp
+Drawer Objects
+Microwave
+Flower Arrange
+Parcel Transfer
+Part Sorting
+Makeup Brush Storage
+Teapot Pouring
+Package Receiving
+Hang Ladle
+Collect Laundry
+Place Slippers
+Rose Arrangement
+Spread Clothing
+Tighten Screw
+Product Shelving
+Barcode Scanning
+Articulation
+Fridge Access
+Cabinet Pickup
+Household Task
+Pick-and-place
+Arrange Umbrellas
+Turn Radio
+Kitchen Setup
+Kitchen Cleanup
+Workshop Assembly
+Manual Task
+Desktop Task
+Object Handling
+Origami Sorting
+Crafting
+Flower Prep
+Hand Activity
+Pouring
+Kitchen Prep
+Dataset Composition
+Data Examples
+Mixture Attributes
+Representative Robot Embodiments
+Real Robot
+UMI
+Simulation
+Human Video
+AgiBot G1
+Leju Kuavo 4 Pro
+Fourier GR2
+Tien Kung
+AgiBot A2
+Genie-1
+Galaxea R1 Lite
+Bimanual YAM
+Cobot Magic
+AgileX PiPER
+Franka Panda
+UR5e
+Figure 4: Overview of the 84.1K-hour training corpus. Left: composition by data family and
+dataset. Center: representative observations from real-robot, UMI, simulation, and human-video data.
+Right: object, action, and subtask statistics. Bottom: representative robot embodiments.
+Human egocentric videos.
+We collect human egocentric videos covering diverse objects, scenes,
+and interaction patterns. The collection includes EgoLive (Li et al., 2026c), Egocentric-100K (Build
+AI, 2025), EgoVerse (Punamiya et al., 2026), Xperience-10M (Ropedia, 2026), Ego4D (Grauman
+et al., 2022), Ego-Exo4D (Grauman et al., 2024), EgoDex (Hoque et al., 2025) and EPIC-KITCHENS-
+100 (Damen et al., 2022). We filter and subsample the public sources and process a subset of EgoLive
+using the JoyAI-Sim pipeline (Liu et al., 2026). These data broaden the diversity of manipulation
+behaviors and provide large-scale visual-transition supervision for WLAM.
+Real-robot trajectories.
+We combine public and internally collected robot trajectories spanning
+single-arm, bimanual, mobile-manipulation, and humanoid platforms. Representative sources in-
+clude AgiBot World (AgiBot-World-Contributors et al., 2025), ABC-130K (Allshire et al., 2026),
+the Galaxea Open-World Dataset (Jiang et al., 2025), RoboCOIN (Wu et al., 2025b), and Robo-
+MIND (Wu et al., 2025a), together with our internally collected AgiBot G1 multi-task data. These
+trajectories ground the learned transition representation in physical robot interactions across diverse
+embodiments.
+8
+
+
+Table 1: Dataset composition and use across training stages. Size is measured in hours after
+filtering and subsampling. Markers
+W ,
+L
+, and
+G denote WLAM training, LAC-WM pre-
+training, and generalist policy model mid-training, respectively.
+Data Family
+Dataset
+Size (Hours) Embodiment
+Training Stage
+Real Robot
+ABC-130K (2026)
+4,131
+Bimanual YAM
+W L
+G
+AgiBot World (2025)
+2,392
+AgiBot G1
+W L
+G
+LET-Base-Dataset (Real Robot) (2025)
+2,320
+Leju Kuavo 4 Pro
+W
+RoboMIND 2.0 (2025)
+1,000
+Franka Panda, UR5e, Tien Kung, etc.
+W
+Baihu Dataset (2026)
+1,000
+Qinglong, Fourier GR2, AgiBot A2, etc.
+W L
+MolmoAct2-BimanualYAM (2026)
+720
+Bimanual YAM
+W L
+In-House Robot Data
+675
+AgiBot G1
+W L
+G
+Galaxea Open-World Dataset (2025)
+500
+Galaxea R1 Lite
+W L
+G
+RoboCOIN (2025b)
+500
+Cobot Magic, RMC-AIDA-L, G1edu-u3, etc.
+W L
+RoboMIND (2025a)
+500
+Franka Panda, UR5e, Cobot Magic, etc.
+W
+DROID (2024)
+273
+Franka Panda
+W
+ActionNet (2025)
+140
+Fourier GR1, Fourier GR2
+W L
+UMI
+Hy-UMI-10K (2026b)
+2,110
+Custom-Designed Hand-Held UMI Grippers
+W G
+SynData (2026)
+1,818
+PsiBot Exoskeleton Gloves
+W
+WIYH (2025c)
+465
+Oracle Suite H-Gloves
+W
+Simulation
+InternData-A1 (2025)
+7,330
+Genie-1, Franka Panda, Split ALOHA, etc.
+W L
+G
+InternData-M1 (2025)
+2,800
+Franka Panda, Cobot Magic, AgileX PiPER
+W
+BEHAVIOR-1K (2023)
+1,200
+Galaxea R1 Pro
+W L
+Genie Sim 3.0 (2026)
+200
+AgiBot G1, AgiBot G2
+W L
+RoboCasa (2024)
+84
+Fourier GR-1
+W
+RoboTwin 2.0 (2025a)
+34
+ALOHA-AgileX
+W L
+LET-Base-Dataset (Simulation) (2025)
+28
+Leju Kuavo 4 Pro
+W
+Human Video
+Egocentric-100K (2025)
+30,000
+Human
+W
+EgoLive (2026c)
+20,000
+W L
+G
+EgoVerse (2026)
+1,200
+W L
+G
+Xperience-10M (2026)
+1,059
+W L
+G
+EgoDex (2025)
+715
+W L
+G
+Ego4D (2022)
+600
+W L
+Ego-Exo4D (2024)
+200
+W
+EPIC-KITCHENS-100 (2022)
+100
+W
+Simulation trajectories.
+We use simulation trajectories from InternData-A1 (Tian et al., 2025),
+InternData-M1 (InternData-M1 Contributors, 2025), BEHAVIOR-1K (Li et al., 2023), Genie Sim
+3.0 (Yin et al., 2026), RoboCasa (Nasiriany et al., 2024), RoboTwin 2.0 (Chen et al., 2025a), and
+LET-Base-Dataset (Leju Robotics, 2025). These data further extend the coverage of the overall
+training corpus across scenes, objects, tasks, and robot embodiments.
+UMI demonstrations.
+The UMI data comprise Hy-UMI-10K (Zhang et al., 2026b), SynData (Psi-
+Bot, 2026), and WIYH (Zheng et al., 2025c). These sources span custom-designed hand-held UMI
+grippers and wearable glove interfaces, providing human-centered manipulation demonstrations with
+synchronized visual observations and interface motion. They complement robot trajectories with
+diverse close-range interactions and portable data-collection settings.
+5
+EXPERIMENTS
+5.1
+EXPERIMENT SETUP
+Real-World Benchmark.
+We evaluate the generalist policy on six tabletop manipulation tasks
+using the AgiBot G1 platform after generalist policy model post-training. The six tasks are to place
+an eraser on a shelf, place a charger on a shelf, place a pencil case on a shelf, place a stapler on a shelf,
+move books to a bookshelf, and discard trash in a bin. For brevity, we refer to these tasks as Eraser,
+Charger, Pencil Case, Stapler, Book, and Trash, respectively. Together, these tasks assess fine-grained
+object grasping and placement with both the left and right arms. For each task, we evaluate three
+9
+
+
+Standard
+Spatial
+Illumination
+Background
+Figure 5: Representative real-world evaluation scenes. From left to right: the standard config-
+uration (Standard), the spatial generalization setting with perturbed object placements and relative
+spatial relations (Spatial), the illumination generalization setting under altered ambient lighting (Illu-
+mination), and the background generalization setting with an unseen tablecloth texture (Background).
+unseen generalization settings, as Figure 5 shows. Spatial generalization perturbs the initial position
+of the target object or alters its spatial relationship with other task-relevant objects. Illumination
+generalization changes lighting, while background generalization replaces the tabletop covering with
+unseen textures. Across all settings, the instruction and success criterion remain unchanged.
+5.2
+MAIN RESULTS
+5.2.1
+LATENT-ACTION REPRESENTATION ON LARYBENCH
+We evaluate frozen representations with LARYBench (Nie et al., 2026) using semantic-classification
+and low-level control-regression probes. Following its representation-level protocol, we evaluate the
+1024D probing feature for continuous LAMs and the pre-quantization feature for discrete LAMs;
+we evaluate the final latent for models whose final representations are available. We compare
+against DiLA (Zhang et al., 2026c), MVP-LAM (Lee et al., 2026), CLAP (Zhang et al., 2026a), and
+DreamDojo (Gao et al., 2026). Table 2 additionally incorporates a subset of baseline results reported
+by LARYBench, as indicated by the dagger; all unmarked results are evaluated by us. The standard
+protocol measures the information available in each model’s representation, while the final-latent
+protocol tests how much of that information is retained by the compact interface used downstream.
+Table 2: Standard representation evaluation on LARYBench. Classification is top-1 accuracy (%,
+↑), and control regression is MSE (↓). Best results are bold and second-best results are underlined. †
+denotes results quoted from LARYBench; all unmarked results are evaluated by us. Classification
+Avg. is the arithmetic mean over the two Composite datasets, and Regression Avg. is the arithmetic
+mean over the four control datasets.
+Method
+Semantic classification ↑
+Control regression (MSE) ↓
+Composite
+Human
+Composite
+Robot
+Avg.
+CALVIN
+VLABench
+RoboCOIN
+AgiBotBeta
+Avg.
+LAPA†
+14.61
+23.64
+19.13
+0.96
+0.95
+0.96
+1.00
+0.97
+UniVLA†
+19.08
+18.56
+18.82
+0.82
+0.74
+0.94
+0.97
+0.87
+villa-X†
+17.80
+29.90
+23.85
+0.86
+0.72
+0.94
+0.97
+0.87
+DiLA
+64.41
+62.10
+63.26
+0.55
+0.27
+0.86
+0.82
+0.63
+MVP-LAM
+50.31
+51.61
+50.96
+0.55
+0.38
+0.90
+0.92
+0.69
+CLAP
+55.32
+63.02
+59.17
+0.43
+0.17
+0.68
+0.60
+0.47
+DreamDojo
+63.69
+59.41
+61.55
+0.35
+0.12
+0.74
+0.81
+0.51
+Ours
+73.12
+68.37
+70.75
+0.25
+0.09
+0.55
+0.57
+0.37
+Table 2 shows that our standard representation ranks first on both Composite classification tasks
+and all four control datasets. Its 70.75% classification Avg. is 7.49 percentage points above DiLA’s
+63.26%, while its regression Avg. MSE of 0.37 is 21% lower than CLAP’s 0.47. Notably, neither
+CALVIN nor VLABench is used in our LAM training, yet our representation reaches MSEs of 0.25
+and 0.09, compared with DreamDojo’s 0.35 and 0.12, respectively. This demonstrates that the learned
+transition representation transfers control-relevant structure beyond its training data.
+Importantly, LARYBench exercises only our primary egocentric-view pathway because it does not
+provide the hand-view or body-state inputs supported by our model. Table 3 complements the standard
+10
+
+
+Eraser
+Charger
+Pencil Case
+Stapler
+Book
+Trash
+Avg
+0
+20
+40
+60
+80
+100
+Success Rate (%)
+π0.5
+Baseline
++LAC-WM
++LARA
++SLA (Full WLA3)
+49.3
+78.5
+74.3
+82.7
+67.2
+45.2
+66.2
+55.2
+84.4
+80.2
+88.6
+73.1
+51.1
+72.1
+37.5
+100.0
+87.5
+100.0
+83.0
+50.0
+76.3
+75.0
+75.0
+87.5
+100.0
+91.5
+50.0
+79.8
+75.0
+100.0
+87.5
+87.5
+66.5
+75.0
+81.9
+Figure 6: Task-level real-world policy performance and cumulative component ablations. Task
+success rate (SR, %) is reported for six AgiBot G1 tabletop tasks under the unseen-generalization
+protocol described in Section 5.1. Each task score is averaged across the spatial, illumination, and
+background settings, and Avg. denotes the macro-average over the six tasks. The π0.5 policy serves
+as the external comparator, whereas Baseline and the three component-addition variants form the
+internal cumulative ablation. Each successive variant retains the components introduced by the
+preceding variant, and +SLA denotes the full WLA3 model.
+protocol by evaluating the representation actually passed to downstream models: intermediate and
+pre-quantization features probe representational capacity, whereas the final latent measures the
+information retained at the downstream interface. Despite a 32× compression from 1024D to 32D,
+our final latent retains comparable classification performance, reaching 67.89% versus 70.75% for
+the standard representation, and achieves the best average classification and regression among final
+latent actions. This indicates that the compact interface retains rich semantic and control-relevant
+information. Relative to their 1024D representations, the 32D latents of DreamDojo, CLAP, and MVP-
+LAM reduce average classification accuracy by 9.16, 12.42, and 32.62 percentage points, respectively.
+DiLA remains broadly stable, but its classification accuracy still trails ours. AgiBotBeta’s stride-45
+setting instead targets a different temporal regime, asking one latent to span a much longer, potentially
+multi-stage transition than the short transitions our latent is designed to represent.
+Table 3: Final latent-action evaluation on LARYBench. Metrics and emphasis follow Table 2.
+Method
+Semantic classification ↑
+Control regression (MSE) ↓
+Composite
+Human
+Composite
+Robot
+Avg.
+CALVIN
+VLABench
+RoboCOIN
+AgiBotBeta
+Avg.
+DiLA
+65.43
+62.50
+63.97
+0.58
+0.37
+0.88
+0.84
+0.67
+MVP-LAM
+16.78
+19.89
+18.34
+0.85
+0.77
+0.98
+1.00
+0.90
+CLAP
+37.79
+55.71
+46.75
+0.64
+0.31
+0.79
+0.68
+0.61
+DreamDojo
+54.22
+50.55
+52.39
+0.47
+0.24
+0.93
+0.93
+0.65
+Ours
+69.21
+66.56
+67.89
+0.33
+0.12
+0.75
+0.74
+0.49
+5.2.2
+REAL-WORLD POLICY EVALUATION
+We evaluate real-world policy performance on the six-task AgiBot G1 benchmark described in
+Section 5.1. Figure 6 reports task-level success rates under the three unseen generalization settings,
+together with the macro-average across tasks. All policies are post-trained on the same task-specific
+robot demonstrations and evaluated under identical task instructions, success criteria, and test
+11
+
+
+configurations. These perturbations test whether the policy maintains task execution as object
+placement, illumination, and background appearance change.
+The full WLA3 model achieves an average success rate of 81.9%, exceeding π0.5 by 15.7 percentage
+points. WLA3 performs better on five of the six tasks, with the largest gains on Trash, Eraser, and
+Charger, where it improves by 29.8, 25.7, and 21.5 percentage points, respectively. On Book, its
+success rate remains within 0.7 percentage points of π0.5. These results indicate that WLA3 maintains
+stronger task execution under the evaluated spatial, illumination, and background shifts.
+5.3
+SCALING WITH DATA
+We study how policy performance scales with the amount of heterogeneous data used for generalist
+policy model mid-training. This experiment tests whether the shared transition representation
+continues to convert additional heterogeneous data into useful policy supervision.
+Figure 7: Scaling generalist policy model mid-
+training data for WLA3.
+Generalist policy
+model post-training and evaluation settings are
+held fixed across data scales.
+From the same generalist policy model mid-
+training pool, we randomly construct subsets con-
+taining 5K, 10K, and 20K hours and train the same
+policy configuration separately at each scale. All
+variants use the same pretrained WLAM and LAC-
+WM checkpoints, model architecture, initializa-
+tion, and optimization recipe; only the amount of
+generalist policy model mid-training data is var-
+ied. After generalist policy model mid-training,
+every model undergoes the same generalist policy
+model post-training using the same task-specific
+dataset and training schedule. The task-specific
+demonstrations are therefore held fixed and are
+not included in the reported data volumes.
+Each model after generalist policy model post-
+training is evaluated on the same six-task real-
+world benchmark under three unseen generaliza-
+tion settings: spatial perturbations, substantially
+altered ambient lighting, and unseen tabletop back-
+grounds. Across all settings, the instruction and
+success criterion remain unchanged. We report the task success rate averaged across tasks and
+generalization settings, as shown in Figure 7. The average success rate increases from 57.6% with
+5K hours to 65.9% with 10K hours and 81.9% with 20K hours. Since the pretrained checkpoints,
+post-training data, and evaluation protocol are fixed, the upward trend reflects the benefit of increasing
+the generalist policy model mid-training mixture.
+5.4
+ABLATION STUDIES
+Generalist Policy Ablation.
+We conduct a cumulative component ablation under a shared policy-
+training and evaluation protocol. The baseline uses the VLM and a Perceiver-based Flow-Matching
+expert, initialized through generalist policy model mid-training and then adapted through generalist
+policy model post-training on robot demonstrations to predict 30-step chunks of 32D robot actions
+from visual features and the current robot state. The incremental variants add the three WLA3
+components in sequence. First, LAC-WM features are projected and concatenated with the VLM
+features, testing the contribution of the learned dynamics context. Next, LARA jointly predicts the
+32D latent action and the native robot action at each step, preserving local transition supervision
+alongside executable control. Finally, SLA supervision adds a segment-level transition target for the
+VLM. All variants use the same data, initialization, and evaluation protocol, and each retains the
+components introduced by the preceding variant.
+As shown in Figure 6, average success increases from 72.1% for the baseline to 76.3%, 79.8%, and
+81.9% as LAC-WM, LARA, and SLA are introduced, respectively. The corresponding gains of 4.2,
+3.5, and 2.1 percentage points show complementary benefits from dynamics context, latent-action
+12
+
+
+prediction, and segment-level VLM supervision. The full model therefore combines improvements
+from all three components rather than relying on a single source of performance gain.
+Latent Action Model Ablation.
+We retain five necessary variants and evaluate their final 32D
+latent actions on LARYBench. Primary view only uses the primary camera transition. Primary + wrist
+views adds synchronized wrist or hand views while omitting embodiment-state input; comparing
+these two variants measures the contribution of the additional viewpoints, while comparison with Full
+WLAM measures the contribution of embodiment state. The two removal variants start from Full
+WLAM and disable only cross-modal transition dropout or temporal overlap consistency, respectively.
+All variants share training data, latent dimension, optimization settings, and LARYBench protocol.
+Table 4: WLAM ablations on LARYBench using the 32D latent action. Classification is top-1
+accuracy (%, ↑), and control regression is MSE (↓). Metrics and emphasis follow Table 2.
+Variant
+Semantic classification ↑
+Control regression (MSE) ↓
+Composite
+Human
+Composite
+Robot
+Avg.
+CALVIN
+VLABench
+RoboCOIN
+AgiBotBeta
+Avg.
+Primary view only
+61.85
+59.23
+60.54
+0.49
+0.25
+0.86
+0.85
+0.61
+Primary + wrist views (no state)
+66.12
+63.50
+64.81
+0.41
+0.18
+0.81
+0.79
+0.55
+Full w/o cross-modal dropout
+62.18
+58.74
+60.46
+0.48
+0.23
+0.85
+0.83
+0.60
+Full w/o overlap consistency
+67.45
+64.81
+66.13
+0.37
+0.15
+0.78
+0.77
+0.52
+Full WLAM
+69.21
+66.56
+67.89
+0.33
+0.12
+0.75
+0.74
+0.49
+As shown in Table 4, adding wrist views improves the average classification accuracy from 60.54% to
+64.81% and reduces the average control-regression MSE from 0.61 to 0.55. Incorporating embodiment
+state further raises classification accuracy to 67.89% and lowers MSE to 0.49. Removing cross-modal
+transition dropout causes the largest degradation, reducing classification accuracy to 60.46% and
+increasing MSE to 0.60, while removing overlap consistency yields 66.13% and 0.52. Together, these
+results show that multi-view observations and embodiment state provide complementary transition
+evidence, while both regularizers improve the quality of the final compact latent action.
+5.5
+HUMAN-ROBOT ALIGNMENT EXPERIMENT
+To assess the contribution of task-matched human demonstrations under different robot-data regimes,
+we compare three post-training settings. Full-Robot uses the full original set of Eraser robot
+demonstrations and no Eraser human demonstrations. Limited-Robot retains only one twentieth
+(5%) of the Eraser robot demonstrations and includes no Eraser human demonstrations. Limited-
+Robot+Human uses the same reduced robot subset as Limited-Robot and additionally incorporates
+task-matched Eraser human demonstrations. During generalist policy model post-training, robot
+trajectories supervise both latent-action and robot-action prediction. Human demonstrations provide
+only latent-action supervision because they do not contain executable robot-action labels; their
+robot-action loss is therefore masked. Across all three settings, the initialization, data for the other
+five tasks, and all other post-training configurations are kept unchanged.
+Table 5: Effect of task-matched human demonstrations across Eraser robot-data regimes. All
+settings use identical initialization, data for the other five tasks, and post-training configurations. SR
+denotes success rate (%, ↑).
+Post-training setting
+Eraser robot data
+Eraser human data
+Eraser SR (%) ↑
+Full-Robot
+100%
+No
+75
+Limited-Robot
+5%
+No
+40
+Limited-Robot+Human
+5%
+Yes
+60
+As shown in Table 5, reducing the Eraser robot data from 100% to 5% decreases the success rate from
+75% to 40%. Adding task-matched human demonstrations under the same limited robot-data regime
+improves the success rate from 40% to 60%, an absolute gain of 20 percentage points. This recovers
+20 of the 35 percentage points lost after reducing the robot data, while remaining 15 percentage
+points below the Full-Robot setting. These results suggest that task-matched human demonstrations
+13
+
+
+Source action: left arm moves rightward
+Source
+Context
+Ours
+DreamDojo
+LAPA
+Source action: left arm moves leftward
+Source
+Context
+Ours
+DreamDojo
+LAPA
+Source action: right arm moves leftward
+Source
+Context
+Ours
+DreamDojo
+LAPA
+Source action: left arm moves rightward
+Source
+Context
+Ours
+DreamDojo
+LAPA
+Figure 8: Cross-context transition transfer. Four source–context pairs compare WLAM, Dream-
+Dojo, and LAPA in multi-step autoregressive rollouts. Panel titles describe the source transition, and
+the four columns show frames sampled throughout each rollout. Source and Context are ground-truth
+trajectories. Each model starts from the first context frame and predicts subsequent frames using
+latent actions from the source.
+provide useful task-relevant signals through latent-action supervision and can partially compensate for
+limited robot demonstrations, although they do not fully replace the benefit of executable robot-action
+supervision in this experiment.
+5.6
+REPRESENTATION ANALYSIS
+Cross-Embodiment Representation Transfer.
+We evaluate the latent-action representation under
+both within-domain and cross-embodiment settings. The Composite Human and Composite Robot
+results in Table 3 measure whether action information can be decoded within each domain, using
+probes trained and evaluated on human or robot data, respectively. To assess cross-embodiment
+transfer, we select twelve action classes shared by human and robot videos. For all methods,
+representations are mapped by the same frozen adapter to four 32D tokens and evaluated using the
+same linear probe. H→H and R→R denote within-domain evaluation, whereas H→R and R→H
+denote transfer from human to robot and from robot to human, respectively.
+As shown in Table 6, WLAM achieves the highest accuracy in all four directions. Its average
+accuracy across the two cross-embodiment directions reaches 20.98%, exceeding DiLA by 5.27
+percentage points. Under the source-family-disjoint split and shared evaluation protocol, these
+results indicate that WLAM captures action information that remains readable across human and
+14
+
+
+robot embodiments. Together with the LARYBench results, they demonstrate that WLAM produces
+informative representations within each domain and transfers more effectively across embodiments.
+Table 6: Cross-embodiment representation transfer. Entries are top-1 accuracy (%, ↑) from
+the same linear reader and fixed 4×32 token interface. H and R denote human and robot videos,
+respectively. Best results are bold and second-best results are underlined.
+Method
+Within-domain
+Cross-embodiment
+H→H
+R→R
+Avg.
+H→R
+R→H
+Avg.
+DiLA
+40.75
+39.00
+39.88
+16.17
+15.25
+15.71
+MVP-LAM
+27.67
+25.96
+26.82
+12.54
+13.75
+13.15
+CLAP
+28.88
+40.38
+34.63
+10.50
+10.88
+10.69
+LAPA
+22.21
+17.33
+19.77
+14.21
+14.42
+14.31
+UniVLA
+29.25
+27.00
+28.13
+12.21
+13.38
+12.79
+villa-X
+24.13
+26.04
+25.09
+9.83
+12.29
+11.06
+WLAM (ours)
+49.38
+47.38
+48.38
+22.08
+19.88
+20.98
+Cross-Context Transition Transfer.
+A transition code should describe how a scene changes
+without being tied to the appearance of its source trajectory. For each of four source–context pairs, we
+extract latent actions from the source, initialize generation with the first context frame, and predict the
+remaining frames autoregressively. We apply the same procedure to WLAM, DreamDojo (Gao et al.,
+2026), and LAPA (Ye et al., 2024), using each method’s own representation, conditioning inputs, and
+decoder. This experiment provides a qualitative comparison rather than an aggregate score.
+The examples in Figure 8 cover left- and right-arm transitions in simulation and real-world scenes.
+WLAM follows the source transition while retaining the objects and layout of the context. DreamDojo
+also preserves the context but develops local blur or appearance drift in later frames, whereas LAPA
+shows stronger texture and structural degradation. These examples indicate that WLAM can transfer
+the source change while preserving the appearance and geometry of the new context.
+Together, these analyses show that WLAM learns a transition-focused code that transfers across
+embodiments and visual contexts.
+6
+CONCLUSION, LIMITATIONS, AND FUTURE WORK
+We presented WLA3, a multi-granularity latent-action framework for learning generalist robot policies
+from heterogeneous interaction data. WLAM treats world-state transitions as a shared action interface
+and learns compact representations from human videos, robot trajectories, simulation rollouts, and
+UMI demonstrations. WLA3 uses these representations at three levels: LAC-WM models action-
+conditioned dynamics, SLA provides segment-level supervision to the VLM, and LARA jointly
+predicts shared latent actions and embodiment-specific robot controls.
+On the six-task real-world benchmark, WLA3 achieves an average success rate of 81.9%, compared
+with 66.2% for π0.5. The cumulative ablation improves the shared baseline from 72.1% to 76.3%
+with LAC-WM, 79.8% with LARA, and 81.9% with SLA. With only 5% of the Eraser robot
+demonstrations, task-matched human demonstrations improve success from 40% to 60%, partially
+closing the gap to the 75% achieved with the full robot dataset. On LARYBench, the standard WLAM
+representation achieves 70.75% average classification accuracy and an average control-regression
+MSE of 0.37. Its compact 32D latent retains 67.89% classification accuracy and achieves an MSE of
+0.49, outperforming the other evaluated final latent representations on both metrics.
+The current world-state representation relies primarily on multi-view RGB observations and robot
+proprioception, and therefore captures contact and physical state only indirectly. Future work could
+incorporate measured depth, tactile and force feedback, richer object-state information, and high-
+confidence human hand trajectories. Broader language supervision and more diverse training data
+may further improve fine-grained semantic grounding and enable more systematic studies of scaling
+and transfer across data sources and embodiments.
+15
+
+
+REFERENCES
+AgiBot-World-Contributors, Qingwen Bu, Jisong Cai, Li Chen, Xiuqi Cui, Yan Ding, Siyuan
+Feng, Shenyuan Gao, Xindong He, Xuan Hu, Xu Huang, et al. AgiBot World Colosseo: A
+large-scale manipulation platform for scalable and intelligent embodied systems, 2025. URL
+https://arxiv.org/abs/2503.06669.
+Arthur Allshire, Himanshu Gaurav Singh, Ritvik Singh, Adam Rashid, Hongsuk Choi, David
+McAllister, Justin Yu, Yiyuan Chen, Huang Huang, Pieter Abbeel, et al. Scalable behavior
+cloning with open data, training, and evaluation, 2026. URL https://arxiv.org/abs/
+2606.27375.
+Hongzhe Bi, Hengkai Tan, Shenghao Xie, Zeyuan Wang, Shuhe Huang, Haitian Liu, Ruowen Zhao,
+Yao Feng, Chendong Xiang, Yinze Rong, et al. Motus: A unified latent action world model. arXiv
+preprint arXiv:2512.13030, 2025.
+Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail,
+Michael Robert Equi, Chelsea Finn, Niccolo Fusai, Manuel Y. Galliker, Dibya Ghosh, Lachy
+Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Devin LeBlanc,
+Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Allen Z. Ren, Lucy Xi-
+aoyang Shi, Laura Smith, Jost Tobias Springenberg, Kyle Stachowicz, James Tanner, Quan Vuong,
+Homer Walke, Anna Walling, Haohuan Wang, Lili Yu, and Ury Zhilinsky. π0.5: A vision-language-
+action model with open-world generalization. In Proceedings of the 9th Conference on Robot
+Learning, 2025. URL https://openreview.net/forum?id=vlhoswksBO.
+Jake Bruce, Michael D. Dennis, Ashley Edwards, Jack Parker-Holder, Yuge Shi, Edward Hughes,
+Matthew Lai, Aditi Mavalankar, Richie Steigerwald, Chris Apps, et al.
+Genie: Generative
+interactive environments. In International Conference on Machine Learning, 2024.
+Qingwen Bu, Yanting Yang, Jisong Cai, Shenyuan Gao, Guanghui Ren, Maoqing Yao, Ping Luo, and
+Hongyang Li. Univla: Learning to act anywhere with task-centric latent actions. arXiv preprint
+arXiv:2505.06111, 2025.
+Build AI.
+Egocentric-100K, 2025.
+URL https://huggingface.co/datasets/
+builddotai/Egocentric-100K. Dataset.
+Junhao Cai, Zetao Cai, Jiafei Cao, Yilun Chen, Zeyu He, Lei Jiang, Hang Li, Hengjie Li, Yang
+Li, Yufei Liu, et al. Internvla-a1: Unifying understanding, generation and action for robotic
+manipulation. arXiv preprint arXiv:2601.02456, 2026. URL https://arxiv.org/abs/
+2601.02456.
+Jun Cen, Chaohui Yu, Hangjie Yuan, Yuming Jiang, Siteng Huang, Jiayan Guo, Xin Li, Yibing Song,
+Hao Luo, Fan Wang, Deli Zhao, and Hao Chen. Worldvla: Towards autoregressive action world
+model. arXiv preprint arXiv:2506.21539, 2025. URL https://arxiv.org/abs/2506.
+21539.
+Tianxing Chen, Zanxin Chen, Baijun Chen, Zijian Cai, Yibin Liu, Zixuan Li, Qiwei Liang, Xianliang
+Lin, Yiheng Ge, Zhenyu Gu, et al. Robotwin 2.0: A scalable data generator and benchmark
+with strong domain randomization for robust bimanual robotic manipulation. arXiv preprint
+arXiv:2506.18088, 2025a.
+Xiaoyu Chen, Hangxing Wei, Pushi Zhang, Chuheng Zhang, Kaixin Wang, Yanjiang Guo, Rushuai
+Yang, Yucen Wang, Xinquan Xiao, Li Zhao, et al. Villa-x: Enhancing latent action modeling in
+vision-language-action models. arXiv preprint arXiv:2507.23682, 2025b.
+Weisheng Dai, Kai Lan, Jianyi Zhou, Bo Zhao, Xiu Su, Junwen Tong, Weili Guan, and Shuo Yang.
+ConLA: Contrastive latent action learning from human videos for robotic manipulation, 2026.
+URL https://arxiv.org/abs/2602.00557.
+Dima Damen, Hazel Doughty, Giovanni Maria Farinella, Antonino Furnari, Evangelos Kazakos, Jian
+Ma, Davide Moltisanti, Jonathan Munro, Toby Perrett, Will Price, and Michael Wray. Rescaling
+egocentric vision: Collection, pipeline and challenges for EPIC-KITCHENS-100. International
+Journal of Computer Vision, 130:33–55, 2022. doi: 10.1007/s11263-021-01531-2.
+16
+
+
+Haoquan Fang, Jiafei Duan, Donovan Clay, Sam Wang, Shuo Liu, Weikai Huang, Xiang Fan, Wei-
+Chuan Tsai, Shirui Chen, Yi Ru Wang, et al. MolmoAct2: Action reasoning models for real-world
+deployment, 2026. URL https://arxiv.org/abs/2605.02881.
+Fourier ActionNet Team and Yao Mu. ActionNet: A dataset for dexterous bimanual manipulation.
+Fourier ActionNet dataset release, 2025. URL https://action-net.org/.
+Galaxea Team. Galaxea G0.5 technical report, 2026. URL https://opengalaxea.github.
+io/G05/Galaxea_G0_5.pdf.
+Shenyuan Gao, William Liang, Kaiyuan Zheng, Ayaan Malik, Seonghyeon Ye, Sihyun Yu, Wei-
+Cheng Tseng, Yuzhu Dong, Kaichun Mo, Chen-Hsuan Lin, Qianli Ma, Seungjun Nah, Loic Magne,
+Jiannan Xiang, Yuqi Xie, Ruijie Zheng, Dantong Niu, You Liang Tan, K. R. Zentner, George
+Kurian, Suneel Indupuru, Pooya Jannaty, Jinwei Gu, Jun Zhang, Jitendra Malik, Pieter Abbeel,
+Ming-Yu Liu, Yuke Zhu, Joel Jang, and Linxi Fan. Dreamdojo: A generalist robot world model
+from large-scale human videos, 2026. URL https://arxiv.org/abs/2602.06949.
+Gemini Robotics Team. Gemini robotics 1.5: Pushing the frontier of generalist robots with advanced
+embodied reasoning, thinking, and motion transfer. arXiv preprint arXiv:2510.03342, 2025. URL
+https://arxiv.org/abs/2510.03342.
+Gemini Robotics Team, Krzysztof Choromanski, Coline Devin, Yilun Du, Debidatta Dwibedi, et al.
+Gemini robotics: Bringing ai into the physical world. arXiv preprint arXiv:2503.20020, 2025.
+URL https://arxiv.org/abs/2503.20020.
+Kristen Grauman, Andrew Westbury, Eugene Byrne, Zachary Chavis, Antonino Furnari, Rohit
+Girdhar, Jackson Hamburger, Hao Jiang, Miao Liu, Xingyu Liu, et al. Ego4d: Around the world in
+3,000 hours of egocentric video. In Proceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, pp. 18995–19012, 2022.
+Kristen Grauman, Andrew Westbury, Lorenzo Torresani, Kris Kitani, Jitendra Malik, et al. Ego-
+Exo4D: Understanding skilled human activity from first- and third-person perspectives. In Proceed-
+ings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp. 19383–19400,
+2024.
+Ryan Hoque, Peide Huang, David J. Yoon, Mouli Sivapurapu, and Jian Zhang. EgoDex: Learning
+dexterous manipulation from large-scale egocentric video, 2025. URL https://arxiv.org/
+abs/2505.11709.
+Chengkai Hou, Kun Wu, Jiaming Liu, Zhengping Che, Di Wu, Fei Liao, Guangrun Li, Jingyang He,
+Qiuxuan Feng, Zhao Jin, et al. RoboMIND 2.0: A multimodal, bimanual mobile manipulation
+dataset for generalizable embodied intelligence, 2025. URL https://arxiv.org/abs/
+2512.24653.
+InternData-M1 Contributors. InternData-M1. InternManip repository, 2025. URL https://
+github.com/InternRobotics/InternManip. Dataset.
+Andrew Jaegle, Felix Gimeno, Andrew Brock, Andrew Zisserman, Oriol Vinyals, and Joao Carreira.
+Perceiver: General perception with iterative attention. In International Conference on Machine
+Learning, pp. 4651–4664. PMLR, 2021.
+Tao Jiang, Tianyuan Yuan, Yicheng Liu, Chenhao Lu, Jianning Cui, Xiao Liu, Shuiqi Cheng, Jiyang
+Gao, Huazhe Xu, and Hang Zhao. Galaxea Open-World Dataset and G0 Dual-System VLA Model,
+2025. URL https://arxiv.org/abs/2509.00576.
+JoyAI-RA Team. JoyAI-RA 0.5: Scaling robot manipulation learning via dual action alignment,
+2026. URL https://arxiv.org/abs/2608.05674.
+Alexander Khazatsky, Karl Pertsch, Suraj Nair, Ashwin Balakrishna, Sudeep Dasari, Siddharth
+Karamcheti, Soroush Nasiriany, Mohan Kumar Srirama, Lawrence Yunliang Chen, Kirsty Ellis,
+et al. DROID: A large-scale in-the-wild robot manipulation dataset, 2024. URL https://
+arxiv.org/abs/2403.12945.
+17
+
+
+Hanjung Kim, Lerrel Pinto, and Seon Joo Kim. Hierarchical latent action model. arXiv preprint
+arXiv:2603.05815, 2026.
+Diederik P. Kingma and Max Welling. Auto-encoding variational bayes. In International Conference
+on Learning Representations, 2014.
+Jung Min Lee, Dohyeok Lee, Seokhun Ju, Taehyun Cho, Jin Woo Koo, Li Zhao, Sangwoo Hong, and
+Jungwoo Lee. Mvp-lam: Learning action-centric latent action via cross-viewpoint reconstruction.
+arXiv preprint arXiv:2602.03668, 2026.
+Leju Robotics.
+LET-Base-Dataset, 2025.
+URL https://huggingface.co/datasets/
+LejuRobotics/LET-Base-Dataset. Dataset.
+Chengshu Li, Ruohan Zhang, Josiah Wong, Cem Gokmen, Sanjana Srivastava, Roberto Martin-
+Martin, Chen Wang, Gabrael Levine, Michael Lingelbach, Jiankai Sun, et al. BEHAVIOR-1K: A
+benchmark for embodied ai with 1,000 everyday activities and realistic simulation. In Proceedings
+of the 6th Conference on Robot Learning, volume 205 of Proceedings of Machine Learning
+Research, pp. 80–93. PMLR, 2023.
+Lin Li, Qihang Zhang, Yiming Luo, Shuai Yang, Ruilin Wang, Fei Han, Mingrui Yu, Zelin Gao, Nan
+Xue, Xing Zhu, Yujun Shen, and Yinghao Xu. Causal world modeling for robot control, 2026a.
+URL https://arxiv.org/abs/2601.21998.
+Qiwei Li, Xicheng Gong, Xinghang Li, Peiyan Li, Quanyun Zhou, Hangjun Ye, Jiahuan Zhou, and
+Yadong Mu. Rotvla: Rotational latent action for vision-language-action model. arXiv preprint
+arXiv:2605.13403, 2026b.
+Yihang Li, Xuelong Wei, Jingzhou Luo, Yingjing Xiao, Yibo Bai, Guangyuan Zhou, Teng Zou,
+Chenguang Gui, Jiajun Wen, He Zhang, Kangliang Chen, Xing Pan, Shuaiyan Liu, Daming
+Wang, Tao An, Jiayi Li, Shibo Jin, Wanwan Zhang, Tianyu Wang, Boren Wei, Zhixuan Huang,
+Fangsheng Liu, Ruodai Li, Hui Zhang, Anson Li, Yicheng Gong, Peng Cao, Jiaming Liang, and
+Liang Lin. EgoLive: A large-scale egocentric dataset from real-world human tasks, 2026c. URL
+https://arxiv.org/abs/2604.23570.
+Anthony Liang, Pavel Czempin, Matthew Hong, Yutai Zhou, Erdem Biyik, and Stephen Tu. Clam:
+Continuous latent action models for robot learning from unlabeled demonstrations. arXiv preprint
+arXiv:2505.04999, 2025.
+Yaron Lipman, Ricky T. Q. Chen, Heli Ben-Hamu, Maximilian Nickel, and Matt Le. Flow matching
+for generative modeling. In International Conference on Learning Representations, 2023.
+Peidong Liu, Yongce Liu, Songyan Guo, Fuyuan Ma, Zhihao Yuan, Ao Li, Zengjue Chen, Wenhao
+Li, Tianle Zhang, Mingyang Li, et al. JoyAI-Sim: A simulation-enabled interconversion toolchain
+for the embodied data pyramid, 2026. URL https://arxiv.org/abs/2606.16776.
+Hao Luo, Ye Wang, Wanpeng Zhang, Sipeng Zheng, Ziheng Xi, Chaoyi Xu, Haiweng Xu, Haoqi
+Yuan, Chi Zhang, Yiqing Wang, Yicheng Feng, and Zongqing Lu. Being-h0.5: Scaling human-
+centric robot learning for cross-embodiment generalization, 2026a. URL https://arxiv.
+org/abs/2601.12993.
+Hao Luo, Wanpeng Zhang, Yicheng Feng, Sipeng Zheng, Haiweng Xu, Chaoyi Xu, Ziheng Xi, Yuhui
+Fu, and Zongqing Lu. Being-h0.7: A latent world-action model from egocentric videos, 2026b.
+URL https://arxiv.org/abs/2605.00078.
+Jiangran Lyu, Kai Liu, Xuheng Zhang, Haoran Liao, Yusen Feng, Wenxuan Zhu, Tingrui Shen,
+Jiayi Chen, Jiazhao Zhang, Yifei Dong, et al. Lda-1b: Scaling latent dynamics action model via
+universal embodied data ingestion. arXiv preprint arXiv:2602.12215, 2026.
+Soroush Nasiriany, Abhiram Maddukuri, Lin Zhang, Aarav Parikh, Aaron Lo, Abhishek Joshi, Ajay
+Mandlekar, and Yuke Zhu. Robocasa: Large-scale simulation of everyday tasks for generalist
+robots. In Robotics: Science and Systems, 2024.
+18
+
+
+Dujun Nie, Fengjiao Chen, Qi Lv, Jun Kuang, Xiaoyu Li, Xuezhi Cao, and Xunliang Cai. Lary: A
+latent action representation yielding benchmark for generalizable vision-to-action alignment, 2026.
+URL https://arxiv.org/abs/2604.11689.
+NVIDIA. NVIDIA Isaac GR00T N1.7: A foundation model for generalist robots. Official model
+release, 2026. URL https://github.com/NVIDIA/Isaac-GR00T. Accessed 2026-08-
+06.
+OpenLoong.
+Baihu Dataset, 2026.
+URL https://ai.atomgit.com/openloong/
+baihu-dataset. Dataset.
+Maxime Oquab, Timothee Darcet, Theo Moutakanni, Huy Vo, Marc Szafraniec, Vasil Khalidov,
+Pierre Fernandez, Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, et al. Dinov2: Learning
+robust visual features without supervision. Transactions on Machine Learning Research, 2024.
+Physical Intelligence. π0.7: A steerable generalist robotic foundation model with emergent capabilities.
+arXiv preprint arXiv:2604.15483, 2026. URL https://arxiv.org/abs/2604.15483.
+PsiBot. SynData: A large-scale real-world multimodal dataset for embodied intelligence, 2026. URL
+https://huggingface.co/datasets/PsiBotAI/SynData. Dataset.
+Ryan Punamiya, Simar Kareer, Zeyi Liu, Josh Citron, Ri-Zhao Qiu, et al. EgoVerse: An egocentric
+human dataset for robot learning from around the world, 2026. URL https://arxiv.org/
+abs/2604.07607.
+Ropedia.
+Xperience-10M: A large-scale egocentric multimodal dataset with structured
+3d/4d annotations, 2026. URL https://huggingface.co/datasets/ropedia-ai/
+xperience-10m. Dataset.
+Yichao Shen, Fangyun Wei, Zhiying Du, Yaobo Liang, Yan Lu, Jiaolong Yang, Nanning Zheng, and
+Baining Guo. Videovla: Video generators can be generalizable robot manipulators. arXiv preprint
+arXiv:2512.06963, 2025. URL https://arxiv.org/abs/2512.06963.
+Jingwen Sun, Wenyao Zhang, Zekun Qi, Shaojie Ren, Zezhi Liu, Hanxin Zhu, Guangzhong Sun, Xin
+Jin, and Zhibo Chen. Vla-jepa: Enhancing vision-language-action model with latent world model.
+arXiv preprint arXiv:2602.10098, 2026. URL https://arxiv.org/abs/2602.10098.
+Zuojin Tang, Haoyun Liu, Xinyuan Chang, Changjie Wu, Dongjie Huo, Yandan Yang, Bin Liu, Zhejia
+Cai, Feng Xiong, Mu Xu, Jiachen Luo, De Ma, Zhiheng Ma, and Gang Pan. Alam: Algebraically
+consistent latent action model for vision-language-action models. arXiv preprint arXiv:2605.10819,
+2026. URL https://arxiv.org/abs/2605.10819.
+Zachary Teed and Jia Deng. Raft: Recurrent all-pairs field transforms for optical flow. In European
+Conference on Computer Vision, pp. 402–419, 2020.
+Yang Tian, Yuyin Yang, Yiman Xie, Zetao Cai, Xu Shi, Ning Gao, Hangxu Liu, Xuekun Jiang, Zherui
+Qiu, Feng Yuan, et al. InternData-A1: Pioneering high-fidelity synthetic data for pre-training
+generalist policy, 2025. URL https://arxiv.org/abs/2511.16651.
+Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea Vedaldi, Christian Rupprecht, and David
+Novotny. Vggt: Visual geometry grounded transformer. In IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, 2025.
+Ying Wang, Oumayma Bounou, Gaoyue Zhou, Randall Balestriero, Tim G. J. Rudner, Yann LeCun,
+and Mengye Ren. Temporal straightening for latent planning. arXiv preprint arXiv:2603.12231,
+2026. URL https://arxiv.org/abs/2603.12231.
+Kun Wu, Chengkai Hou, Jiaming Liu, Zhengping Che, Xiaozhu Ju, Zhuqin Yang, Meng Li, Yinuo
+Zhao, Zhiyuan Xu, Guang Yang, et al. RoboMIND: Benchmark on multi-embodiment intelligence
+normative data for robot manipulation. In Robotics: Science and Systems XXI, 2025a. doi:
+10.15607/RSS.2025.XXI.152. URL https://arxiv.org/abs/2412.13877.
+19
+
+
+Shihan Wu, Xuecheng Liu, Shaoxuan Xie, Pengwei Wang, Xinghang Li, Bowen Yang, Zhe Li, Kai
+Zhu, Hongyu Wu, Yiheng Liu, et al. RoboCOIN: An open-sourced bimanual robotic data collection
+for integrated manipulation, 2025b. URL https://arxiv.org/abs/2511.17441.
+Wei Wu, Fan Lu, Yunnan Wang, Shuai Yang, Shi Liu, Fangjing Wang, Qian Zhu, He Sun, Yong
+Wang, Shuailei Ma, Yiyu Ren, Kejia Zhang, Hui Yu, Jingmei Zhao, Shuai Zhou, Zhenqi Qiu,
+Houlong Xiong, Ziyu Wang, Zechen Wang, Ran Cheng, Yong-Lu Li, Yongtao Huang, Xing
+Zhu, Yujun Shen, and Kecheng Zheng.
+A pragmatic VLA foundation model, 2026.
+URL
+https://arxiv.org/abs/2601.18692.
+Jiange Yang, Yansong Shi, Haoyi Zhu, Mingyu Liu, Kaijing Ma, Yating Wang, Gangshan Wu, Tong
+He, and Limin Wang. CoMo: Learning continuous latent motion from internet videos for scalable
+robot learning, 2025. URL https://arxiv.org/abs/2505.17006.
+Lihe Yang, Bingyi Kang, Zilong Huang, Zhen Zhao, Xiaogang Xu, Jiashi Feng, and Hengshuang
+Zhao. Depth anything v2. arXiv preprint arXiv:2406.09414, 2024. URL https://arxiv.
+org/abs/2406.09414.
+Seonghyeon Ye, Joel Jang, Byeongguk Jeon, Sejune Joo, Jianwei Yang, Baolin Peng, Ajay Mandlekar,
+Reuben Tan, Yu-Wei Chao, Bill Yuchen Lin, et al. Latent action pretraining from videos. arXiv
+preprint arXiv:2410.11758, 2024.
+Chenghao Yin, Da Huang, Di Yang, Jichao Wang, Nanshu Zhao, Chen Xu, Wenjun Sun, Linjie Hou,
+Zhijun Li, Junhui Wu, et al. Genie Sim 3.0: A high-fidelity comprehensive simulation platform for
+humanoid robot, 2026. URL https://arxiv.org/abs/2601.02078.
+Ryan Yu, Pushi Zhang, Starrick Liu, Brae Liu, Miracle Kang, Shalfun Li, Lights Shi, Ellie Ma,
+Ping Yang, Chris Pan, Jerry Chen, Dongxiu Liu, Rain Sun, Miles Guo, Byron Zhang, Hugo
+Zhou, Zach Xu, Vincent Chen, Harrison Huang, James Wang, Dance Kuzi, Andy Zhai, Hang Su,
+Roy Gan, Lucy Liang, Hao Wang, and Qian Wang. Wall-OSS-0.5 technical report, 2026. URL
+https://arxiv.org/abs/2605.30877.
+Haoqi Yuan, Zhixuan Liang, Anzhe Chen, Ye Wang, Haoyang Li, Pei Lin, Yiyang Huang, Zixing
+Lei, Tong Zhang, Jiazhao Zhang, Jie Zhang, Jingyang Fan, Gengze Zhou, Qihang Peng, Chenxu
+Lv, Xiaoyue Chen, An Yang, Fei Huang, Junyang Lin, Dayiheng Liu, Jingren Zhou, Chenfei
+Wu, and Xiong-Hui Chen. Qwen-robotmanip technical report: Alignment unlocks scale for
+robotic manipulation foundation models. arXiv preprint arXiv:2606.17846, 2026. URL https:
+//arxiv.org/abs/2606.17846.
+Chubin Zhang, Jianan Wang, Zifeng Gao, Yue Su, Tianru Dai, Cai Zhou, Jiwen Lu, and Yansong
+Tang. Clap: Contrastive latent action pretraining for learning vision-language-action models from
+human videos. arXiv preprint arXiv:2601.04061, 2026a.
+He Zhang, Lingzhu Xiang, Haitao Lin, Zeyu Huang, Minghui Wang, Dingyan Zhong, Yubo Dong,
+Yihao Wu, Yongming Rao, Dongsheng Zhang, et al. Hy-Embodied-0.5-VLA: From vision-
+language-action models to a real-world robot learning stack, 2026b. URL https://arxiv.
+org/abs/2606.14409.
+Jianke Zhang, Yanjiang Guo, Yucheng Hu, Xiaoyu Chen, Xiang Zhu, and Jianyu Chen. UP-VLA:
+A unified understanding and prediction model for embodied agent. In Proceedings of the 42nd
+International Conference on Machine Learning, volume 267 of Proceedings of Machine Learning
+Research, pp. 74911–74922. PMLR, 2025. URL https://proceedings.mlr.press/
+v267/zhang25w.html.
+Richard Zhang, Phillip Isola, Alexei A. Efros, Eli Shechtman, and Oliver Wang. The unreasonable
+effectiveness of deep features as a perceptual metric. In IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, pp. 586–595, 2018.
+Tianqiu Zhang, Muyang Lyu, Yufan Zhang, Fang Fang, and Si Wu. Dila: Disentangled latent action
+world models. arXiv preprint arXiv:2605.15725, 2026c.
+20
+
+
+Han Zhao, Jingbo Wang, Wenxuan Song, Shuai Chen, Yang Liu, Yan Wang, Haoang Li, and Donglin
+Wang. Frappe: Infusing world modeling into generalist policies via multiple future representation
+alignment. arXiv preprint arXiv:2602.17259, 2026. URL https://arxiv.org/abs/2602.
+17259.
+Jinliang Zheng, Jianxiong Li, Zhihao Wang, Dongxiu Liu, Xirui Kang, Yuchun Feng, Yinan Zheng,
+Jiayin Zou, Yilun Chen, Jia Zeng, Ya-Qin Zhang, Jiangmiao Pang, Jingjing Liu, Tai Wang, and
+Xianyuan Zhan. X-vla: Soft-prompted transformer as scalable cross-embodiment vision-language-
+action model, 2025a. URL https://arxiv.org/abs/2510.10274.
+Ruijie Zheng, Jing Wang, Scott Reed, Johan Bjorck, Yu Fang, Fengyuan Hu, Joel Jang, Kaushil
+Kundalia, Zongyu Lin, Loic Magne, Avnish Narayan, You Liang Tan, Guanzhi Wang, Qi Wang,
+Jiannan Xiang, Yinzhen Xu, Seonghyeon Ye, Jan Kautz, Furong Huang, Yuke Zhu, and Linxi Fan.
+Flare: Robot learning with implicit world modeling. In Proceedings of the 9th Conference on
+Robot Learning, 2025b. URL https://openreview.net/forum?id=HXJ6pUSn1L.
+Yupeng Zheng, Jichao Peng, Weize Li, Yuhang Zheng, Xiang Li, Yujie Jin, Julong Wei, Guanhua
+Zhang, Ruiling Zheng, Ming Cao, et al. World In Your Hands: A large-scale and open-source
+ecosystem for learning human-centric manipulation in the wild, 2025c. URL https://arxiv.
+org/abs/2512.24310.
+Chuning Zhu, Raymond Yu, Siyuan Feng, Benjamin Burchfiel, Paarth Shah, and Abhishek Gupta.
+Unified world models: Coupling video and action diffusion for pretraining on large robotic datasets.
+In Proceedings of Robotics: Science and Systems, 2025a. URL https://arxiv.org/abs/
+2504.02792.
+Fangqi Zhu, Hongtao Wu, Song Guo, Yuxiao Liu, Chilam Cheang, and Tao Kong. Irasim: A fine-
+grained world model for robot manipulation. In Proceedings of the IEEE/CVF International Con-
+ference on Computer Vision, pp. 9834–9844, 2025b. URL https://openaccess.thecvf.
+com/content/ICCV2025/html/Zhu_IRASim_A_Fine-Grained_World_Model_
+for_Robot_Manipulation_ICCV_2025_paper.html.
+21
+
+
+A
+ADDITIONAL WLAM FORMULATION DETAILS
+Input Tokens and Posterior Parameterization.
+For each transition, the endpoint observations and
+available embodiment states are mapped to modality-specific tokens. A shared embodiment-profile
+token identifies the source configuration. The transition encoder processes these tokens with a learned
+[CLS] token, whose output forms gt,h. Only this resulting [CLS] output is retained for posterior
+parameterization and construction of the segment-level target. Two projection heads predict the
+mean µt,h and diagonal standard deviation σt,h of the Gaussian posterior. Reconstruction uses the
+reparameterized sample
+zt,h = µt,h + σt,h ⊙ϵ,
+ϵ ∼N(0, Idz),
+(16)
+whereas consistency regularization and offline annotation use the posterior mean ¯zt,h = µt,h.
+Cross-Modal Transition Dropout.
+The dropout mask is sampled over the camera and embodiment-
+state streams recorded for each example, with at least one transition stream retained. The same mask
+is applied at both endpoints so that masking does not introduce an artificial change. The transition
+encoder receives the masked endpoint pair, whereas the decoder receives the recorded initial-state
+modalities and reconstructs every recorded endpoint target. Modalities absent from the source data
+are excluded from both the encoder input and the corresponding reconstruction terms. Offline targets
+are extracted from complete recorded transitions without transition dropout.
+Reconstruction and Temporal Sampling.
+The reconstruction objective is
+Lrec = λpixLpix + λpercLLPIPS + λflowLflow + λDINOLDINO
++ λdepthLdepth + λ3DLVGGT + λstateLstate.
+(17)
+The visual terms use pixel and LPIPS reconstruction (Zhang et al., 2018), RAFT optical-flow
+features (Teed & Deng, 2020), DINOv2 semantic features (Oquab et al., 2024), Depth Anything
+V2 (Yang et al., 2024), and VGGT geometric features (Wang et al., 2025). State-bearing examples
+additionally reconstruct the recorded native embodiment state. Each example contributes only the
+terms supported by its targets.
+For temporal overlap consistency, we sample two windows with the same endpoint offset h and shift
+their starting indices by δ, where h > δ > 0. The windows therefore share h −δ interaction steps.
+Consistency is evaluated on posterior means rather than stochastic samples.
+B
+GENERALIST POLICY TRAINING DETAILS
+State and Action Interfaces.
+For WLAM, rt denotes the native embodiment state when it is recorded;
+visual-only trajectories omit this modality and its corresponding reconstruction target. For policy training, each
+robot’s native state vector is zero-padded to 32 dimensions and used as the condition rpol
+t
+, while human-video
+samples use an all-zero condition. The fixed robot-action interface and coordinate mask are defined in Eq. 11.
+At deployment, only valid robot-action coordinates are interpreted in the target embodiment’s native format.
+LAC-WM Flow Matching.
+The flow path, velocity prediction, and LAC-WM pre-training objective are
+given in Eqs. 6–8. At temporal position i, the finite difference is ∆posvτ,i = vτ,i+1 −vτ,i. With observations
+always conditioned on, language and latent-action conditions are independently included or omitted, yielding
+four training modes: observation-only, language-conditioned, latent-action-conditioned, and jointly conditioned
+on both.
+Masked Branch Losses and EMA Normalization.
+For training sample n and branch b ∈{lat, rob},
+the masked Flow-Matching loss is
+Lb =
+P
+n
+Mb
+n ⊙
+
+bVb
+n −V⋆,b
+n
+
+2
+F
+P
+n ∥Mbn∥1 + εmask
+,
+b ∈{lat, rob}.
+(18)
+The mask selects the targets available in each trajectory and, for robot actions, the valid native coordinates.
+Latent-only trajectories contribute to the latent branch, whereas trajectories with both targets, including UMI
+data, contribute to both branches. To balance their scales, we maintain a separate exponential moving average
+for each branch loss:
+mb ←ρmb + (1 −ρ)Lb,
+eLb =
+Lb
+sg(mb) + εema ,
+b ∈{lat, rob},
+(19)
+22
+
+
+where sg stops gradients through the running statistic. These normalized losses enter the generalist policy model
+mid-training objective in Eq. 15. Numerical integration produces latent-action and robot-action predictions; only
+the valid robot-action coordinates are executed during deployment.
+23

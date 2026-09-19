@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-18</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-19</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 25 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>13</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-18 19:12:02 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-19 19:21:51 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日扫完 25 篇机器人智能论文，精读 13 篇、速读 12 篇，具身智能世界模型与双臂灵巧操作成为双高分焦点。最值得看的是 Pelican-Sim 1.0 这类通用世界模型模拟器（9.0）和 Bench2Dex 的视触觉双臂灵巧操作基准（9.0），速读中的失败恢复与数据筛选也值得跟进。普通读者可先挑这两篇精读的摘要和评测部分看，再按兴趣追速读里的失败恢复方向。</p>
+<p>日报速览：19篇论文中精读7篇、速读12篇，触觉世界-动作建模与潜在动作建模成为今日高分焦点。</p>
+<p>最值得看的是TacSushi（10.0分）用触觉落地世界-动作模型做灵巧寿司操作，以及WLA$^3$（9.0分）统一语义、动力学与运动学的世界潜在动作建模。</p>
+<p>普通读者可先读这两篇精读，再按兴趣扫Programmable World Model、HuRo和Expressive Robotic Pianist三篇8分速读。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">13 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Pelican-Sim 1.0: A General World Model Simulator for Embodied Intelligence">Pelican-Sim 1.0: A General World Model Simulator for Embodied Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="Bench2Dex: Benchmarking Visuo-Tactile Bimanual Dexterous Manipulation Across Dexterous Hands">Bench2Dex: Benchmarking Visuo-Tactile Bimanual Dexterous Manipulation Across Dexterous Hands</span></li><li><span class="dpr-home-dashboard-paper-title" title="SAVLA: Symmetry-Aware Vision-Language-Action Models for Robotic Manipulation">SAVLA: Symmetry-Aware Vision-Language-Action Models for Robotic Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TacSushi: Tactile-Grounded World-Action Modeling for Dexterous Sushi Manipulation">TacSushi: Tactile-Grounded World-Action Modeling for Dexterous Sushi Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="WLA$^3$: World Latent Action Modeling for Semantics, Dynamics, and Kinematics">WLA$^3$: World Latent Action Modeling for Semantics, Dynamics, and Kinematics</span></li><li><span class="dpr-home-dashboard-paper-title" title="FluxVLA Engine: A One-Stop VLA Engineering Platform for Embodied Intelligence">FluxVLA Engine: A One-Stop VLA Engineering Platform for Embodied Intelligence</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>10</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,7 +96,7 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LIBERO-RECOVER: Beyond Task Success Towards Failure Recovery in Robotic Manipulation Models">LIBERO-RECOVER: Beyond Task Success Towards Failure Recovery in Robotic Manipulation Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Identifying Habit, Physics, and Nuisance in Robot World Models">Identifying Habit, Physics, and Nuisance in Robot World Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="RoboDrop: Curating VLA Post-Training Data via Local Gradient Compatibility">RoboDrop: Curating VLA Post-Training Data via Local Gradient Compatibility</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Programmable World Model">Programmable World Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="HuRo: Robotizing Human Videos for Scalable VLA Pretraining">HuRo: Robotizing Human Videos for Scalable VLA Pretraining</span></li><li><span class="dpr-home-dashboard-paper-title" title="Expressive Robotic Pianist: Mastering Complex Piano Repertoire with Graph-Mimic and Musical Dynamics">Expressive Robotic Pianist: Mastering Complex Piano Repertoire with Graph-Mimic and Musical Dynamics</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>9</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>3</strong></span></div>
 </section>
