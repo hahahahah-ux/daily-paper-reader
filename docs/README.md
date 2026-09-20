@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-19</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-20</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 19 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-19 19:21:51 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-20 19:12:08 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>日报速览：19篇论文中精读7篇、速读12篇，触觉世界-动作建模与潜在动作建模成为今日高分焦点。</p>
-<p>最值得看的是TacSushi（10.0分）用触觉落地世界-动作模型做灵巧寿司操作，以及WLA$^3$（9.0分）统一语义、动力学与运动学的世界潜在动作建模。</p>
-<p>普通读者可先读这两篇精读，再按兴趣扫Programmable World Model、HuRo和Expressive Robotic Pianist三篇8分速读。</p>
+<p>今日筛出19篇机器人学习论文，精读7篇、速读12篇，触觉建模与双臂泛化成为主线。最值得关注的是满分工作TacSushi将触觉落地于世界-动作模型以完成寿司灵巧操作，以及VLBiMan++把视觉语言锚定的一次性双臂操作泛化边界进一步推开。普通读者可优先从这两篇入手，再顺着速读里的扩散策略优化方向了解机器人学习的最新动向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -83,9 +81,9 @@
     <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TacSushi: Tactile-Grounded World-Action Modeling for Dexterous Sushi Manipulation">TacSushi: Tactile-Grounded World-Action Modeling for Dexterous Sushi Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="WLA$^3$: World Latent Action Modeling for Semantics, Dynamics, and Kinematics">WLA$^3$: World Latent Action Modeling for Semantics, Dynamics, and Kinematics</span></li><li><span class="dpr-home-dashboard-paper-title" title="FluxVLA Engine: A One-Stop VLA Engineering Platform for Embodied Intelligence">FluxVLA Engine: A One-Stop VLA Engineering Platform for Embodied Intelligence</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TacSushi: Tactile-Grounded World-Action Modeling for Dexterous Sushi Manipulation">TacSushi: Tactile-Grounded World-Action Modeling for Dexterous Sushi Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="VLBiMan++: Expanding the Generalization Boundary of Vision-Language Anchored One-Shot Bimanual Manipulation">VLBiMan++: Expanding the Generalization Boundary of Vision-Language Anchored One-Shot Bimanual Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="WholeBodyWAM: Generalizing Pre-trained World-Action Priors to Humanoid Loco-Manipulation via WBC-Grounded Coordination">WholeBodyWAM: Generalizing Pre-trained World-Action Priors to Humanoid Loco-Manipulation via WBC-Grounded Coordination</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,7 +94,7 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Programmable World Model">Programmable World Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="HuRo: Robotizing Human Videos for Scalable VLA Pretraining">HuRo: Robotizing Human Videos for Scalable VLA Pretraining</span></li><li><span class="dpr-home-dashboard-paper-title" title="Expressive Robotic Pianist: Mastering Complex Piano Repertoire with Graph-Mimic and Musical Dynamics">Expressive Robotic Pianist: Mastering Complex Piano Repertoire with Graph-Mimic and Musical Dynamics</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Beyond Noise Steering: Dual-Latent Space Reinforcement Learning for Generative Robot Policy">Beyond Noise Steering: Dual-Latent Space Reinforcement Learning for Generative Robot Policy</span></li><li><span class="dpr-home-dashboard-paper-title" title="SEED-UMI: Sharing the Exoskeleton between human and robot for onE-to-one Dexterous demonstration">SEED-UMI: Sharing the Exoskeleton between human and robot for onE-to-one Dexterous demonstration</span></li><li><span class="dpr-home-dashboard-paper-title" title="DIA: Denoising Intermediate Advantage for Diffusion Policy Optimization">DIA: Denoising Intermediate Advantage for Diffusion Policy Optimization</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>9</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>3</strong></span></div>
 </section>

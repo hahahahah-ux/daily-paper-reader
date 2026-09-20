@@ -1,0 +1,1916 @@
+Visible Touch: Rendering Contact for Visuomotor Policies
+Metin Alp Dogan∗, Edward Sun∗, Feng Xu∗, Daniel Wu, Allen Peng,
+Dennis Hong, Yuchen Cui
+University of California, Los Angeles
+Abstract: Integrating contact information into visuomotor policies remains an
+open problem. Touch is essential to robust manipulation, yet most modern policies,
+including pretrained vision-language-action (VLA) models, operate from vision and
+proprioception alone. Existing approaches to closing this gap require specialized
+tactile hardware, add separate tactile encoders, or commit to non-image policy
+backbones, all incompatible with the modern paradigm of image-conditioned
+policies built on pretrained 2D visual representations. Our key insight is that the
+bottleneck is not the contact information itself, but how it is delivered: when
+contact signals are exposed in the same spatial frame as the scene the policy already
+attends to, they become directly usable by any image-conditioned policy without
+architectural changes. We operationalize this insight in Visible Touch, paired with a
+custom low-cost magnetic contact sensor that is open-sourced and fabricated from
+off-the-shelf parts via a parametric CAD-to-mold pipeline. Across the LIBERO
+benchmark, Visible Touch improves BC-Transformer success by 15.7 percentage
+points on average in the 2-view setting, with similar gains in the 1-view setting;
+controlled comparisons show that the contact-integration strategy strongly affects
+how effectively tactile information is used. The pattern holds when fine-tuning
+pretrained VLAs: miniVLA on LIBERO gains 25 percentage points on average,
+and π0.5 on four real-world contact-rich tasks gains 30 percentage points with our
+custom sensor. Project website: https://visibletouch.github.io/
+Keywords: Imitation Learning; Contact-Rich Manipulation; Tactile Sensing;
+Vision-Language-Action Models; Visual Overlays
+1
+Introduction
+Touch is fundamental to human manipulation. We rely on it to know whether we have grasped an
+object securely, when contact has been made or broken, and how firmly we are gripping. Visuomotor
+robot policies, by contrast, overwhelmingly operate from vision and proprioception alone, even on
+tasks where contact information would be most diagnostic. A growing body of work has explored
+how to integrate contact sensing into learned policies, but no approach has emerged as a clear default;
+modern vision-language-action (VLA) models continue to leave contact out of their input pipelines
+despite increasing attention to contact-rich manipulation.
+This difficulty stems from three challenges. The first is sensing: high-fidelity tactile sensors are
+typically expensive, bulky, or require specialized fabrication, putting them out of reach for many
+setups. The second is signal interpretation: raw tactile readings are difficult to interpret in isolation,
+since a contact measurement means different things depending on the gripper’s pose, the task phase,
+and the object in hand. The third is architectural integration, the bottleneck for modern policies:
+existing approaches either concatenate contact to the proprioceptive state vector [1, 2] or add a
+separate tactile encoder that processes contact as a parallel input stream [3, 4, 5], both modifying the
+policy architecture and often requiring retraining or extending the visual encoder, which makes them
+difficult to scale to pretrained visuomotor policies.
+∗Equal contribution.
+arXiv:2609.14156v1  [cs.RO]  12 Sep 2026
+
+
+Figure 1: Overview of Visible Touch. A low-cost magnetic contact sensor captures per-taxel contact, which we
+render as an image-space overlay on the policy’s RGB observations. The augmented images are drop-in inputs
+for fine-tuning pretrained VLAs, requiring no architectural changes. Contact overlays improve average task
+success by +25.3pp on LIBERO fine-tuning suites and +30.3pp on real-world contact-rich manipulation tasks.
+These challenges are usually addressed independently: cheaper hardware for sensing, learned cali-
+bration or fusion models for signal interpretation, custom architectures for integration. We observe
+a common resolution: an image-conditioned policy already attends to spatial structure in its RGB
+input, so if contact is rendered into that same image, it inherits the policy’s spatial reasoning for free
+— no separate processing pathway, no calibrated forces. This motivates a simpler alternative: render
+contact information directly into the policy’s image input as a spatial overlay.
+We introduce Visible Touch, a method and hardware package for image-space contact-aware policy
+learning (Fig. 1). The overlay is computed from raw sensor readings and camera extrinsics, then
+composited onto the existing RGB observations. Because contact arrives as pixels in the image the
+policy already consumes, the method serves as a drop-in augmentation for any image-conditioned
+policy, including pretrained VLAs. Moreover, normalization and visual scaling absorb absolute
+sensor scale, so the sensor need only respond monotonically to contact rather than report calibrated
+forces — permitting a low-cost open-source magnetic sensor paired with a parametric CAD-to-mold
+pipeline that generates molds from user-specified geometry.
+Conceptually, Visible Touch is the 2D-image counterpart of work that geometrically grounds tactile
+signals as 3D points [6, 7]; while those methods commit to point-cloud backbones, ours targets
+the 2D image-token architectures dominating modern manipulation policies. The same principle of
+rendering auxiliary state into the visual input has been explored for end-effector pose [8], trajectory
+sketches [9], and motion history [10], but never for contact: a signal that is sparse, event-driven, and
+visually hidden at the moments it matters most.
+We evaluate Visible Touch on both simulated and real tasks. Across all four LIBERO suites, image-
+space overlays improve BC-Transformer success rates by 15.7 percentage points in the 2-view setting
+and 12.5 percentage points in the 1-view setting, with the largest gains (+43 pp) on long-horizon
+multi-grasp tasks. The pattern holds when fine-tuning pretrained VLAs: miniVLA on LIBERO gains
+25 percentage points on average, and π0.5 on four real-world contact-rich tasks gains 30 percentage
+points with our custom magnetic contact sensor, showing that the benefit transfers across architectures
+and from simulation to real-world deployment.
+Our main contributions are:
+• Visible Touch: an image-space contact-overlay method that drops into any image-conditioned
+policy with no architectural changes and no force calibration. The same pipeline transfers
+unmodified across three policy families (BC-Transformer, miniVLA, π0.5).
+• A low-cost, open-source magnetic contact sensor and parametric CAD-to-mold pipeline
+that generates 3D-printable molds from user-specified geometry. The sensor costs under $5 in
+elastomer and magnet parts (under $50 assembled) and is validated end-to-end on four real-world
+contact-rich tasks with π0.5.
+2
+
+
+• A characterization of when and how contact overlays help: gains scale with task headroom and
+grasp structure, peaking on multi-grasp long-horizon tasks; image-space delivery outperforms a
+compact state-vector baseline and information-matched separate-stream alternatives; and optimal
+overlay granularity matches the spatial consistency of the underlying contact.
+2
+Related Work
+Contact and tactile sensing for visuomotor policies.
+A broad literature explores how to make
+manipulation policies contact-aware; see Xie and Correll [11] for a recent survey. We focus on how
+contact signals are integrated into the policy. Three strategies dominate. The first concatenates contact
+readings to the proprioceptive state vector (Lee et al. [12]; FACTR [2], which argues this under-
+utilizes the modality). The second adds a separate tactile encoder (ManiFeel [3], CONTACT [4],
+Tactile-VLA [5]), with related variants in ForceVLA [13], FoAR [14], and HapticVLA [15]. The
+third grounds tactile signals geometrically as visuotactile point clouds (Robot Synesthesia [6], 3D-
+ViTac [7], SaTA [16]), at the cost of point-cloud backbones incompatible with the 2D image-token
+architectures of modern VLAs. Orthogonal to all of these, CAP [17] reframes contact as task
+specification rather than sensed feedback. Visible Touch differs from each line by introducing contact
+information into the policy’s existing image input, with no new state dimensions, encoders, or
+architectural changes.
+Visual overlays as a policy interface.
+A recent line renders auxiliary information directly into
+the policy’s image input rather than as a separate modality. RT-Trajectory [9] overlays trajectory
+sketches; TraceVLA [10] overlays past motion traces; AimBot [8] overlays end-effector reticles. A
+parallel line in the VLM literature overlays candidate actions, keypoints, or affordances for vision-
+language reasoning (PIVOT [18], MOKA [19]). Audio-VLA [20] also augments LIBERO with a
+contact-derived signal but routes it through a separate audio stream. These methods all overlay signals
+that are kinematically dense and smooth, or carried in a separate modality. We extend the paradigm
+to a qualitatively different signal: contact events that are sparse, event-driven, and visually hidden at
+the moments they matter.
+Low-cost tactile sensors.
+Vision-based sensors (GelSight [21], DIGIT [22]) provide rich contact
+images but require dedicated optics; piezoelectric arrays capture only normal contact [7]. Magnetic
+sensors offer robustness by decoupling sensing electronics from a replaceable contact interface.
+ReSkin [23] and AnySkin [24] embed magnetic microparticles in elastomers but require specialized
+magnetization equipment that limits accessibility. A separate line embeds pre-magnetized discrete
+magnets in cast elastomers, yielding durability at the cost of manually designed, geometry-specific
+molds [25, 26, 27]. eFlesh [28] restores parametric customizability by 3D-printing the entire sensor
+in TPU but requires stacked layers (24 mm in the reference design) and remains susceptible to lattice
+delamination. Our sensor closes this gap with an automated CAD-to-mold pipeline that yields a 4 mm
+cast body for under $5 in elastomer and magnet components.
+3
+Visible Touch: Sensing and Rendering Contact
+Visible Touch has two coupled components: (i) a rendering pipeline that projects per-element contact
+measurements onto the policy’s RGB observations as a spatial overlay, and (ii) a low-cost magnetic
+tactile sensor that drives the pipeline on real hardware. The rendering pipeline is sensor-agnostic: it
+operates on raw per-element measurements without calibration to physical force units, and accepts
+any tactile sensor providing 3-axis per-element readings (or simulated contact forces).
+3.1
+Overlay Representation
+For an image-conditioned policy, raw tactile readings are hard to leverage without spatial grounding:
+a sensor element index alone does not tell the policy where in the visual field the contact occurs. We
+instead project each element’s measurement onto the camera image using the robot’s live forward
+kinematics and calibrated camera parameters, producing a contact overlay geometrically registered to
+the gripper at every timestep. The same pipeline applies whether the underlying contact source is
+simulated forces or raw sensor readings on real hardware.
+3
+
+
+Sensor model.
+We assume an abstract tactile sensor consisting of N sensing elements per finger,
+with nominal positions {pi}N
+i=1 ⊂R3 in a sensor local frame Fs. Each element reports a 3-axis
+measurement si ∈R3: a decomposed contact force vector in simulation, or a raw magnetic flux
+deflection on real hardware. The two sources are on different absolute scales but are treated identically
+by the rendering pipeline; Visible Touch does not assume calibrated forces. For a parallel-jaw gripper,
+we render overlays separately for each finger f ∈{L, R}; we denote the measurements at finger f
+as {s(f)
+i
+}N
+i=1 and the per-finger aggregate as ¯s(f) =
+1
+N
+PN
+i=1 s(f)
+i
+. The pipeline is agnostic to the
+specific value of N or the spatial layout of {pi}, accommodating any parallel-jaw tactile sensor that
+produces per-element 3-axis readings.
+Projection.
+Each sensing element is rendered as an arrow anchored at its projected position in the
+image (see example in Fig. 1). The arrow tail and tip are obtained by transforming the local-frame
+position pi (scaled by spatial factor σ > 0, with the tip additionally offset by the measurement
+si scaled by λ > 0) through the sensor-to-camera chain using forward kinematics and known
+camera extrinsics, then projecting through a standard pinhole camera model. The wrist-camera
+extrinsic is updated each timestep from the robot’s joint configuration; the external-camera extrinsic
+is calibrated once offline. The resulting screen-space arrow length reflects both measurement intensity
+and perspective foreshortening at the element’s depth, providing a depth-consistent visual cue. The
+scale λ is tuned per sensor source so that typical contact events produce visually visible arrows;
+Visible Touch requires no further force calibration of the sensor signal beyond this single scalar. Full
+derivations are in Appendix A. Arrows and projected position markers (rendered at the projected pi
+even when si = 0) are then alpha-blended onto the base RGB image with per-layer opacity α ∈(0, 1].
+Distinct per-finger colors let the policy recover finger identity from color alone. The augmented
+image preserves the resolution, channel count, and pixel range of the original observation, serving as
+a drop-in replacement for the policy’s RGB input.
+Overlay variants.
+We study three variants spanning a granularity spectrum. Multi-arrows renders
+one arrow per sensing element using s(f)
+i
+as the arrow’s direction and magnitude, preserving spatial
+structure at the cost of visual clutter. Avg. Arrow renders a single per-finger arrow at the projected
+finger center, using the per-finger aggregate ¯s(f) as the arrow’s direction and magnitude. Binbars
+discards both location and direction, rendering a vertical bar of height proportional to ∥¯s(f)∥at a
+fixed image location per finger, isolating whether the policy uses the overlay as a directional cue
+or as a contact-event signal. Examples of each are shown in Fig. 5b. We compare all three in both
+simulated and real robot experiments (Section 4).
+3.2
+Custom Magnetic Tactile Sensor
+The rendering pipeline can be driven by any sensor providing per-element 3-axis readings. For our
+real-world experiments, we build a low-cost magnetic tactile sensor with a specific instance of N=9
+sensing elements arranged in a 3×3 grid per finger (Fig. 2). The sensor captures contact through 3D
+magnetic flux: external forces deform a soft elastomer surface embedded with permanent magnets,
+and the resulting field changes are recorded by an underlying magnetometer array. The sensor
+maintains a slim 4 mm profile. Each sensor pairs a soft silicone elastomer pad (XP-565) embedded
+with a 3×3 array of permanent magnets and a custom PCB housing a matching array of 3-axis
+Figure 2: Hardware system. (a) Visuo-tactile setup: UFactory xArm7 with two RealSense cameras and two
+tactile sensors mounted on the gripper fingers. (b) Custom tactile sensor with anti-slip skin. (c) Internal structure
+of the tactile sensor. (d) Our parametric CAD-to-mold pipeline: CAD-generated alternative casting molds (top)
+and the 3D-printed molds with the fabricated sensor pads (bottom). (e) Physical characteristics of the sensor.
+4
+
+
+magnetometers (Allegro A31031), separated by a 3D-printed PLA spacer that offsets surface-mount
+components (Fig. 2c). An ESP32 microcontroller adapted from [29] polls the array via I2C and
+streams raw flux at 50 Hz. The modular construction decouples sensing electronics from the contact
+interface, allowing the elastomer layer to be replaced when worn.
+A parametric CAD-to-mold pipeline programmatically generates multi-stage 3D-printable casting
+molds from dimension and magnet-layout inputs (Fig. 2d), accommodating sensor geometries beyond
+the specific 3×3 instance used in our experiments. The elastomer is cast in a base mold, semi-
+cured (∼40% of curing time), then transferred to a secondary mold where magnets are seated and
+encapsulated by a top pour. After curing, the elastomer base is bonded to the PLA spacer (Loctite
+SF770 primer, Loctite 406 cyanoacrylate), an anti-slip skin is applied, and the assembly is fastened to
+the PCB and gripper with machine screws.
+The aggregate magnetic flux across the sensor array varies monotonically with applied normal force
+(Fig. 2e; 4 independently fabricated sensors of the same 3×3 layout). Visible Touch uses these raw
+readings directly; the sensor costs under $5 in parts (excluding the PCB) or under $50 assembled,
+and is open-sourced. Details are provided in Appendix B.
+4
+Experiments
+We evaluate Visible Touch on both a controlled simulation benchmark and real-world manipulation
+tasks, across three policy architectures (BC-Transformer from LIBERO [30], miniVLA [31], and
+π0.5 [32]). We aim to isolate the effect of overlay rendering from confounds of architecture, training
+data, or sensor noise, and characterize the conditions under which overlays provide the largest benefit.
+Concretely, we design our experiments to answer three research questions:
+Q1. Does Visible Touch improve visuomotor policy performance, and does the improvement
+transfer across architectures? We evaluate on the LIBERO benchmark with two policies
+trained or fine-tuned in simulation, and on four real-world contact-rich tasks with π0.5.
+Q2. How does image-space contact rendering compare with alternative contact-integration
+strategies? We compare Visible Touch against a compact state-vector baseline in simulation and
+an information-matched separate-image-stream baseline in the real world.
+Q3. When and how do overlays help most? We analyze the per-task structure of overlay gains, and
+ablate overlay granularity in simulation and real-world.
+4.1
+Simulation Experiments on LIBERO
+We evaluate Visible Touch on the LIBERO simulation benchmark with two policies: a from-scratch
+BC-Transformer for controlled input-condition comparisons, and a pretrained miniVLA that we
+both train from scratch (VLM weights) and fine-tune with contact overlays to test transfer to VLAs.
+Setup.
+We use all LIBERO suites [30]. Since LIBERO does not expose native tactile observations,
+we extract per-contact force vectors from the MuJoCo contact array (filtered to gripper-finger ge-
+ometries) as the per-element measurements si for overlay rendering. For the BC-Transformer [30],
+Figure 3: BC-Transformer on LIBERO across camera configurations (n=3 seeds, error bars are std). Orange
+bars show Visible Touch (ours); gray bars show plain baselines; blue bars show the Proprio baseline that receives
+an aggregated 12-D contact wrench through the proprioceptive state. Visible Touch consistently improves over
+plain images in both 1-view and 2-view, with the largest gain on LIBERO_LONG (+33.7pp 2-view). See details
+in Appendix C.
+5
+
+
+Table 1: miniVLA success rates (%) on LIBERO across pretraining and fine-tuning. LIBERO_90 pretraining
+results are from single runs. For fine-tuning, baseline entries are the strongest single-run baselines available per
+suite, while Visible Touch results are mean ± s.e. over 5 training seeds using the suite-specific headline recipe.
+Pretraining
+Fine-tuning
+LIBERO_90
+OBJECT
+GOAL
+SPATIAL
+LONG
+Avg.
+Baseline
+48.3%
+51.0%
+48.5%
+71.5%
+32.5%
+50.9%
+Visible Touch
+63.2%
+70.6 ± 4.6% 80.5 ± 4.3% 87.0 ± 1.8% 66.6 ± 2.2%
+76.2%
+Table 2: Success rates (%) for overlay variants on LIBERO suites (BC-Transformer, 2-view, n=3 seeds).
+Visible Touch variant
+OBJECT
+GOAL
+SPATIAL
+LONG
+Avg.
+Multi-arrows
+94.3 ± 5.6
+91.8 ± 0.5
+90.2 ± 1.0
+76.2 ± 2.7
+88.1
+Avg. Arrow
+98.2 ± 1.2
+92.8 ± 2.5
+92.3 ± 2.7
+86.5 ± 2.3
+92.5
+Binbars
+98.0 ± 0.9
+92.7 ± 1.7
+94.5 ± 1.5
+78.8 ± 2.6
+91.0
+we train in the multitask configuration with 3 seeds, evaluating final-epoch checkpoints with 20
+rollouts per task (see Appendix C). We compare three input conditions: Plain (LIBERO’s default
+RGB with 8-D proprioception); Proprio (Plain plus a 12-D contact wrench concatenated to the
+state); and Visible Touch (Plain plus our image-space overlay; default Avg. Arrow). The Proprio
+baseline provides an aggregated 12-D contact wrench through the state vector, whereas Visible Touch
+renders contact in image space; this comparison evaluates image-space rendering against a com-
+pact state-vector integration rather than holding the representation and information content exactly
+constant. We test both 1-view (agentview) and 2-view (agentview + wrist) configurations. For
+miniVLA [31] (Qwen2.5 0.5B backbone, DINOv2 + SigLIP encoders at 224 px), we pretrain from
+scratch on LIBERO_90 (vs. the publicly released minivla-libero90-prismatic baseline) and
+separately fine-tune the pretrained model on each suite with and without overlays (see Appendix D).
+Q1: Overlays consistently improve performance and transfer across architectures.
+For BC-
+Transformer (Fig. 3), Visible Touch outperforms the plain baseline in every suite and both camera
+configurations. In 2-view, Visible Touch adds +15.7pp on average (+33.7pp on LIBERO_LONG);
+1-view shows the same pattern (+12.5pp average), confirming the benefit does not require a wrist
+camera. The wrist and the overlay are complementary rather than substitutable: adding the wrist
+alone yields modest gains (+4.1pp average, −7.9pp on OBJECT), while wrist-plus-overlay is best
+on every suite. The same pattern transfers to miniVLA (Table 1): Our overlay-pretrained miniVLA
+reaches 63.2% on LIBERO-90 versus 48.3% for the released Stanford checkpoint evaluated in the
+matched single-image, no-chunking configuration (+14.9pp, 90 tasks × 20 trials), and fine-tuning
+yields a +25.3pp average gain (+34.1pp on LIBERO_LONG). See details in Appendix D.
+Q2: Image-space delivery outperforms a compact state-vector baseline and an information-
+matched separate-stream alternative.
+We compare Visible Touch against the Proprio baseline,
+which provides an aggregated 12-D contact wrench concatenated to the proprioceptive state. In
+the 2-view setting, Visible Touch exceeds Proprio by +21.4pp on average, with the largest gap on
+LIBERO_LONG (+43.7pp). Notably, Proprio underperforms the plain 2-view baseline on every
+suite (−5.7pp on average), suggesting that direct concatenation of contact information to the state
+vector is a relatively weak integration strategy in this setup. In contrast, image-space rendering
+yields consistent improvements, demonstrating that Visible Touch is more effective than this compact
+state-vector baseline for BC-Transformer.
+Q3a: Overlay benefit scales with task headroom and grasp structure (across architectures).
+For BC-Transformer, the per-task improvement ∆= Visible Touch −plain across all 40 LIBERO
+tasks (2-view) correlates strongly with task headroom (r = 0.924, p < 10−3): overlays help most
+where vision-only performance is lowest. Bucketing tasks by gripper-close events (Fig. 4a) reveals the
+same pattern through task structure: multi-grasp tasks (n = 7) show ∆= +43.3pp. After controlling
+for headroom via partial correlation, two task properties retain independent predictive power for ∆:
+contact-event count (r = −0.571, p < 10−3) and trajectory length (r = −0.368, p = 0.019). The
+grasp-structure pattern replicates on miniVLA (Fig. 4b): across the 90 LIBERO_90 tasks, 1-grasp
+6
+
+
+(a) BC-Transformer on LIBERO suites (40 tasks).
+(b) miniVLA on LIBERO_90 (90 tasks).
+Figure 4: Success rates of Visible Touch (Avg. Arrow overlay) over plain baselines, bucketed by gripper-close
+events. Tasks with no grasps show no benefit; single-grasp tasks show modest gains; multi-grasp tasks show the
+largest gains. The pattern holds across both BC-Transformer (a) and a pretrained miniVLA on LIBERO_90 (b).
+(a) Real-world tasks (yellow areas highlight initial state randomization).
+(b) Variants of Visible Touch contact overlay.
+Figure 5: Real-world experimental setup. (a) Contact-rich manipulation tasks: Lift, Transfer Tube, Put Mug in
+Dishwasher, and Plug Charger. (b) Example contact overlays rendered onto external and wrist camera views.
+tasks (n = 78) show +17pp, and 2+-grasp tasks (n = 4) show +23.8pp. Grasp structure governs
+overlay benefit consistently across architectures.
+Q3b: Overlay granularity has a non-monotonic optimum.
+Table 2 compares three overlay vari-
+ants spanning a granularity spectrum. The coarser Binbars representation is competitive with the de-
+fault Avg. Arrow, matching it within noise on three suites and falling behind only on LIBERO_LONG
+(−7.7pp). The finer Multi-arrows representation underperforms Avg. Arrow, with the largest deficit
+on LIBERO_LONG (−10.3pp). An intermediate level of detail (per-finger averaging) outperforms
+both coarser bars and finer per-contact-point arrows, suggesting that excess spatial detail can introduce
+visual clutter that displaces the encoder’s attention from task-relevant features. We return to this
+finding in the real-world experiments (Section 4.2), where the optimal granularity reverses.
+4.2
+Real-World Validation with π0.5
+Figure 6: Tac-View: contact
+arrows as a separate image.
+Setup.
+We fine-tune π0.5 [32] (pi05_droid checkpoint, 2.3B) with
+LoRA [33] on two image views (full details in Appendix E). We com-
+pare eight conditions: Baseline (standard fine-tuning); Tac-View, a
+non-overlay tactile baseline that renders the same contact arrows as a
+separate image stream (Fig. 6) into one of π0.5’s camera slots, mirroring
+how vision-based tactile sensors (e.g., GelSight [21]) are typically inte-
+grated into image-conditioned policies; Position-Only, which renders
+the projected markers without contact information; two binary-contact
+ablations, Binary Contact (1x) and Binary Contact (9x), which preserve contact occurrence at one
+aggregate location per finger or independently at each taxel location, respectively; and three Visible
+Touch overlay variants (Binbars, Avg. Arrow, Multi-arrows) that composite onto the existing RGB
+views. We evaluate on four contact-rich manipulation tasks (Fig. 5a): Lift (single-stage: pick up
+a cube), Transfer Tube (two-stage: pick up a test tube, insert into slot), Put Mug in Dishwasher
+(three-stage: pull rack open, pick mug, place in rack), and Plug Charger (two-stage: pick charger,
+insert into outlet). Each task is scored at the sub-task level with 30 trials per condition. For aggregate
+real-world results, we macro-average across tasks: we first average sub-task success within each
+7
+
+
+Pick
+0
+10
+20
+30
+Successes (of 30 trials)
+Lift
+20
+22
+16
+23
+19
+9
+23 24
+Pick
+Insert
+Transfer Tube
+5
+0
+21
+7
+9
+0
+10
+1
+17
+2
+6
+0
+17
+3
+24
+16
+Pull
+Pick
+Place
+Put Mug in Dishwasher
+21
+11
+11
+17
+14
+11
+22
+18
+16
+24
+15
+15
+13
+5
+4
+25
+13
+12
+23
+14
+12
+28
+22
+21
+Pick
+Insert
+Plug Charger
+9
+0
+9
+0
+17
+0
+9
+0
+16
+0
+11
+0
+13
+0
+18
+2
+Baseline
+Position-Only
+Tac-View
+Binbars
+Binary Contact (1x)
+Binary Contact (9x)
+Avg. Arrow
+Multi-arrows
+Figure 7: Real-world evaluation of π0.5 fine-tuning across four contact-rich manipulation tasks (successes out of
+30 trials per condition, sub-task scored). Final-stage success corresponds to complete end-to-end task success.
+Hatched bars denote the binary ablations of the matching solid variant: Binary Contact (1x) and (9x) keep only
+per-finger and per-taxel contact occurrence, respectively. Exact counts are listed in Table 15 (Section F.3).
+task, then average the Multi-arrows–Baseline difference across the four tasks. Under this metric,
+Multi-arrows improves over Baseline by +30.3 pp. Our workspace consists of a UFactory xArm7
+with a parallel-jaw gripper, two Intel RealSense D435 cameras (wrist-mounted and external), and
+our custom 3 × 3 magnetic contact sensors. We collect 100 teleoperated demonstrations per task
+using TeleDex [34], logging all raw sensor streams and applying overlay variants post-hoc so that all
+conditions are trained on the same underlying data (Appendix F).
+Q1: Visible Touch transfers to real-world contact-rich manipulation.
+Visible Touch improves
+over the Baseline on nearly every sub-task, with Multi-arrows strictly outperforming Baseline
+everywhere (Fig. 7). The largest gains appear on multi-stage tasks where contact information is most
+diagnostic: on Transfer Tube, Multi-arrows reaches 24/30 on Pick (vs. 5/30) and 16/30 on Insert (vs.
+0/30); on Put Mug in Dishwasher, the three stages improve by 7, 11, and 10 trials respectively; on
+Plug Charger (the hardest task), Multi-arrows is the only condition that completes any Inserts (2/30)
+and doubles Baseline success on Pick (18/30 vs. 9/30). The simpler Lift task shows a more modest
+gain (24/30 vs. 20/30), consistent with the LIBERO observation that overlays provide the largest
+benefit on contact-rich multi-stage tasks.
+Component ablations further isolate the source of these gains.
+Position-Only improves over the
+plain baseline on several stages, most notably Transfer Tube, indicating that geometrically registered
+visual markers themselves can provide useful end-effector localization. However, binary contact
+representations are substantially weaker than their full-vector counterparts on the more challenging
+real-world tasks: Avg. Arrow generally outperforms Binary Contact (1x), while Multi-arrows
+substantially outperforms Binary Contact (9x). Together, these results suggest that localization
+and contact occurrence explain part of the benefit, but preserving contact direction and magnitude
+becomes important in contact-rich real-world manipulation.
+Encoder-architecture robustness.
+Notably, Visible Touch’s overlay benefit holds across both
+convolutional (BC-Transformer’s ResNet-18 [35]) and attention-based (miniVLA’s DINOv2 + SigLIP
+ViT [36, 37] and π0.5’s SigLIP-So400m) vision encoders. This suggests the overlay’s effectiveness
+is not contingent on specific feature-extraction mechanics, but rather on rendering contact at a
+geometrically meaningful image location that the encoder can attend to regardless of its architectural
+priors. We leave a controlled encoder-family comparison (e.g., the same policy backbone with ResNet
+vs. ViT image encoders) to future work.
+Q2: Image-space overlay outperforms separate-stream tactile rendering.
+Tac-View, which
+provides the same per-taxel contact arrows as Multi-arrows through a separate image stream rather
+than compositing them onto the RGB views, improves over the Baseline on three of four tasks
+(notably +7 on Dishwasher Pick and +8 on Plug Pick), confirming that the contact information itself
+is useful. However, Multi-arrows strictly outperforms Tac-View on every sub-task, with the largest
+gaps on the Transfer Tube stages (Pick 24/30 vs. 9/30, Insert 16/30 vs. 0/30). The coarser Visible
+Touch variants (Binbars and Avg. Arrow), which discard the per-taxel spatial structure that both
+Multi-arrows and Tac-View preserve, win against Tac-View on the simpler Lift and Tube sub-tasks
+but lose to it on the more spatially complex Dishwasher Pick, Dishwasher Place, and Plug Pick
+sub-tasks. This mirrors the BC-Transformer Q2 finding (Section 4.1) under a different alternative
+8
+
+
+representation: when contact information is held constant, rendering it as a spatial overlay on the
+scene the policy already attends to can be more effective than supplying it through a parallel visual
+channel, provided the overlay preserves enough spatial detail to carry the underlying signal.
+Q3b: Optimal granularity reverses in real-world.
+Multi-arrows, which renders all 9 per-taxel
+readings per finger, is strongest in every column. This reverses the simulation finding, where Avg.
+Arrow dominated Multi-arrows. Importantly, the Binary Contact (9x) ablation shows that finer
+spatial granularity alone is insufficient: preserving per-taxel contact occurrence without direction
+or magnitude performs substantially worse than Multi-arrows. Similarly, Avg. Arrow generally
+outperforms Binary Contact (1x), indicating that contact direction and magnitude provide useful
+information beyond binary occurrence. We attribute the reversal to a difference in the spatial
+consistency of the contact signal: in simulation, MuJoCo contacts arise anywhere on the finger
+collision mesh, so per-contact arrows occupy inconsistent image locations across timesteps; on real
+hardware, signals arrive at fixed taxel positions on the gripper’s inner surface, and the per-taxel
+rendering carries spatially stable information that the per-finger average discards.
+5
+Conclusion
+We introduce Visible Touch, a method that renders contact information as image-space overlays on
+the policy’s RGB observations, requiring no architectural changes. Across LIBERO, image-space
+overlays improve BC-Transformer success over plain images and a compact proprioceptive baseline.
+The pattern transfers across architectures: miniVLA gains 25 percentage points on LIBERO fine-
+tuning, and π0.5 gains 30 percentage points across four real-world contact-rich tasks. We hope Visible
+Touch provides a practical path for adding contact awareness to image-conditioned policies, including
+pretrained VLAs.
+Limitations.
+Our proprio baseline tests one specific state-vector integration; alternative implemen-
+tations (e.g., learned tactile encoders, separate input streams) may close some of the gap, though
+we expect the direction of the finding to hold. Our real-world evaluation spans four tasks on a
+single robot with a parallel-jaw gripper; generalization to other morphologies, deformable objects,
+and unstructured settings remains future work. Our magnetic sensor is tested at a single 3 × 3
+geometry, and we have not yet demonstrated cross-geometry portability of trained policies. Finally,
+the conjecture that optimal overlay granularity tracks the spatial structure of the contact signal merits
+further investigation with finer-grained sensors and additional simulators.
+9
+
+
+Acknowledgments
+This work was conducted at the University of California, Los Angeles, with institutional and compu-
+tational support from the UCLA Department of Computer Science. We thank the members of the
+UCLA Robot Intelligence Laboratory and RoMeLa for helpful discussions and support throughout
+the project.
+References
+[1] W. Xie, S. Caldararu, and N. Correll. Just add force for contact-rich robot policies. In arXiv
+preprint arXiv:2410.13124, 2024. URL https://arxiv.org/abs/2410.13124.
+[2] J. J. Liu, Y. Li, K. Shaw, T. Tao, R. Salakhutdinov, and D. Pathak. FACTR: Force-attending
+curriculum training for contact-rich policy learning. In Robotics: Science and Systems (RSS),
+2025. URL https://arxiv.org/abs/2502.17432.
+[3] Q. K. Luu et al. ManiFeel: Benchmarking and understanding visuotactile manipulation policy
+learning. arXiv preprint arXiv:2505.18472, 2025. URL https://arxiv.org/abs/2505.
+18472.
+[4] Y. Saka, J.-C. Hu, A. Desai, Z. Zhang, B. Zhang, Q. K. Luu, M. R. I. Prince, M. Zheng, and
+Y. She. CONTACT: Contact-aware tactile learning for robotic disassembly. arXiv preprint
+arXiv:2603.08560, 2026. URL https://arxiv.org/abs/2603.08560.
+[5] J. Huang, S. Wang, F. Lin, Y. Hu, C. Wen, and Y. Gao. Tactile-VLA: unlocking vision-language-
+action model’s physical knowledge for tactile generalization. arXiv preprint arXiv:2507.09160,
+2025. URL https://arxiv.org/pdf/2507.09160.
+[6] Y. Yuan, H. Che, Y. Qin, B. Huang, Z.-H. Yin, K.-W. Lee, Y. Wu, S.-C. Lim, and X. Wang.
+Robot synesthesia: In-hand manipulation with visuotactile sensing. In 2024 IEEE International
+Conference on Robotics and Automation (ICRA), pages 6558–6565. IEEE, 2024. URL https:
+//arxiv.org/abs/2312.01853.
+[7] B. Huang, Y. Wang, X. Yang, Y. Luo, and Y. Li. 3D-ViTac: Learning fine-grained manipulation
+with visuo-tactile sensing. In Conference on Robot Learning, pages 2557–2578. PMLR, 2025.
+URL https://arxiv.org/abs/2410.24091.
+[8] Y. Dai, J. Lee, Y. Zhang, Z. Ma, J. Yang, A. Zadeh, C. Li, N. Fazeli, and J. Chai. AimBot: A
+simple auxiliary visual cue to enhance spatial awareness of visuomotor policies. In Conference
+on Robot Learning, pages 2409–2429. PMLR, 2025. URL https://arxiv.org/abs/2508.
+08113.
+[9] J. Gu, S. Kirmani, P. Wohlhart, Y. Lu, M. G. Arenas, K. Rao, W. Yu, C. Fu, K. Gopalakrishnan,
+Z. Xu, et al. RT-Trajectory: Robotic task generalization via hindsight trajectory sketches. In
+International Conference on Learning Representations (ICLR), 2024. URL https://arxiv.
+org/abs/2311.01977.
+[10] R. Zheng, Y. Liang, S. Huang, J. Gao, H. Daumé III, A. Kolobov, F. Huang, and J. Yang.
+TraceVLA: Visual trace prompting enhances spatial-temporal awareness for generalist robotic
+policies. In The Thirteenth International Conference on Learning Representations, 2025. URL
+https://arxiv.org/abs/2412.10345.
+[11] W. Xie and N. Correll. Towards forceful robotic foundation models: A literature survey. arXiv
+preprint arXiv:2504.11827, 2025. URL https://arxiv.org/abs/2504.11827.
+[12] M. A. Lee, Y. Zhu, K. Srinivasan, P. Shah, S. Savarese, L. Fei-Fei, A. Garg, and J. Bohg.
+Making sense of vision and touch: Self-supervised learning of multimodal representations for
+contact-rich tasks. In IEEE International Conference on Robotics and Automation (ICRA), 2019.
+Best Paper Award.
+[13] J. Yu, H. Liu, Q. Yu, J. Ren, C. Hao, H. Ding, G. Huang, G. Huang, Y. Song, P. Cai, et al.
+ForceVLA: Enhancing VLA models with a force-aware MoE for contact-rich manipulation.
+Advances in Neural Information Processing Systems, 38:93409–93439, 2025.
+10
+
+
+[14] Z. He, H. Fang, J. Chen, H.-S. Fang, and C. Lu. FoAR: Force-aware reactive policy for
+contact-rich robotic manipulation. IEEE Robotics and Automation Letters, 2025. URL https:
+//arxiv.org/abs/2411.15753.
+[15] K. Gubernatorov, M. Sannikov, I. Mikhalchuk, E. Kuznetsov, M. Artemov, O. F. Ouwatobi,
+M. Fernando, A. Asanov, Z. Guo, and D. Tsetserukou. HapticVLA: Contact-rich manipula-
+tion via vision-language-action model without inference-time tactile sensing. arXiv preprint
+arXiv:2603.15257, 2026. URL https://arxiv.org/abs/2603.15257.
+[16] J. Huang, Y. Ye, Y. Gong, X. Zhu, Y. Gao, and K. Zhang. Spatially anchored tactile awareness
+for robust dexterous manipulation. arXiv preprint arXiv:2510.14647, 2025. URL https:
+//arxiv.org/pdf/2510.14647.
+[17] Z. J. Cui, O. Rayyan, H. Etukuru, B. Tan, Z. Andrianarivo, Z. Teng, Y. Zhou, K. Mehta,
+N. Wojno, K. Y. Wu, M. H. Anjaria, Z. Wu, M. Mao, G. Zhang, B. Shah, Y. Kim, S. Chintala,
+L. Pinto, and N. M. M. Shafiullah. Contact-anchored policies: Contact conditioning creates
+strong robot utility models. arXiv preprint arXiv:2602.09017, 2026. URL https://arxiv.
+org/abs/2602.09017.
+[18] S. Nasiriany, F. Xia, W. Yu, T. Xiao, J. Liang, I. Dasgupta, A. Xie, D. Driess, A. Wahid, Z. Xu,
+Q. Vuong, T. Zhang, T.-W. E. Lee, K.-H. Lee, P. Xu, S. Kirmani, Y. Zhu, A. Zeng, K. Hausman,
+N. Heess, C. Finn, S. Levine, and B. Ichter. PIVOT: Iterative visual prompting elicits actionable
+knowledge for VLMs. In International Conference on Machine Learning (ICML), 2024. URL
+https://arxiv.org/abs/2402.07872.
+[19] F. Liu, K. Fang, P. Abbeel, and S. Levine. MOKA: Open-world robotic manipulation through
+mark-based visual prompting. In Robotics: Science and Systems (RSS), 2024. URL https:
+//arxiv.org/abs/2403.03174.
+[20] X. Wei et al. Audio-VLA: Adding contact audio perception to vision-language-action model for
+robotic manipulation. arXiv preprint arXiv:2511.09958, 2025. URL https://arxiv.org/
+abs/2511.09958.
+[21] W. Yuan, S. Dong, and E. H. Adelson. GelSight: High-resolution robot tactile sensors for
+estimating geometry and force. Sensors, 17(12):2762, 2017. doi:10.3390/s17122762.
+[22] M. Lambeta, P.-W. Chou, S. Tian, B. Yang, B. Maloon, V. R. Most, D. Stroud, R. Santos,
+A. Byagowi, G. Kammerer, D. Jayaraman, and R. Calandra. DIGIT: A novel design for a
+low-cost compact high-resolution tactile sensor with application to in-hand manipulation. IEEE
+Robotics and Automation Letters, 5(3):3838–3845, 2020.
+[23] R. Bhirangi, T. Hellebrekers, C. Majidi, and A. Gupta. ReSkin: Versatile, replaceable, lasting
+tactile skins. In Conference on Robot Learning (CoRL), 2021. URL https://arxiv.org/
+abs/2111.00071.
+[24] R. Bhirangi, V. Pattabiraman, E. Erciyes, Y. Cao, T. Hellebrekers, and L. Pinto. AnySkin:
+Plug-and-play skin sensing for robotic touch. In 2025 IEEE International Conference on
+Robotics and Automation (ICRA), pages 16563–16570. IEEE, 2025. URL https://arxiv.
+org/abs/2409.08276.
+[25] T. P. Tomo, M. Regoli, A. Schmitz, L. Natale, H. Kristanto, S. Somlor, L. Jamone, G. Metta,
+and S. Sugano. A new silicone structure for uskin—a soft, distributed, digital 3-axis skin sensor
+and its integration on the humanoid robot icub. IEEE Robotics and Automation Letters, 3(3):
+2584–2591, 2018. doi:10.1109/LRA.2018.2812915.
+[26] K. Dai, X. Wang, A. M. Rojas, E. Harber, Y. Tian, N. Paiva, J. Gnehm, E. Schindewolf,
+H. Choset, V. A. Webster-Wood, et al. Design of a biomimetic tactile sensor for material
+classification. In 2022 International Conference on Robotics and Automation (ICRA), pages
+10774–10780. IEEE, 2022.
+[27] M. Rehan, M. M. Saleem, M. I. Tiwana, R. I. Shakoor, and R. Cheung. A soft multi-axis high
+force range magnetic tactile sensor for force feedback in robotic surgical systems. Sensors, 22
+(9):3500, 2022.
+11
+
+
+[28] V. Pattabiraman, Z. Huang, D. Panozzo, D. Zorin, L. Pinto, and R. Bhirangi. eFlesh: Highly
+customizable magnetic touch sensing using cut-cell microstructures. In 1st Workshop on Robot
+Hardware-Aware Intelligence, 2025. URL https://arxiv.org/abs/2506.09994.
+[29] Y. Tanaka, A. Zhu, R. Lin, A. Mehta, and D. Hong. Mechanisms and computational design of
+multi-modal end-effector with force sensing using gated networks. In 2025 IEEE International
+Conference on Robotics and Automation (ICRA), pages 16485–16492. IEEE, 2025.
+[30] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone. LIBERO: Benchmarking
+knowledge transfer for lifelong robot learning. In Advances in Neural Information Processing
+Systems (NeurIPS), 2023. URL https://arxiv.org/abs/2306.03310.
+[31] S. Belkhale and D. Sadigh. MiniVLA: A better VLA with a smaller footprint. Stanford
+AI Lab Blog, 2024. URL https://ai.stanford.edu/blog/minivla/. Code: https:
+//github.com/Stanford-ILIAD/openvla-mini.
+[32] Physical Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail,
+M. Equi, C. Finn, N. Fusai, M. Y. Galliker, D. Ghosh, L. Groom, K. Hausman, B. Ichter,
+S. Jakubczak, T. Jones, L. Ke, D. LeBlanc, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair,
+K. Pertsch, A. Z. Ren, L. X. Shi, L. Smith, J. T. Springenberg, K. Stachowicz, J. Tanner,
+Q. Vuong, H. Walke, A. Walling, H. Wang, L. Yu, and U. Zhilinsky. π0.5: A vision-language-
+action model with open-world generalization. In Conference on Robot Learning (CoRL), 2025.
+URL https://arxiv.org/abs/2504.16054.
+[33] E. J. Hu, Y. Shen, P. Wallis, Z. Allen-Zhu, Y. Li, S. Wang, L. Wang, W. Chen, et al. LoRA:
+Low-rank adaptation of large language models. ICLR, 2022. URL https://arxiv.org/abs/
+2106.09685.
+[34] O. Rayyan, M. Gilles, and Y. Cui. TeleDex: Accessible dexterous teleoperation, 2026. URL
+https://arxiv.org/abs/2603.17065.
+[35] K. He, X. Zhang, S. Ren, and J. Sun. Deep residual learning for image recognition. In
+Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR),
+pages 770–778, 2016.
+[36] M. Oquab, T. Darcet, T. Moutakanni, H. Vo, M. Szafraniec, V. Khalidov, P. Fernandez, D. Haziza,
+F. Massa, A. El-Nouby, M. Assran, N. Ballas, W. Galuba, R. Howes, P.-Y. Huang, S.-W. Li,
+I. Misra, M. Rabbat, V. Sharma, G. Synnaeve, H. Xu, H. Jegou, J. Mairal, P. Labatut, A. Joulin,
+and P. Bojanowski. DINOv2: Learning robust visual features without supervision. Transactions
+on Machine Learning Research (TMLR), 2024.
+[37] X. Zhai, B. Mustafa, A. Kolesnikov, and L. Beyer. Sigmoid loss for language image pre-training.
+In Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV), pages
+11975–11986, 2023.
+12
+
+
+Appendix
+Table of Contents
+A Projection Pipeline Derivation
+14
+B
+Tactile Sensor Hardware Details
+15
+B.1
+Bill of Materials . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+15
+B.2
+Fabrication Procedure . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+15
+B.3
+Sensor Characterization . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+16
+C Details of BC Transformer on LIBERO
+18
+C.1
+BC-Transformer Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+18
+C.2
+LIBERO Main Results . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+18
+C.3
+Per Task Analysis on LIBERO
+. . . . . . . . . . . . . . . . . . . . . . . . . .
+19
+C.4
+Task-Level Correlation Analysis . . . . . . . . . . . . . . . . . . . . . . . . . .
+20
+C.5
+Additional Comparisons . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+20
+D miniVLA on LIBERO Details
+22
+D.1
+miniVLA Pretraining on LIBERO_90 (Contact-Overlay) . . . . . . . . . . . . .
+22
+D.2
+miniVLA Fine-Tuning Details . . . . . . . . . . . . . . . . . . . . . . . . . . .
+22
+D.3
+Image Orientation Probe . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+24
+E
+π0.5 Fine-Tuning Details
+24
+E.1
+Base Model and Variants
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+24
+E.2
+LoRA Fine-Tuning
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+24
+E.3
+Observation and Action Spaces . . . . . . . . . . . . . . . . . . . . . . . . . .
+25
+E.4
+Hyperparameters . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+25
+E.5
+Compute and Wall-Clock . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+25
+F
+Real-World Experiment Details
+26
+F.1
+Hardware Setup . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+26
+F.2
+Demonstration Collection . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+26
+F.3
+Evaluation Protocol . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+26
+13
+
+
+A
+Projection Pipeline Derivation
+This appendix provides the full math for the projection pipeline described in Section 3.1.
+Kinematic chain.
+Let q ∈R7 be the current joint configuration. The rigid-body transform from
+robot base frame to sensor frame is
+bTs(q) = FK(q) · fTs,
+(1)
+where FK(q) ∈SE(3) is the fingertip pose from forward kinematics and fTs ∈SE(3) is the fixed
+finger-to-sensor transformation.
+For the external camera, the extrinsic cTb ∈SE(3) is calibrated once offline. For the wrist camera,
+it is updated each timestep:
+cTb(q) = cTwrist · FKwrist(q)−1,
+(2)
+where cTwrist ∈SE(3) is the fixed camera-to-wrist calibration and FKwrist(q) ∈SE(3) is the
+wrist pose from forward kinematics.
+Arrow tail and tip in camera frame.
+Each sensing element is rendered as an arrow with spatial
+scale σ > 0 controlling the apparent sensor footprint and λ > 0 controlling the arrow length per unit
+measurement. The 3D tail and tip of element i’s arrow in camera frame are
+Xtail/tip
+i
+= cTb · bTs(q) ·
+
+σ pi + µ λ si
+1
+
+,
+µ ∈{0, 1},
+(3)
+where µ = 0 yields the tail and µ = 1 yields the tip. Positions and displacements are defined in
+the sensor local frame before any rigid-body transform, so the rendered arrow direction reflects the
+sensor-frame axes as seen from the camera.
+Pinhole projection.
+Applying the standard pinhole projection
+π(X) =
+fxX
+Z
++ cx, fyY
+Z
++ cy
+⊤
+(4)
+to Xtail/tip
+i
+yields the tail and tip pixels utail
+i
+, utip
+i
+∈R2, where (fx, fy, cx, cy) are the camera
+intrinsics. The screen-space arrow length ∥utip
+i
+−utail
+i
+∥reflects both measurement intensity and
+perspective foreshortening at the element’s depth, providing a depth-consistent visual cue at no
+additional cost.
+Per-variant rendering.
+For the Multi-arrows variant, the procedure above is applied independently
+to each of the N sensing elements per finger. For the Avg. Arrow variant, the per-element measure-
+ments {si}N
+i=1 are aggregated to a single per-finger vector before rendering at the projected finger
+center. For the Binbars variant, the per-finger aggregate magnitude ∥sf∥drives a vertical bar at a
+fixed image location. All overlays use high-contrast per-finger colors against the scene background,
+with left finger rendered cyan/blue and right finger rendered magenta/red for finger-identity recovery
+from color alone. In Tac-View, the arrow colors represent the normalized z-readings of the tactile
+sensor, mapped to a scale where green corresponds to 0 and red corresponds to 1.
+14
+
+
+B
+Tactile Sensor Hardware Details
+B.1
+Bill of Materials
+Table 3 lists the per-sensor material cost for the 3×3 configuration used in our experiments. Costs
+are separated into the soft sensor pad (consumable, replaceable) and the PCB electronics (reusable).
+All prices are approximate and reflect small-quantity orders; PCB costs in particular are heavily
+order-quantity dependent.
+Table 3: Bill of materials for one tactile sensor (3×3 configuration). Sensor pad components are consumable
+and can be replaced without replacing the PCB. PCB costs are rough estimates and vary significantly with order
+quantity.
+Component
+Spec
+Qty
+Unit price
+Subtotal
+Sensor pad (consumable)
+XP-565 silicone elastomer
+10:1 base/activator
+10 g
+$0.05/g
+$0.50
+Neodymium magnets
+∅2 mm × 1 mm
+9
+$0.07/ea
+$0.63
+PLA filament (molds + spacer)
+—
+20 g
+$0.013/g
+$0.26
+Loctite SF 770
+—
+1 ml
+$0.50/ml
+$0.50
+Loctite 406
+—
+0.5 ml
+$1.65/ml
+$0.83
+Anti-slip skin
+—
+1 ml
+$0.10/ml
+$0.10
+Machine screws
+M2×6
+4
+$0.20/ea
+$0.80
+Sensor pad subtotal
+$3.62
+PCB electronics (reusable)
+Magnetometer array PCB
+3×3 Allegro A31031
+1
+∼$20
+∼$20
+Microcontroller board
+ESP32-based [29]
+1
+∼$20
+∼$20
+Flexible flat cable
+10 pin 0.5 mm, 15 mm length
+1
+$1/ea
+$1
+Electronics subtotal
+∼$41
+Total (fully assembled)
+<$50
+B.2
+Fabrication Procedure
+Figure 8: Fabrication steps of our custom tactile sensor.
+The complete fabrication procedure is summarized in Figure 8 and detailed below. All steps are
+performed at room temperature. The entire workflow, excluding print time, requires approximately
+48 hours of elapsed time, dominated by elastomer curing.
+Step 1: Mold and spacer preparation (Fig. 8a).
+Three casting molds are generated from our
+parametric CAD-to-mold pipeline (Section 3.2) and 3D-printed in PLA. Mold 1 defines the bottom
+geometry of the elastomer pad and incorporates precisely located protrusions that form blind magnet-
+seating cavities during the first pour. Mold 2 and Mold 3 are two-part halves that together form
+15
+
+
+the secondary mold for the second pour; the split design allows the partially-cured elastomer from
+Mold 1 to be inserted before the halves are assembled. A PLA spacer is separately designed around
+the magnetometer PCB footprint and 3D-printed; it mechanically offsets the cured elastomer pad
+from the surface-mount components.
+Step 2: Elastomer preparation and first pour (Fig. 8b–c).
+XP-565 two-part silicone elastomer is
+mixed at a 10:1 base-to-activator ratio by weight (6 g base, 0.6 g activator). The mixture is stirred
+thoroughly and then degassed in a vacuum chamber (≈0.6 bar below ambient) for 20 minutes to
+eliminate entrained air bubbles. The degassed mixture is poured into Mold 1 and allowed to partially
+cure for 6.5 hours at room temperature, reaching approximately 40% of the full cure state (the rated
+full-cure time for XP-565 is 16 hours). At this stage the elastomer is firm enough to hold shape but
+still sufficiently tacky to bond to a subsequent pour.
+Step 3: Magnet encapsulation and second pour (Fig. 8d–e).
+A fresh batch of XP-565 is prepared
+(4 g base, 0.4 g activator, 10:1 ratio) and degassed identically. The partially-cured elastomer is
+demolded from Mold 1 and transferred to Mold 2. Mold 2 and Mold 3 are two-part halves that
+together form the complete secondary mold cavity. The split design is necessary to allow the partially-
+cured elastomer to be inserted; a single-piece mold of this geometry would not permit loading. With
+the elastomer seated in Mold 2, nine cylindrical neodymium magnets (∅2 mm × 1 mm height) are
+pressed into the blind cavities formed during the first pour, establishing the 3×3 array at their nominal
+positions. The two halves are then assembled around the elastomer and the fresh mixture is poured
+in until it reaches the fill line (indicated by the red arrow in Fig. 8e), permanently encapsulating the
+magnets between the two elastomer layers. The assembly is allowed to cure fully for 16 hours at
+room temperature.
+Step 4: Adhesion treatment and bonding to spacer (Fig. 8f–g).
+Once fully cured, the elastomer
+pad is removed from the molds. Loctite SF 770 adhesion promoter is applied uniformly to the rear
+face of the pad and allowed to flash off for one minute, priming the silicone surface for cyanoacrylate
+bonding. The primed surface is then bonded to the 3D-printed PLA spacer using Loctite 406
+cyanoacrylate adhesive. The bond is allowed to set for 1 minute before handling.
+Step 5: Protective skin application and final assembly (Fig. 8h).
+A black anti-slip protective skin
+is laminated onto the active contact surface of the elastomer pad to improve grip on smooth objects
+and protect the elastomer from abrasive wear. The bonded assembly is left undisturbed for 24 hours
+for complete adhesive curing. The finished sensor pad is then fastened to the robot finger mount and
+the magnetometer PCB using standard M2 machine screws, completing the assembly.
+To support reproducibility and community adoption, we release the full parametric CAD-to-mold
+pipeline and the PCB board layout for the 3×3 magnetometer array. Researchers can use the pipeline
+to regenerate the casting molds for the exact configuration used in our experiments, or modify the
+dimension and magnet-layout parameters to customize the sensor geometry. The released PCB layout
+can be submitted directly to a standard PCB fabrication service for board ordering without requiring
+additional hardware design tooling.
+B.3
+Sensor Characterization
+We characterize four sensors independently fabricated following the procedure in Appendix B.2, each
+with the same 3×3 magnet-and-magnetometer configuration. All four units were fabricated from
+independent 3D prints of the same parametric molds and different elastomer batches by the same
+operator; no post-fabrication tuning or per-sensor calibration was applied.
+Experimental setup.
+Characterization experiments were conducted on a UFactory xArm7 manipu-
+lator equipped with a BOTA BFT-ROKA-SER-M8 six-axis force-torque (FT) sensor mounted on the
+gripper fingers, providing ground-truth normal force measurements (Figure 9a). A flat 14 mm×14 mm
+PLA probe was rigidly attached to the FT sensor and pressed perpendicularly onto the center of each
+tactile sensor at controlled depths. The robot descended in 0.1 mm increments from zero contact to
+a maximum indentation depth of 1.6 mm. At each depth, 20 repeat trials were collected. For each
+trial we simultaneously recorded the raw 3-axis flux readings from all nine magnetometers and the
+ground-truth normal force from the FT sensor.
+16
+
+
+Response metric.
+For each trial we compute the aggregate sensor response as the ℓ2 norm of the
+offset-corrected flux vector r = ∥s∥2 ∈R, where s = [s⊤
+1 , . . . , s⊤
+9 ]⊤∈R27, each si = ˜si −s0
+i ∈R3
+is the baseline-subtracted flux reading from the i-th magnetometer (˜si is the raw reading and s0
+i is the
+per-trial resting offset recorded prior to contact), in µT. This scalar captures the total contact-induced
+deflection summed across all nine magnetometers.
+Results.
+Figure 2e shows the mean response curve of each of the four sensors individually as a
+function of applied normal force, with per-sensor standard deviation shown as a transparent band.
+The standard deviation is sufficiently small that the bands are not visible at the full plot scale; an inset
+provides a zoomed view to make the within-sensor variation legible. Figure 9b shows the per-sensor
+trial-to-trial standard deviation of r across the 20 repeat measurements at each normal force level.
+Two properties are evident. First, all four sensors exhibit a monotonically increasing and smooth
+response across the full indentation range, confirming that raw magnetic flux provides a consistent
+and unambiguous contact signal without force calibration. Second, the trial-to-trial standard deviation
+within each sensor remains low throughout, in the 10–30 µT range, indicating stable repeatability
+regardless of applied force magnitude.
+The four mean response curves are not identical: unit-to-unit differences in absolute response reach
+approximately 20%, reflecting minor geometric variation from the manual fabrication process (e.g.,
+magnet seating depth, elastomer thickness). Importantly, this inter-sensor offset does not affect our
+pipeline: each sensor unit is paired with demonstrations collected by that same unit, so per-channel
+normalization using dataset statistics (described in Appendix F.1) absorbs the constant scale and bias
+difference between units without requiring any dedicated calibration hardware.
+Figure 9: Sensor characterization experiments. (a) Experiment setup: UFactory xArm7 equipped with BOTA
+Force-Torque sensor and our custom tactile sensor, used to collect ground-truth contact normal force data for
+characterizing the tactile sensor’s response. (b) Standard deviation of the 4 independently fabricated sensor
+readings under different contact normal forces.
+17
+
+
+C
+Details of BC Transformer on LIBERO
+C.1
+BC-Transformer Details
+For results described in Section 4.1, we train with the default BC-Transformer policy implementation
+in LIBERO [30]. Hyperparameters are listed in Table 4.
+Table 4: BC-Transformer training configuration for LIBERO multitask experiments.
+Component / Hyperparameter
+Value
+Architecture
+Visual backbone
+ResNet-18 (random init, remove_layer_num=4, no stride change)
+Language fusion
+FiLM conditioning on visual features
+Language encoder
+1-layer MLP (input 768, hidden 128, output 128)
+Transformer layers
+4
+Hidden / embed dimension
+64 (token embed); MLP hidden 256
+Attention heads
+6 (per-head dim 64)
+Action head
+GMM head, 2 MLP layers, hidden 1024, 5 modes, softplus, min_std= 10−4
+Proprio inputs
+gripper_states, joint_states (eye_in_hand + agentview RGB)
+Optimization
+Optimizer
+AdamW (β1=0.9, β2=0.999)
+Learning rate
+1×10−4 (cosine annealing to ηmin=1×10−5)
+Weight decay
+1×10−4
+Dropout
+0.1 (transformer)
+Gradient clipping
+100.0
+Batch size
+32
+Training epochs
+20
+Sequence & action
+Sequence length (context)
+10 frames (transformer_max_seq_len= 10, seq_len= 10)
+Frame stack
+1
+Action chunking
+None (single-step action prediction)
+Action scale
+1.0
+Image resolution
+128×128
+Data augmentation
+batch-wise color jitter + translation aug
+Lifelong configuration
+lifelong.algo
+Multitask (all tasks jointly via learn_all_tasks)
+eval_in_train
+false
+C.2
+LIBERO Main Results
+Table 5 reports BC-Transformer success rates across all four LIBERO suites and two camera configu-
+rations (n=3 seeds), aligned with the bar plots in Fig. 3. We discuss a few observations beyond the
+Q1/Q2 summary in the main paper.
+Table 5: BC-Transformer success rates (%) on LIBERO suites across camera configurations (n=3 seeds).
+1-view (agentview)
+2-view (agentview + wrist)
+Suite
+Plain
+Visible Touch
+Plain
+Proprio
+Visible Touch
+OBJECT
+90.7 ± 4.4
+95.0 ± 0.9
+82.8 ± 7.0
+80.0 ± 2.0
+98.2 ± 1.2
+GOAL
+79.3 ± 3.2
+91.7 ± 0.3
+86.8 ± 4.1
+81.5 ± 4.3
+92.8 ± 2.5
+SPATIAL
+79.0 ± 2.0
+90.5 ± 0.4
+84.8 ± 4.0
+80.0 ± 1.4
+92.3 ± 2.7
+LONG
+41.8 ± 6.1
+63.8 ± 1.2
+52.8 ± 2.1
+42.8 ± 5.1
+86.5 ± 2.3
+Average
+72.7
+85.2
+76.8
+71.1
+92.5
+18
+
+
+The overlay benefit grows with task difficulty.
+On the easier OBJECT, GOAL, and SPATIAL
+suites, the 2-view Visible Touch gain over plain images is between +6pp and +15pp. On the harder
+LIBERO_LONG suite, the gain widens to +33.7pp. The pattern is consistent with our per-task
+analysis (Appendix C.3): overlay benefit correlates strongly with task headroom (r = 0.924), so
+suites where vision-only performance is lowest see the largest improvement.
+Overlays stabilize as well as improve.
+Across the four suites, Visible Touch produces tighter
+cross-seed standard deviations than the plain or Proprio baselines (median SD 2.4% for Visible Touch
+2v vs. 4.1% for plain 2v and 3.2% for Proprio). On the OBJECT 2v plain condition the standard
+deviation reaches 7.0%, driven by a single high-variance task analyzed in Section C.3; Visible Touch
+2v on the same suite has SD 1.2%. Contact overlays appear to both raise mean performance and
+reduce seed-to-seed variability.
+Proprio underperforms plain on every suite.
+The Proprio baseline provides an aggregated 12-D
+contact wrench concatenated to the state vector. It underperforms the plain 2-view baseline on
+every suite (−2.8pp on OBJECT, −5.3pp on GOAL, −4.8pp on SPATIAL, −10.0pp on LONG),
+and underperforms even the 1-view plain baseline (71.1% avg vs. 72.7%). Adding this compact
+state-vector representation of contact consistently hurts BC-Transformer performance in this setup.
+By contrast, image-space rendering yields a +15.7pp average improvement over plain 2-view and a
++21.4pp gap over Proprio. These results show that, for BC-Transformer, image-space rendering is
+substantially more effective than this compact state-vector concatenation. This comparison does not
+establish superiority over learned tactile encoders or other feature-level fusion mechanisms.
+The wrist camera helps Visible Touch universally but hurts plain on OBJECT.
+Adding the
+wrist camera to the plain baseline yields modest average gains (72.7 →76.8, +4.1pp) but regresses
+substantially on OBJECT (90.7 →82.8, −7.9pp; see Section C.3 for the task-level analysis). Visible
+Touch benefits from the wrist camera on every suite without exception (+7.3pp average), including
+OBJECT (+3.2pp). The wrist camera and the overlay are complementary rather than substitutable:
+the overlay rescues the OBJECT 2-view condition from the training-instability regime affecting the
+plain counterpart.
+C.3
+Per Task Analysis on LIBERO
+This appendix characterizes the per-task structure of overlay gains across all 40 LIBERO tasks.
+Rescue Outliers
+On each suite, a small number of tasks show particularly large overlay gains.
+These outliers all involve unusual or precarious object configurations where visual perception alone
+is unreliable and per-finger contact arrows fill in the missing information. Table 6 reports the most
+prominent example from each suite.
+Table 6: Rescue outliers: tasks where Avg. Arrow produces the largest gain over plain 2-view within each suite.
+All four outliers involve grasp configurations that are visually ambiguous (slippery, small, occluded, or perched
+objects), where the contact arrow provides information not available from pixels alone.
+Suite
+Task
+Plain 2v
+Visible Touch 2v
+∆(pp)
+OBJECT
+butter →basket
+48%
+98%
++50
+GOAL
+wine →top of cabinet
+83%
+100%
++17
+SPATIAL
+bowl on ramekin →plate
+62%
+93%
++32
+LONG
+cheese + butter →basket
+8%
+95%
++87
+OBJECT 2-View Training Instability
+Table 5 reports an anomalous 2-view plain result on
+LIBERO_OBJECT (82.8 ± 7.0%), which underperforms the 1-view counterpart (90.7 ± 4.4%) despite
+positive wrist-camera gains on all three other suites. The regression is driven largely by task
+6 (butter →basket), whose success rates across three seeds show substantial seed-to-seed
+variability indicative of training instability; excluding task 6, the 2-view plain average on the remaining
+9 tasks is 87%, consistent with 1-view. We attribute this to under-training at 20 epochs under the
+lifelong=multitask protocol on a visually low-contrast scene, but report the result honestly to
+preserve protocol consistency across cells. The regression does not affect our central claim: Visible
+19
+
+
+Touch on OBJECT (98.2 ± 1.2%) exceeds both plain baselines by margins well outside seed variance,
+and Proprio (80.0%) underperforms even the 1-view plain baseline.
+C.4
+Task-Level Correlation Analysis
+Task properties.
+For each of the 40 LIBERO tasks, we compute the following properties from the
+demonstration data and the contact extraction:
+• Headroom: 1 −plain 2v success rate, capturing how much room the task leaves for improvement.
+• #grasps: median number of gripper-close events per demonstration trajectory (across 50 demos
+per task).
+• Trajectory length: mean trajectory length in environment steps, across 50 demos per task.
+• %contact: mean fraction of trajectory steps with non-zero gripper-finger contact wrench.
+• #contact onsets: mean number of contact-state transitions (zero →non-zero wrench) per trajectory.
+Outcome variable.
+∆= Visible Touch 2v −plain 2v per task, computed as the difference of
+seed-averaged success rates.
+Raw and partial correlations.
+We report Pearson correlations between each task property and
+∆across the 40 tasks. To control for the trivial dependence on headroom (low-performing tasks
+have more room to improve), we additionally report partial Pearson correlations after regressing out
+headroom from both ∆and the predictor. Full results are in Table 7.
+Table 7: Per-task correlations between ∆= Visible Touch 2v −plain 2v and task properties, pooled across all
+40 LIBERO tasks. Raw Pearson correlations are dominated by headroom (overlays help most where vision
+fails). After controlling for headroom via partial correlation, only #contact onsets and trajectory length retain
+independent predictive signal.
+Raw Pearson
+Partial (controlling for headroom)
+Feature
+r
+p
+r
+p
+Headroom
++0.924
+< 10−3
+—
+—
+#grasps
++0.633
+< 10−3
+−0.094
+0.562
+Trajectory length
++0.458
+0.003
+−0.368
+0.019
+%contact
++0.360
+0.022
++0.214
+0.186
+#contact onsets
++0.329
+0.038
+−0.571
+< 10−3
+C.5
+Additional Comparisons
+C.5.1
+Effect of Camera Configuration on Plain Baseline
+Table 5 reports both 1-view and 2-view plain baselines, but the per-suite comparison is easier to see
+in isolation. Table 8 reports the per-suite 1-view →2-view change for the plain (no-overlay) baseline.
+Three of four suites show the expected positive gain from adding a wrist camera (GOAL +7.5pp,
+SPATIAL +5.8pp, LONG +11.0pp), while OBJECT regresses −7.9pp. The OBJECT regression is
+driven by a single high-variance task.
+Table 8: Effect of camera configuration on the plain (no-overlay) BC-Transformer baseline. Mean success
+rate (%) over 3 seeds per cell, 10 tasks per suite. Three of four suites benefit from the wrist camera; OBJECT
+regresses.
+Suite
+1-view Plain
+2-view Plain
+∆(2v −1v)
+OBJECT
+90.7
+82.8
+−7.9
+GOAL
+79.3
+86.8
++7.5
+SPATIAL
+79.0
+84.8
++5.8
+LONG
+41.8
+52.8
++11.0
+Average
+72.7
+76.8
++4.1
+20
+
+
+In contrast, Visible Touch benefits from the wrist camera on every suite, including OBJECT (Table 5):
+the wrist camera and the overlay are complementary rather than substitutable, and the overlay rescues
+the OBJECT 2-view condition from the training-instability regime affecting the plain 2-view baseline
+(98.2% with Visible Touch vs. 82.8% plain 2v).
+C.5.2
+Seed-Level Results
+Table 5 reports mean ± standard deviation over 3 seeds. Tables 9, 10, and 11 report per-seed success
+rates for the three headline 2-view conditions (Plain, Proprio, Visible Touch).
+Table 9: Per-seed success rates (%) for the Plain 2-view BC-Transformer baseline.
+Suite
+Seed 12345
+Seed 23456
+Seed 34567
+Mean
+SD
+OBJECT
+84.5
+73.5
+90.5
+82.8
+7.0
+GOAL
+90.0
+89.5
+81.0
+86.8
+4.1
+SPATIAL
+90.5
+82.0
+82.0
+84.8
+4.0
+LONG
+50.5
+52.5
+55.5
+52.8
+2.1
+Table 10: Per-seed success rates (%) for the Proprio 2-view baseline (Plain RGB + 12-D contact wrench
+concatenated to the proprioceptive state).
+Suite
+Seed 12345
+Seed 23456
+Seed 34567
+Mean
+SD
+OBJECT
+82.5
+77.5
+80.0
+80.0
+2.0
+GOAL
+84.0
+75.5
+85.0
+81.5
+4.3
+SPATIAL
+82.0
+79.0
+79.0
+80.0
+1.4
+LONG
+50.0
+38.5
+40.0
+42.8
+5.1
+Table 11: Per-seed success rates (%) for Visible Touch 2-view (default Avg. Arrow overlay).
+Suite
+Seed 12345
+Seed 23456
+Seed 34567
+Mean
+SD
+OBJECT
+99.0
+99.0
+96.5
+98.2
+1.2
+GOAL
+96.0
+92.5
+90.0
+92.8
+2.5
+SPATIAL
+96.0
+91.5
+89.5
+92.3
+2.7
+LONG
+84.0
+86.0
+89.5
+86.5
+2.3
+Seed-to-seed variability.
+Plain 2v shows the largest per-seed variation, with the OBJECT suite
+spanning a 17.0 pp range across seeds (73.5% to 90.5%) and producing a standard deviation of
+7.0%. Visible Touch 2v has the narrowest cross-seed spreads on every suite (SD between 1.2% and
+2.7%), indicating that the overlay both improves average performance and stabilizes training across
+random seeds. Proprio 2v sits between the two, with relatively higher variance on the LONG suite
+(SD = 5.1%).
+21
+
+
+D
+miniVLA on LIBERO Details
+D.1
+miniVLA Pretraining on LIBERO_90 (Contact-Overlay)
+Backbone.
+prism-qwen25-extra-dinosiglip-224px+0_5b:
+Qwen2.5-0.5B LLM with a
+fused DINOv2 + SigLIP 224×224 vision encoder. The full VLM is unfrozen (no frozen LLM
+or vision backbone, no LoRA). Actions are emitted through the Qwen extra action tokenizer (256
+extra vocab tokens, leaving the language vocab intact).
+Optimization.
+• Train strategy: DDP (train_strategy=ddp, custom registration on top of openvla-mini’s
+FSDP-only default; grad-checkpointing path and submodule unwrap patched locally).
+• Batch: 4 GPUs × per-device batch 8 = global batch 32.
+• Learning
+rate:
+2×10−5,
+linear-warmup + cosine-decay,
+warmup_ratio=0.0,
+weight_decay=0.0, max_grad_norm=1.0.
+• Precision: mixed precision with reduce_in_full_precision=true; gradient checkpointing
+enabled.
+• Data loader: shuffle buffer 256,000; seed 7.
+• Budget: max_steps=200,000 (≈11 epochs on the 90-suite mix); checkpoint every 25,000 steps.
+Comparison with the released Stanford miniVLA.
+We trained Visible Touch-miniVLA on 4×
+NVIDIA L40S GPUs at batch 8 (global batch 32) for 200k steps (≈11 epochs), reaching a final
+training loss of 0.364. The released Stanford baseline [31] was trained on 8× NVIDIA A100 GPUs
+at per-device batch 32 (global batch 256) for 60k steps (≈26 epochs) with a constant learning
+rate, reaching a final loss of 0.129. Despite the lower compute budget and weaker training-loss
+convergence, head-to-head re-evaluation on all 90 LIBERO_90 tasks shows Visible Touch-miniVLA
+at 63.2% success versus the Stanford baseline at 48.3% (+14.9pp; 20 trials per task). Fig. 10 shows
+the per-task comparison.
+Additional comparison.
+We additionally evaluate Visible Touch-miniVLA under the VQ-h8 +
+history=2 architecture used for the headline LIBERO_90 result in the original miniVLA work [31].
+We fine-tune the publicly released miniVLA checkpoint on contact-overlay LIBERO_90 data (batch
+size 8, two NVIDIA L40S GPUs). The resulting model reaches 86.3% mean success on the 90-task
+suite (10 trials per task), while the released checkpoint obtains 72.2% under our identical evaluation
+pipeline, a +14.1pp gain from contact overlays under matched conditions; for reference, the original
+work reports 82% on its own harness. This demonstrates that contact overlays remain effective under
+a different miniVLA architectural configuration.
+D.2
+miniVLA Fine-Tuning Details
+For the main-paper fine-tuning results (Table 1), we report mean Visible Touch performance over
+five training seeds using a suite-specific training recipe, while baseline results are single runs. For
+transparency, this appendix additionally reports per-recipe comparisons to characterize whether the
+observed gains depend on the fine-tuning recipe.
+D.2.1
+Recipes
+We fine-tune History-2 miniVLA [31] on LIBERO_90 with and without contact overlays. We evaluate
+two principal recipes.
+b8 1-epoch.
+A lightweight recipe used for early exploration: batch size 8, single-GPU training, 1
+epoch over the LIBERO_90 demonstrations. This recipe is fast to train and serves as a sanity check
+for whether contact overlays help under a constrained training budget.
+DDP-4 b16 cosine.
+A stronger distributed recipe used for the headline Visible Touch results on
+OBJECT, GOAL, and LONG: distributed data-parallel training across 4 GPUs, per-GPU batch size
+22
+
+
+Figure 10: Per-task success rates on LIBERO_90: Visible Touch-miniVLA (contact-overlay pretraining) vs. the
+re-evaluated Stanford miniVLA [31] baseline.
+16 (effective batch size 64), with a cosine learning-rate schedule and weight decay. This recipe trains
+for substantially longer wall-clock time than b8 1-epoch.
+2-phase (SPATIAL only).
+For SPATIAL, we additionally evaluate a two-phase training procedure
+for both the plain baseline and Visible Touch. This recipe provides the suite-specific SPATIAL results
+reported in Table 1: the plain baseline reaches 71.5%, while Visible Touch reaches 87.0 ± 1.8% over
+five training seeds. For comparison, the recipe-diagnostic table below also reports the single-run
+DDP-4 b16 cosine results for SPATIAL.
+D.2.2
+Evaluation Protocol
+Overlay-conditioned models are evaluated with contact overlays rendered at resolution 256 and
+ROT180 preprocessing on both camera views to align with the LIBERO_90 convention. For the
+suite-specific Visible Touch configurations reported in the main paper, we train five independent seeds;
+baseline and alternative-recipe results are single runs. Other evaluation parameters, including rollouts
+per task and the success criterion, follow the protocol in Section 4.1.
+D.2.3
+Per-Recipe Results
+Table 12 reports per-recipe results across all four LIBERO suites.
+Tactile gains are robust across recipes.
+Contact-overlay fine-tuning improves over non-contact
+fine-tuning for every suite and training recipe evaluated. In the main table, the five-seed Visible Touch
+means improve over the strongest available single-run baselines by +19.6 pp on OBJECT, +32.0
+pp on GOAL, +15.5 pp on SPATIAL, and +34.1 pp on LONG. The alternative single-run recipe
+comparisons show the same trend, with gains ranging from +10.5 pp to +32.5 pp.
+Recipe-matched comparisons support the same trend.
+For OBJECT, the main-table comparison
+is already recipe-matched under DDP-4 b16 cosine, yielding a +19.6 pp gain. For GOAL and LONG,
+the same five-seed Visible Touch means reported in the main table are +43.1 pp and +40.6 pp above
+the corresponding DDP-4 single-run baselines, respectively. The main table instead compares against
+the stronger single-run baselines available for these suites, yielding the more conservative gains of
++32.0 pp and +34.1 pp. On SPATIAL, the 2-phase comparison used in the main table yields a +15.5
+pp gain, while the alternative single-run DDP-4 b16 cosine comparison yields +32.5 pp. Together,
+23
+
+
+Table 12: Per-recipe comparison for History-2 miniVLA on LIBERO suites. Baseline: clean non-contact
+fine-tuning with clean evaluation. Visible Touch: contact-overlay fine-tuning with overlay-augmented evaluation.
+For the suite-specific recipes used in the main results, Visible Touch performance is reported as mean ± standard
+error over 5 training seeds; all other entries are single runs. Baseline results are single runs.
+Suite
+Recipe
+Baseline
+Visible Touch
+∆
+OBJECT
+b8 1-epoch
+47.0%
+57.5%
++10.5 pp
+OBJECT
+DDP-4 b16 cosine
+51.0%
+70.6 ± 4.6%
++19.6 pp
+GOAL
+b8 1-epoch
+48.5%
+74.0%
++25.5 pp
+GOAL
+DDP-4 b16 cosine
+37.4%
+80.5 ± 4.3%
++43.1 pp
+SPATIAL
+2-phase
+71.5%
+87.0 ± 1.8%
++15.5 pp
+SPATIAL
+DDP-4 b16 cosine
+55.0%
+87.5%
++32.5 pp
+LONG
+b8 1-epoch
+32.5%
+58.0%
++25.5 pp
+LONG
+DDP-4 b16 cosine
+26.0%
+66.6 ± 2.2%
++40.6 pp
+these comparisons indicate that the improvement from contact overlays is not specific to a particular
+fine-tuning recipe.
+D.3
+Image Orientation Probe
+For the miniVLA pretraining comparison reported in Section 4.1, our model and the publicly released
+Stanford miniVLA checkpoint were trained on differently oriented images. Our LIBERO_90 dataset
+uses a 180-degree rotation (img[::-1, ::-1]) of the raw simulator output, while the canonical
+Stanford modified_libero_rlds convention uses a vertical flip (np.flipud). To ensure fair
+head-to-head evaluation, the inference harness applies a per-model orientation transform at evaluation
+time: ROT180 for our model, FLIPUD for the Stanford checkpoint.
+We verified the required orientation per model with a small probe on task 2 (5 trials per orientation,
+Stanford checkpoint). Success rates under the four candidate transforms were: none: 0/5; flipud:
+5/5; fliplr: 0/5; rot180: 0/5. This confirms that the Stanford checkpoint requires FLIPUD at
+evaluation time, and is consistent with the training-time orientation in modified_libero_rlds.
+E
+π0.5 Fine-Tuning Details
+E.1
+Base Model and Variants
+We fine-tune π0.5 [32], a flow-matching vision-language-action (VLA) model with approximately
+2.3B parameters. The model couples a SigLIP-So400m vision encoder with a Gemma-2B backbone
+(initialized from PaliGemma) for joint language and manipulation reasoning, together with a 311M-
+parameter Gemma-based action expert that produces action chunks. We initialize from the publicly
+released pi05_droid checkpoint, which was pre-trained on the full DROID corpus with knowledge
+insulation. We selected this variant over the LIBERO-pretrained checkpoint because the DROID
+pretraining yields stronger transfer to our xArm7 real-robot setup: DROID was collected across a
+diverse set of real-world manipulation scenes and embodiments, whereas LIBERO is simulation-
+only, and we observed in preliminary runs that the DROID initialization adapts more readily to our
+overhead-plus-wrist RealSense camera configuration and to the contact-rich dynamics of the real
+arm.
+E.2
+LoRA Fine-Tuning
+We fine-tune with LoRA [33] rather than performing a full-parameter update, for three reasons. First,
+each task in our suite has up to 100 teleoperated episodes (roughly 13–28k frames), and full fine-tuning
+at this data scale overfits before the policy meaningfully adapts; LoRA on a strong DROID-pretrained
+prior preserves the language and visual backbones and only adapts the manipulation-relevant subspace.
+Second, the LoRA configuration fits comfortably on our compute budget, whereas a full π0.5 update
+requires sharded multi-GPU training with FSDP and substantially longer wall-clock per step. Third,
+24
+
+
+LoRA keeps the base model byte-identical across the variants we compare, which removes a confound
+when attributing performance differences to the tactile overlay rather than to drift in the visual or
+language backbone.
+LoRA adapters are applied to both the 2B backbone and the 300M action expert, on both the attention
+and feed-forward projections. We use rank r = 16 with α = 16 on the backbone, and rank r = 32
+with α = 32 on the action expert, reflecting the larger relative update we expect to be needed in the
+action-generation pathway. All base weights are frozen; only the LoRA adapters and the scale/bias
+parameters attached to them are updated. EMA is disabled, as is standard for LoRA training.
+E.3
+Observation and Action Spaces
+Each observation consists of three 224 × 224 RGB camera streams: an agent-view camera, a wrist-
+mounted camera, and a zero-padded slot (with its image mask set to false) that matches the dual-wrist
+convention of the base model since our xArm7 has a single wrist camera. The proprioceptive state
+is an 8-dimensional vector [ ee_pos ∈R3, ee_axis_angle ∈R3, grasp, grasp ], where the grasp
+signal is duplicated to match the two-finger qpos convention inherited from the base model’s training
+data. The action is a 7-dimensional vector [ ∆xyz ∈R3, ∆axis_angle ∈R3, grasp ∈{−1, +1} ],
+expressed as world-frame deltas from the current end-effector pose: xyzt+1 = xyzt + ∆xyz and
+Rt+1 = ∆R · Rt (left-multiplication). The policy predicts an action horizon of 10 steps per forward
+pass, corresponding to 1.0 s of future control at our 10 Hz control rate.
+E.4
+Hyperparameters
+All 32 fine-tuning runs (4 tasks × 8 input variants) share identical hyperparameters; only the input
+variant differs. Table 13 summarizes the configuration.
+Table 13: π0.5 LoRA fine-tuning hyperparameters. All 32 runs share these settings; only the input variant differs.
+Setting
+Value
+Base checkpoint
+pi05_droid
+Fine-tuning method
+LoRA (backbone r=16, action expert r=32)
+LoRA targets
+attention and FFN projections
+Image resolution
+224 × 224 × 3, 3 cameras
+Action horizon
+10 steps (1.0 s at 10 Hz)
+Batch size
+8
+Optimizer
+AdamW
+Gradient clipping
+global norm ≤1.0
+LR schedule
+cosine with linear warmup
+warmup steps
+500
+peak LR
+1 × 10−4
+decay steps
+20,000
+final LR
+1 × 10−5
+EMA
+disabled
+Maximum training steps
+20,000
+Checkpoint interval
+2,000 steps
+Early stopping
+<0.5% relative improvement in the 1000-step
+rolling-window mean loss for two consecutive
+checks, after step 3,000
+For context on the effective number of passes through the data: at batch size 8, one epoch corresponds
+to roughly 1,600–3,500 optimizer steps depending on the task’s episode lengths. Runs that early-
+stopped in the 5,100–7,900 step range saw approximately 2–4 epochs; runs that ran to the full
+20,000-step budget saw approximately 6–12 epochs.
+E.5
+Compute and Wall-Clock
+We trained on a SLURM-managed cluster of H200 GPUs, with each fine-tuning run allocated
+4×H200 GPUs, 8 CPU cores, and 96 GB of system memory, under a 24-hour walltime limit. The
+32 task–variant combinations were trained in parallel across the cluster. Each run early-stopped
+25
+
+
+well within the walltime budget, with most runs terminating between 5,100 and 7,900 steps and the
+longest-running configurations reaching the full 20,000-step cap when their loss curves continued to
+descend past the early-stop checkpoint window.
+F
+Real-World Experiment Details
+F.1
+Hardware Setup
+Our real-world workspace consists of a UFactory xArm7 7-DoF manipulator with a parallel-jaw
+gripper, on which we mount our custom tactile sensors (one per finger; see Appendix B). Visual
+observations come from two Intel RealSense D435 cameras: one wrist-mounted and one third-person
+external view. Cameras and tactile sensors are spatially calibrated for overlay rendering via the
+forward kinematics chain described in Appendix A.
+Raw magnetometer readings are normalized before overlay rendering using a two-step procedure
+applied independently to each magnetometer-axis channel. First, a constant resting-state offset is
+subtracted: the sensor reading recorded at the start of a session with no contact applied is taken
+as the per-channel baseline and subtracted from all subsequent readings, removing the DC bias
+due to the sensor’s static magnetic environment. Second, each baseline-corrected channel is scaled
+by the maximum absolute value observed for that same channel across the demonstration dataset,
+mapping its dynamic range to [−1, 1]. These per-channel scale factors are computed once from the
+demonstration dataset and fixed thereafter. The per-channel baseline offsets are re-recorded at the
+start of each episode or evaluation rollout.
+F.2
+Demonstration Collection
+We collect 100 demonstrations per task using TeleDex [34], a smartphone-based teleoperation
+interface that streams the phone’s 6-DoF pose (estimated on-device via ARKit) to the robot as relative
+end-effector commands. TeleDex requires no external tracking hardware or per-session calibration.
+During teleoperation we log raw streams from all sensors (RGB, proprioception, raw magnetic
+flux, gripper state) and apply our input variants post-hoc from the same collected dataset, enabling
+controlled comparisons across input variants without re-collecting data.
+Episode statistics.
+Each demonstration is recorded at the robot’s 10 Hz control rate. Per-task
+mean episode length and duration are summarized in Table 14. Mean episode duration ranges from
+13.1 s for the single-stage Lift task to 28.1 s for Put Mug in Dishwasher. Across all 397 accepted
+demonstrations, the mean episode length is 210 ± 74 steps (21.0 ± 7.4 s).
+Acceptance criterion.
+We accept a demonstration into the training set if (i) the operator performed
+at least one gripper open→close transition during the episode (eliminating the occasional misfire
+where the operator forgot to grasp); and (ii) at least 5 non-paused control steps remain after we
+trim leading idle frames (defined as frames where the per-step translation < 0.5 mm and per-step
+rotation < 0.5 ◦). The criterion deliberately does not include a task-success label: TeleDex provides
+no in-the-moment success signal, and we found that incorporating an offline review pass biased
+the dataset toward shorter, less recoverable trajectories. With this filter, 397 of the 400 collected
+demonstrations (99.25%) were used for training; the three rejected episodes were all from tube,
+where the operator paused the robot for an extended setup window and never executed motion. The
+remaining ∼0.75% loss has no measurable effect on downstream training-loss convergence (the
+smallest task, cube, retains its full 100 demonstrations).
+F.3
+Evaluation Protocol
+Each condition is evaluated with 30 trials per task. Multi-stage tasks are scored at the sub-task level;
+Fig. 7 in the main text plots these results, and Table 15 reports the exact successes over 30 trials per
+sub-task.
+Reset between trials follows a fixed protocol in which the object is placed at a pose sampled uniformly
+from a pre-marked distribution region.
+Step budget and action scale.
+Table 16 summarizes the per-task rollout parameters.
+26
+
+
+Table 14: Per-task demonstration statistics (post-acceptance, post-idle-trim). n is the number of episodes used in
+training; length is reported as mean ± standard deviation in control steps and seconds. Min/max bracket the full
+distribution.
+Task
+n
+Length (steps)
+Duration (s)
+Min/Max (steps)
+cube
+100
+131 ± 86
+13.1 ± 8.6
+90 / 972
+tube
+97
+190 ± 14
+19.0 ± 1.4
+166 / 238
+charger
+100
+238 ± 28
+23.8 ± 2.7
+182 / 329
+dishwasher
+100
+281 ± 32
+28.1 ± 3.2
+236 / 554
+All
+397
+210 ± 74
+21.0 ± 7.4
+90 / 972
+Table 15: Real-world evaluation of π0.5 fine-tuning across four contact-rich manipulation tasks (30 trials per
+condition, sub-task scored). Final-stage success corresponds to complete end-to-end task success. Binary
+Contact (1x) and (9x) denote aggregate per-finger and per-taxel binary contact, respectively.
+Lift
+Transfer Tube
+Put Mug in Dishwasher
+Plug Charger
+Method
+Pick
+Pick
+Insert
+Pull
+Pick
+Place
+Pick
+Insert
+Baseline
+20/30
+5/30
+0/30
+21/30
+11/30
+11/30
+9/30
+0/30
+Tac-View
+16/30
+9/30
+0/30
+22/30
+18/30
+16/30
+17/30
+0/30
+Position-Only
+22/30
+21/30
+7/30
+17/30
+14/30
+11/30
+9/30
+0/30
+Visible Touch
+Binbars
+23/30
+10/30
+1/30
+24/30
+15/30
+15/30
+9/30
+0/30
+Binary Contact (1x)
+19/30
+17/30
+2/30
+13/30
+5/30
+4/30
+16/30
+0/30
+Avg. Arrow
+23/30
+17/30
+3/30
+23/30
+14/30
+12/30
+13/30
+0/30
+Binary Contact (9x)
+9/30
+6/30
+0/30
+25/30
+13/30
+12/30
+11/30
+0/30
+Multi-arrows
+24/30
+24/30
+16/30
+28/30
+22/30
+21/30
+18/30
+2/30
+Per-stage success criteria.
+For single-stage tasks (Lift), a trial is scored successful if the object
+is lifted above a threshold height. For multi-stage tasks, each sub-stage is scored independently: in
+Transfer Tube, Pick is credited when the tube clears the holder and Insert is credited when it is placed
+at the target location; in Put Mug in Dishwasher, Pull is credited when the rack is pulled out to the
+target region, Pick is credited when the mug is lifted and held stably, and Place is credited when the
+mug is seated in the rack; in Plug Charger, Pick is credited when the charger is held securely and
+Insert is credited when the plug is fully seated in the socket. A trial is terminated early and marked as
+failed if the robot collides with the object or table at any point.
+Retry behavior.
+Within the step budget the policy is free to make multiple grasp attempts if
+earlier attempts miss. For all tasks except Transfer Tube, the policy re-attempts after a missed grasp
+regardless of whether tactile observations are present. The Transfer Tube Pick stage is an exception:
+with tactile observations the policy re-attempts after a miss, but without tactile observations it does
+not, and the trial expires unused. We attribute this to the perceptual difficulty of the transparent tube:
+the tube’s visual appearance provides less reliable grasp-failure signal, so without tactile feedback the
+policy cannot distinguish a missed grasp from other low-contact states and does not enter a recovery
+regime. With tactile feedback, the signal after a missed grasp unambiguously identifies the failure
+and prompts re-attempt. This emergent retry behavior is a qualitative benefit of contact sensing that
+goes beyond raw success-rate gains.
+27
+
+
+Table 16: Rollout budget and action scale per real-world task.
+Task
+Step budget
+Action scale
+Lift
+150
+0.8
+Transfer Tube
+400
+0.4
+Put Mug in Dishwasher
+600
+0.8
+Plug Charger
+600
+0.6
+28
