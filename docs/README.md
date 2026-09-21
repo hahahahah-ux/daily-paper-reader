@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-20</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-21</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 23 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>11</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-20 19:12:08 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-21 19:19:08 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日筛出19篇机器人学习论文，精读7篇、速读12篇，触觉建模与双臂泛化成为主线。最值得关注的是满分工作TacSushi将触觉落地于世界-动作模型以完成寿司灵巧操作，以及VLBiMan++把视觉语言锚定的一次性双臂操作泛化边界进一步推开。普通读者可优先从这两篇入手，再顺着速读里的扩散策略优化方向了解机器人学习的最新动向。</p>
+<p>2026-09-21日报收录23篇，精读11篇、速读12篇，灵巧抓取与VLA工程平台成为当天双高分焦点。最值得看的是两项9.0分工作：ConGraspXL用约束条件控制灵巧抓取动作合成，FluxVLA Engine提供一站式VLA具身智能工程平台；速读中SlipSense触觉滑移检测、Weave全身灵巧移动操作、VLA分层微调诊断也值得关注。普通读者可优先从VLA平台和触觉感知入门，再结合自身场景跟进抓取与全身操作方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">11 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TacSushi: Tactile-Grounded World-Action Modeling for Dexterous Sushi Manipulation">TacSushi: Tactile-Grounded World-Action Modeling for Dexterous Sushi Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="VLBiMan++: Expanding the Generalization Boundary of Vision-Language Anchored One-Shot Bimanual Manipulation">VLBiMan++: Expanding the Generalization Boundary of Vision-Language Anchored One-Shot Bimanual Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="WholeBodyWAM: Generalizing Pre-trained World-Action Priors to Humanoid Loco-Manipulation via WBC-Grounded Coordination">WholeBodyWAM: Generalizing Pre-trained World-Action Priors to Humanoid Loco-Manipulation via WBC-Grounded Coordination</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ConGraspXL: Controllable Constraint-Conditioned Dexterous Grasping Motion Synthesis">ConGraspXL: Controllable Constraint-Conditioned Dexterous Grasping Motion Synthesis</span></li><li><span class="dpr-home-dashboard-paper-title" title="FluxVLA Engine: A One-Stop VLA Engineering Platform for Embodied Intelligence">FluxVLA Engine: A One-Stop VLA Engineering Platform for Embodied Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="WorldContact: A Contact-Centric World Model for Scalable Robot Learning">WorldContact: A Contact-Centric World Model for Scalable Robot Learning</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>9</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Beyond Noise Steering: Dual-Latent Space Reinforcement Learning for Generative Robot Policy">Beyond Noise Steering: Dual-Latent Space Reinforcement Learning for Generative Robot Policy</span></li><li><span class="dpr-home-dashboard-paper-title" title="SEED-UMI: Sharing the Exoskeleton between human and robot for onE-to-one Dexterous demonstration">SEED-UMI: Sharing the Exoskeleton between human and robot for onE-to-one Dexterous demonstration</span></li><li><span class="dpr-home-dashboard-paper-title" title="DIA: Denoising Intermediate Advantage for Diffusion Policy Optimization">DIA: Denoising Intermediate Advantage for Diffusion Policy Optimization</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SlipSense: Multimodal Tactile Learning for Low-Latency and Generalized Slip Detection">SlipSense: Multimodal Tactile Learning for Low-Latency and Generalized Slip Detection</span></li><li><span class="dpr-home-dashboard-paper-title" title="Weave: Learning Whole-Body Dexterous Loco-Manipulation from Human-Object Interactions">Weave: Learning Whole-Body Dexterous Loco-Manipulation from Human-Object Interactions</span></li><li><span class="dpr-home-dashboard-paper-title" title="Not All Layers Need Tuning: Diagnosing and Directing Adaptation in Vision-Language-Action Models">Not All Layers Need Tuning: Diagnosing and Directing Adaptation in Vision-Language-Action Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>9</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>8</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>4</strong></span></div>
 </section>
 </div>
 

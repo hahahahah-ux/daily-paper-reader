@@ -1,0 +1,493 @@
+Title: Not All Layers Need Tuning: Diagnosing and Directing Adaptation in Vision-Language-Action Models
+
+URL Source: https://arxiv.org/pdf/2609.18084v1
+
+Published Time: Thu, 17 Sep 2026 00:32:54 GMT
+
+Number of Pages: 9
+
+Markdown Content:
+# Not All Layers Need Tuning: Diagnosing and Directing Adaptation in Vision-Language-Action Models 
+
+Shahram Najam Syed 1, Arthur Jakobsson 1, Prayuj Sachdev 2, Jeffrey Ichnowski 11Robotics Institute, Carnegie Mellon University, Pittsburgh, USA 
+
+2Department of Electrical and Computer Engineering, Carnegie Mellon University, Pittsburgh, USA 
+
+Abstract — Fine-tuning a Vision-Language-Action (VLA) model for a new deployment environment is expensive, yet most methods apply uniform-capacity adapters to every network region as if every region requires equal adjustment. This paper tests that assumption on five architecturally diverse VLAs (OpenVLA-OFT, π0, SmolVLA, DTP, Octo; 93M–7B param-eters). Measuring per-region adaptation cost as normalized pa-rameter displacement under region-isolated fine-tuning reveals an adaptation spectrum in which appearance shifts concentrate cost in the vision encoder, instruction shifts in the language backbone, and novel-object shifts in the vision encoder together with the action head, consistently across all five architectures in our experiments. To exploit this structure, we introduce a pipeline that observes, diagnoses, allocates, and adapts. From ten unlabeled target observations and without fine-tuning, the diagnostic estimates per-region cost by combining reference-free gradient and Monte Carlo (MC) Dropout signals with a Centered Kernel Alignment (CKA) score against a cached source reference; the allocator converts the estimates into variable-rank Low-Rank Adaptation (LoRA) adapters under a parameter budget and freezes well-calibrated regions; and standard LoRA fine-tuning adapts the policy with the resulting adapters. In our experiments, the diagnostic ranks regions within each deployment at a median Spearman of 0.91, and the allocation matches or exceeds uniform LoRA at every budget we tested on LIBERO and CALVIN. On a physical xArm-7, the pipeline matches full fine-tuning under an instruction-wording shift with 0.04% of its trainable parameters, and on five held-out scenes evaluated without retraining it leads every baseline, with 11–23 successes of 30 rollouts against 8–18 for the strongest parameter-efficient baseline at equal or larger budgets and 2–11 for full fine-tuning. These results suggest that adaptation cost in VLAs is structured enough to measure before fine-tuning begins. 
+
+I. I NTRODUCTION 
+
+Vision-Language-Action (VLA) models [1], [2] degrade under deployment-time distribution shifts in environment appearance, object geometry, or instruction phrasing, and recovering reliable behavior requires adaptation [3]. Every deployment site presents its own shift, so adaptation repeats across sites, and each instance operates in a low-data regime, typically tens of demonstrations collected on the robot. Full fine-tuning is ill-suited to this regime, as it optimizes billions of parameters against a demonstration set more than eight orders of magnitude smaller, and in our experiments it overfits even at its best validation checkpoint and degrades the held-out-scene generalization of the pretrained policy. The dominant strategy applies parameter-efficient fine-tuning (PEFT) methods such as Low-Rank Adaptation (LoRA) [4] 1. Observe        
+
+> Ten unlabeled target observations
+> Target domain (unlabeled)
+> Target env. 1 Target env. 2 Target env. 3
+> Source reference (CORSET), cached offline: per-region features and statistics
+> 2. Diagnose
+> Per-region adaptation cost, no fine-tuning
+> Pre-trained VLA (e.g., OpenVLA-OFT), partitioned into adapter regions
+> SigLIP
+> Vision (V)
+> DINOv2
+> Vision (V)
+> Projector
+> Cross-modal (P)
+> LLaMA
+> Language (L)
+> Action head
+> Parallel L1 (A)
+> Tier-1: reference-based
+> Compare target vs. cached source features
+> Tier-2: reference-free
+> Signals from the target data alone
+> 3. Allocate
+> Variable-rank LoRA adapters
+> 🔥
+> 🔥
+> ❄
+> 🔥
+> ❄Frozen 🔥 Trainable
+> Budget: 0.04% – 2% of model parameters trainable
+> 4. Adapt
+> LoRA fine-tuning with allocated ranks
+> Adapted VLA on the xArm-7
+> Train only the allocated adapters; all other parameters frozen
+
+Fig. 1: Observe, diagnose, allocate, adapt. From a few unlabeled target observations, the pipeline estimates per-region adaptation cost using Tier-1 reference-based signals, Tier-2 reference-free signals, and a Fr´ echet-distance gate to blend them. A budget-aware allocator assigns variable-rank LoRA adapters and freezes well-calibrated regions, and the adapted policy matches full fine-tuning on the xArm-7 at a fraction of the trainable parameters. 
+
+uniformly across all layers at a fixed global rank, which implicitly assumes that every network region requires equal adjustment. A VLA, however, comprises functionally distinct regions, namely a vision encoder, a language backbone, cross-modal projectors, and an action head, and a pertur-bation confined to one input modality need not implicate every region. Biological sensorimotor control exhibits the same structure, as the nervous system is thought to maintain separable internal models and to update only those whose predictions fail [5]. When a shift implicates only a subset of regions, uniform allocation overprovisions the unimplicated regions and underprovisions the implicated ones. Selective adaptation has precedent in vision models [6], [7], [8], and concurrent work allocates non-uniform LoRA capacity during VLA fine-tuning [9] or traces VLA represen-tations after fine-tuning [10]. To the best of our knowledge, this is the first work to measure, before fine-tuning and from a small set of unlabeled target observations, how adaptation demand distributes across the functional regions of a VLA, and to convert that measurement into a capacity allocation. This paper first characterizes that distribution empirically across five architecturally distinct VLAs under five controlled deployment shifts. The resulting adaptation spectrum con-centrates adaptation cost in a shift-specific region, with the dominant region consistent across all five architectures in our experiments. We then introduce a pipeline with four arXiv:2609.18084v1 [cs.RO] 16 Sep 2026 stages, which observes , diagnoses , allocates , and adapts 
+
+(Fig. 1, §IV). We evaluate the pipeline on the LIBERO [11] and CALVIN [12] benchmarks and on a physical UFactory xArm-7 manipulator. The diagnostic ranks regions within each deployment at a median Spearman correlation of 0.91 ,and the allocation matches or exceeds uniform LoRA at every parameter budget we tested on all five architectures. On the xArm-7, the pipeline matches full fine-tuning under an instruction-wording shift with 0.04 % of its trainable parameters, and on five held-out scenes evaluated without retraining it leads every baseline, with 11–23 successes of 30 against 8–18 for the strongest PEFT baseline at equal or larger budgets and 2–11 for full fine-tuning. This paper makes three contributions. 1) An empirical characterization of how adaptation cost distributes across functional regions under five deploy-ment shifts, with the dominant region per shift type consistent across five VLA architectures (93M–7B pa-rameters) and three action-decoding paradigms. 2) An algorithm that estimates per-region adaptation cost from ten unlabeled target observations without fine-tuning and converts the estimates into variable-rank LoRA adapters matching uniform rank-32 success rates at a reduced parameter count in our experiments. 3) Experiments across five architectures, five seeds, and six physical deployment shifts that characterize where the allocation helps and include one negative result in which it does not. II. R ELATED WORK 
+
+VLA adaptation. VLA models pair pretrained vision-language backbones with autoregressive [13], [1], [14], dif-fusion [2], [15], or flow-matching [16], [17] action decoders, and current practice adapts them with one global LoRA rank across all layers [1], [14]. Building on this parame-terization, the pipeline keeps LoRA as the adapter, whose low-rank form suits the low intrinsic dimensionality of fine-tuning [18], and replaces the single global rank with a per-region allocation. A study of LoRA for π0 [3] reports that uniform allocation suffices at rank 32; our results (§V-D) agree at that budget and diverge below it, where the adaptive advantage concentrates. LoRA also forgets less than full fine-tuning [19], a regularization we observe on hardware (§V-F). 
+
+Non-uniform rank allocation. AdaLoRA [8] prunes sin-gular values, ARD-LoRA [20] learns per-head rank sched-ules, and LoRA-SP [9] gates singular value decomposition (SVD) update directions, all during training. In contrast to these methods, which require a full optimization run to find the allocation, the pipeline fixes ranks before training from unlabeled observations, and we compare against AdaLoRA and LoRA-SP at matched budgets (§V-D). Building on surgical fine-tuning [6], which showed in vision models that the shift type determines which layers benefit from tuning, and on SPT [7] and RSRA [21], which assign capacity before training from gradient or representation sensitivity, the pipeline extends pre-hoc, shift-aware selection from single-modality models to multi-module VLAs, replaces the labeled calibration data of the gradient-based instances with unla-beled observations, and evaluates the allocation on physical hardware. 
+
+Representational and uncertainty measures. The diag-nostic scores source-target alignment with Centered Kernel Alignment (CKA) [22], gates its tiers with the Fr´ echet dis-tance [23], and estimates uncertainty with Monte Carlo (MC) Dropout [24]. Its Fisher weighting is stored compactly with Kronecker-factored approximate curvature (KFAC) [25]. The contribution lies in combining these measures and applying them before adaptation. VLA-Trace [10] also applies CKA to VLA representations; in contrast to its post-hoc analysis of fine-tuned models, the diagnostic runs before adaptation and drives a capacity allocation. III. P ROBLEM STATEMENT 
+
+Consider a pretrained VLA, πθ , that maps an observation 
+
+o ∈ O (RGB images and, in some architectures, propriocep-tive state) and a language instruction ℓ ∈ L to an action or action chunk a ∈ A ⊆ Rd. The parameters θ ∈ RP , with P
+
+the total parameter count, partition into R disjoint, exhaustive 
+
+network regions θ = ( θ(1) , . . . , θ (R)) with θ(r) ∈ RPr and PRr=1 Pr = P , each a functional component (e.g., vision encoder, language backbone, cross-modal projector, action head) whose boundaries the architecture fixes. 
+
+a) Inputs and goal: Let Dtgt denote a target deploy-ment distribution that differs from the pretraining source distribution Dsrc in visual appearance, spatial layout, object geometry, language phrasing, or a combination of these. Given N unlabeled target observations Tdiag = {(oj , ℓ j )}Nj=1 ,a demonstration set T = {(oi, ℓ i, a i)}Mi=1 from Dtgt with 
+
+N < M , and a trainable-parameter budget Pbudget , the goal is to adapt πθ into a policy πθ′ that maximizes task success rate on Dtgt while training at most Pbudget parameters. The output is a per-region LoRA rank assignment k : {1, . . . , R } → 
+
+Z≥0, with k(r) = 0 a frozen region, that satisfies 
+
+> R
+
+X
+
+> r=1
+
+k(r) c1(r) ≤ Pbudget , (1) where c1(r) is the parameter cost of one unit of rank in region r (§IV-C), together with the adapters trained under that assignment. 
+
+b) Adaptation cost: To evaluate whether an assign-ment places capacity where it is needed, we define a per-region reference. Let θ(r)⋆ 
+
+> T
+
+denote the parameters that region-isolated fine-tuning produces, i.e., fine-tuning region r on 
+
+T to convergence while holding all other regions fixed. The per-region adaptation cost is the normalized parameter displacement this adaptation induces, 
+
+ρ(r) = θ(r)⋆ 
+
+> T
+
+− θ(r)
+
+> 2
+
+θ(r) 2
+
+∈ R≥0. (2) A small ρ(r) indicates that the pretrained parameters of region r already suffice. Because ρ(r) depends on the fine-tuning protocol, it is an operational proxy for adaptation de-TABLE I: Region partitions with approximate parameter counts. AR, Diff., and FM denote autoregressive, diffusion, and flow-matching decoding.              
+
+> Model (Params) Dec. Regions
+> OpenVLA-OFT (7B) AR (par.) DINOv2, SigLIP, Proj., LLaMA-e, LLaMA-l, Act. Head
+> π0(3.3B) FM SigLIP, Gemma, Act. Expert SmolVLA (450M) FM SigLIP, SmolLM2, Proj., Act. Expert DTP (350M) Diff. DINOv2, CLIP, Q-Former, Diff. Trans. Octo (93M) Diff. Vis. Tok., T5 Enc., Transformer, Diff. Head
+
+mand, and our experiments treat {ρ(r)}Rr=1 as the reference signal for evaluating the diagnostic. 
+
+c) Assumptions: Beyond these inputs, we assume ac-cess to (i) the pretrained weights with forward and backward passes and (ii) a compact reference that the model provider ships with the weights, comprising a small coreset of source observations and their per-region embedding statistics. We assume neither knowledge of the shift type at adaptation time nor deployment-time access to source training data beyond that reference. IV. M ETHOD 
+
+The pipeline runs the four stages of Fig. 1 in order, each consuming the output of the last. The observe stage collects Tdiag at the deployment site. The diagnose stage maps (πθ , Tdiag ) to per-region scores D(r) ∈ (0 , 1] through a comparison tier against a cached source reference and a reference-free tier, blended by a per-region Fr´ echet gate (§IV-B); the scores must agree with ρ(r) in rank order within a deployment and in calibrated magnitude across deployments, since the allocator consumes both. The allocate stage maps the scores to the rank assignment k(r) of Eq. 1, proportional to D(r) up to per-region cost and zero below a freezing threshold (§IV-C). The adapt stage trains LoRA adapters of the assigned ranks on T (§IV-D). Each stage runs once per deployment, and only the adapt stage updates parameters. 
+
+A. Network Region Partitioning 
+
+Adaptation cost is measured, and adapters are attached, per region, so the partition determines both what the di-agnostic can resolve and what the allocator can control. We partition each VLA along its native module boundaries into the functional regions of Table I rather than imposing a fixed schema, for three reasons. Native boundaries coin-cide with changes in representational role, from modality-specific encoding through fusion to action decoding, so a shift confined to one modality maps onto few regions; they carry architecture-defined parameter counts, which fixes 
+
+c1(r) without tuning; and they exist for every architecture, which makes the spectrum comparable across the five models without a learned or hand-designed partition per model. Finer partitions raise diagnostic cost and make the per-region Fisher and gradient statistics noisier, and coarser ones merge regions with different roles, so the module level is the natural granularity. 
+
+B. Stages 1–2: Observe and the Two-Tier Diagnostic 
+
+From the N unlabeled observations Tdiag , the two-tier diagnostic estimates per-region cost with a small number of forward passes and one backward pass through the frozen Tier-1: Reference-based Target vs. cached source features Tier-2: Reference-free From the target data alone                      
+
+> Smaller source–target gap → trust Tier-1 more
+> Fig. 2: The two-tier diagnostic. Tier 1scores representational shift (1−CKA( r)) against the cached source reference, weighted by Fisher sensitivity F(r)normalized to a global mean of one (dashed line); Tier 2 profiles the surrogate gradient norm G(r)and MC Dropout uncertainty
+> ˆU(r)from target observations alone; the gate w(r) = exp( −γ·FD( r))
+> trusts Tier 1 where the source–target gap is small, and the blend yields
+> D(r). V, P, L, and A denote vision encoder, projector, language backbone, and action head.
+
+VLA, routing each region to the strongest available signal for its domain gap. 
+
+a) Cached source reference: To provide a source-domain reference without deployment-time access to source training data, the model provider builds a cache once per architecture at training time and ships it with the weights. We select a K-means coreset [26] of K observations over per-region output embeddings of an Npool -observation can-didate pool and store, per region, the activation mean and covariance, a buffer of B feature vectors for CKA, and an empirical Fisher under the model’s native objective as KFAC factors [25] truncated to their top kF eigencomponents. Coreset selection outperforms random sampling because the comparison signals below are sensitive to coverage of the source manifold (§V-E). With the values of §V-A, the reference occupies 200–250 MB for the 7B model and 30– 50 MB for sub-1B models. 
+
+b) Fr´ echet gate: To decide which tier each region trusts, the gate computes the Fr´ echet distance [23] FD( r)
+
+between the cached source Gaussian and the empirical target distribution at the region’s output layer, normalized by the layer’s feature dimension so that scales are comparable across regions of different width. A soft weight w(r) = exp( −γ · FD( r)) with temperature γ then sets how much each region trusts the comparison tier. Every observation contributes an activation vector at each token position, so the estimates draw on thousands of feature vectors rather than 
+
+N samples, and we apply shrinkage to the target covariance before the matrix square root. 
+
+c) Tier 1 (comparison): When w(r) is high, the diag-nostic scores representational shift with CKA [22] between the cached source activations and the target activations. Because the two sets are unpaired and of different sizes, we evaluate a covariance-alignment analogue of linear CKA, the normalized Frobenius inner product between their cen-tered second-moment matrices. This statistic is well defined without pairing, invariant to isotropic scaling and common rotations, and blind to mean shifts, which are exactly the component the Fr´ echet gate measures, so the two are com-plementary by construction. To fund a shifted representation only when it also affects the output, the tier weights the CKA term by parameter sensitivity, 
+
+Dcmp (r) =  1 − CKA( r) · F (r), (3) where F (r) is the mean diagonal Fisher over the region’s LoRA-eligible parameters, normalized by the global mean. A reliability factor rrel (N ) = min(1 , N/N 0) downweights Tier 1 below a reference count N0, with CKA( r) = 0 at 
+
+N < 2 where the estimator is undefined. The gate keeps Tier 1 active only when the domain gap is small, which is the regime in which the source-derived Fisher remains a valid sensitivity estimate. 
+
+d) Tier 2 (reference-free): When w(r) is low, the diag-nostic profiles the size-normalized gradient norm of a label-free surrogate loss matched to each model’s native objective, 
+
+G(r) = ∇θ(r) Lsurr 2
+
+pdim( θ(r)) , (4) with pseudo-labels detached through stop-gradient. Diffusion and flow-matching objectives retain stochastic targets, so their gradients remain nonzero under pseudo-labeling. For the deterministic L1 head of OpenVLA-OFT, a loss against the model’s own detached prediction would vanish identi-cally, so the surrogate perturbs the detached pseudo-action with Gaussian noise of scale σ in normalized action units, which makes the gradient a Gaussian random projection of the action Jacobian and its per-region norm an estimate of the Jacobian’s scale rather than of any task objective. The LLaMA backbone uses cross-entropy against its own detached token predictions, and upstream regions receive gradients from these losses through backpropagation. For Octo and DTP, which train with dropout, MC Dropout [24] with dropout rate p over T stochastic passes supplies an activation-variance score U (r). Hats denote division by one global maximum per signal, taken over all regions and source-side calibration scenarios (§V-A) and clipped to 1,so scores lie in (0 , 1] and a mild shift can score low in every region. The tier score is 
+
+Dfall (r) = α ˆU (r) + (1 − α) ˆG(r), (5) where α > 0 only for dropout-trained models, since U (r) is undefined otherwise. 
+
+e) Combined score: With the Tier 1 score normalized in the same way to ˆDcmp (r) ∈ (0 , 1] , the diagnostic score blends the tiers, 
+
+D(r) = w(r) rrel (N ) ˆDcmp (r) +  1 − w(r) rrel (N ) Dfall (r).
+
+(6) The blend also degrades gracefully, since N = 1 forces near-total reliance on Tier 2, near-uniform scores recover uniform allocation, and Tier 1 carries the prediction when the surrogate mismatches the training objective. 
+
+C. Stage 3: Adaptive Rank Allocation 
+
+We attach LoRA adapters to the attention matrices of Transformer regions and the linear layers of multi-layer perceptron (MLP) regions [4]. For region r with adapted matrices Ir of input/output dimensions {(din 
+
+i , d out 
+
+i )}, the        
+
+> Appearance Spatial Novel Object Instruction Combined
+> OpenVLA-OFT
+> (7B) 0.0 0.2 0.4 0.6 0.8 1.0
+> diag. CKA 0.0 0.2 0.4 0.6 0.8 1.0
+> diag. CKA 0.0 0.2 0.4 0.6 0.8 1.0
+> diag. CKA 0.0 0.2 0.4 0.6 0.8 1.0
+> diag. CKA 0.0 0.2 0.4 0.6 0.8 1.0
+> diag. CKA
+> π0
+> (3.3B) 0.0 0.2 0.4 0.6 0.8 1.0
+> diag. CKA 0.0 0.2 0.4 0.6 0.8 1.0
+> diag. CKA 0.0 0.2 0.4 0.6 0.8 1.0
+> diag. CKA 0.0 0.2 0.4 0.6 0.8 1.0
+> diag. CKA 0.0 0.2 0.4 0.6 0.8 1.0
+> diag. CKA
+> vision encoders cross-modal bridge language backbone action head 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9
+> CKA similarity
+
+Fig. 3: Source–target representational similarity for OpenVLA-OFT and π0
+
+(rows) under the five deployment shifts of Table II (columns); the remaining three architectures appear in the accompanying video. Each matrix is linear CKA [22] between source- and target-layer activations on paired 
+
+observations (the same LIBERO scenes rendered under both conditions), well defined across layers of different width. Role-colored bands mark the regions of Table I. The trace beneath each matrix is the same-layer Tier 1 statistic (§IV-B), the unpaired covariance-alignment score against the cached source reference that the diagnostic consumes. In each column the same role darkens across both architectures. 
+
+parameter cost per unit rank is c1(r) = P
+
+i∈I r (din 
+
+i + dout 
+
+i ).Under a fixed budget Pbudget , the allocator assigns 
+
+k(r) = 
+
+(0 if D(r) < δ, 
+
+max 
+
+
+
+1,
+
+j D(r)P 
+
+> r′
+
+D(r′) · Pbudget 
+
+c1(r)
+
+k 
+
+otherwise, (7) where δ is a freezing threshold, so the allocator freezes a region only when its score falls below a fraction δ of the calibrated maximum, and the max(1 , ·) clause preserves gra-dient flow through every funded adapter. Because c1(r) spans orders of magnitude across regions, Eq. 7 makes the allocated 
+
+capacity k(r)·c1(r), rather than the raw rank, proportional to the diagnostic score. The simulation experiments fix Pbudget 
+
+externally for matched-budget comparison. In deployment, the allocator instead assigns each region above δ a rank 
+
+k(r) = max(1 , ⌊β · D(r)⌋) through a global rank-per-score gain β. Because D(r) ≤ 1, the gain caps the per-region rank at β, so with β = 32 the allocator reaches parity with uniform rank-32 LoRA when every region requires adaptation, and the total budget emerges as the sum of per-region costs and tracks shift severity. When the rank floors of Eq. 7 exceed a fixed budget, the allocator freezes funded regions in ascending score order until the floors fit and assigns any capacity left over after rounding to the highest-scoring region, so it meets reported budgets within the stated tolerance. 
+
+D. Stage 4: Fine-Tuning 
+
+Fine-tuning runs standard LoRA training on the demon-stration set T with the variable rank per region as the sole modification. Frozen regions carry no adapter and incur no additional memory or computation. V. E XPERIMENTS 
+
+We ask whether adaptation cost varies systematically across regions and shifts (§V-B), whether the diagnostic predicts it (§V-C), whether the allocation converts prediction into task success (§V-D–§V-E), and how it fares on hardware (§V-F). TABLE II: The five controlled shifts, each modifying one axis of the observation distribution while preserving task semantics. 
+
+Shift Construction 
+
+Appearance Warm tint, vignette, contrast, desaturation, and Gaussian noise on rendered RGB Spatial Distractor clutter and partial occlusion of the workspace at scene reset Novel Object Mesh and geometry substitution with new material, color, and re-flectance Instruction LLM rephrasing under semantic equivalence, 10% manually verified Combined All four perturbations applied jointly 
+
+A. Setup a) Architectures and benchmarks: We evaluate the five VLA architectures of Table I, which span three action-decoding paradigms and two orders of magnitude in pa-rameter count. LIBERO [11] is the primary benchmark ( 40 
+
+manipulation tasks across four suites), and CALVIN [12] the secondary, which tests transfer to a different task distribution. Within each benchmark we construct five controlled deploy-ment shifts that each modify a single axis of the observation distribution (Table II). 
+
+b) Baselines: We compare against eleven baselines in three families and refer to the allocation the pipeline produces as Adaptive . No Adaptation (the frozen pretrained policy) is the floor. Full Fine-Tuning , Uniform LoRA at rank 32 , and Oracle Allocation (the allocator driven by the measured ρ(r) instead of the diagnostic) are nominal upper bounds. Uniform LoRA matched , DoRA matched [27], 
+
+(IA )3 [28], AdaLoRA [8], LoRA-SP [9], Surgical (the full matched budget on the spectrum’s dominant region, an oracle-informed variant of surgical fine-tuning [6]), and Ran-dom Allocation compete at a matched trainable-parameter budget. 
+
+c) Protocol and statistics: We collect M = 20 demon-strations per task in the target environment and give the diagnostic N = 10 unlabeled observations. All methods train for 50 epochs with BFloat16 precision, cosine learning-rate decay, gradient clipping, and AdamW, with 8-bit optimizer states and gradient checkpointing for Full Fine-Tuning of the two largest models. We evaluate every method at its best validation checkpoint, which we select by action-prediction loss on held-out demonstrations, so we score no method in its overfitting tail. We run 5 seeds per condition and 50 
+
+rollouts per task and report mean ± standard error of the mean (SEM). We compare methods with paired t-tests, paired by task, with Bonferroni correction across architectures, and we report all conditions, including those where the pipeline ties with or trails a baseline. We set the cache constants to 
+
+K = 300 , Npool = 5 ,000 , B = 200 –500 (by architecture), and kF = 100 , the diagnostic constants to N0 = 10 ,
+
+σ = 0 .05 , p = 0 .1, T = 20 , and α = 0 .5 for dropout-trained models, and we calibrate the gate temperature γ = 1 ,the freezing threshold δ = 0 .1, and the rank-per-score gain 
+
+β = 32 once on source-side scenarios from the LIBERO training split; we hold every value fixed across all architec-tures, shifts, benchmarks, and physical experiments, so no target-domain information enters hyperparameter selection. We tune learning rates per method family (full fine-tuning, the LoRA family, and (IA )3) on the same scenarios, since Appearance Spatial Novel Obj. Instruction Combined                                                                                 
+
+> Shift
+> DINOv2 SigLIP Proj LLaMA-e LLaMA-l Act.Hd
+> (7B)
+> OpenVLA-OFT
+> 8.4 11.2 4.3 2.1 1.9 3.2 3.6 4.1 5.4 4.7 6.2 9.8
+> 5.2 8.9 6.4 4.0 7.3 8.1 1.7 2.4 3.8 8.2 9.4 1.6 6.7 7.6 5.5 5.9 6.8 7.1
+> SigLIP Gemma Act.Exp.
+> (3.3B)
+> π0
+> 10.4 2.3 3.8 4.2 4.6 9.2 8.7 4.5 7.4 2.1 8.9 2.4
+> 7.3 5.8 6.8
+> SigLIP SmolLM2 Proj Act.Exp.
+> (450M)
+> SmolVLA
+> 9.8 2.1 4.2 3.4 4.0 3.8 5.1 9.2 8.4 3.5 5.8 7.1 1.9 8.4 4.6 1.8
+> 7.0 5.4 5.2 6.5
+> DINOv2 CLIP Q-Form D.Trans
+> (350M)
+> DTP
+> 9.5 0.8 3.4 2.7 3.2 1.1 4.8 8.9 7.6 1.3 5.9 6.8 1.5 7.2 4.1 2.0 6.4 3.5 5.4 6.9
+> Vis.Tok T5 Transf D.Head
+> (93M)
+> Octo
+> 9.2 0.6 3.4 2.8 4.1 0.8 5.2 8.7 7.8 1.1 5.4 6.3 1.4 6.8 4.7 1.8 5.6 2.1 5.9 5.7
+> 0246810
+> ρ(r) × 10 −2
+
+Fig. 4: The adaptation spectrum on LIBERO, showing per-region cost 
+
+ρ(r)×10 −2 (mean over 5 seeds) with shifts as rows and each architecture’s regions as columns. Region labels are role-colored to match Fig. 3, and the outlined tile marks the dominant region. CALVIN identifies the same dominant region in all 25 cells. 
+
+a shared learning rate would disadvantage full fine-tuning relative to LoRA. 
+
+B. The Adaptation Spectrum 
+
+This experiment measures ρ(r) of Eq. 2 by exhaus-tive region-isolated fine-tuning (§III) for every (architecture, shift, seed) condition on both benchmarks, and provides the reference signal for evaluating the diagnostic. Region-isolated fine-tuning can inflate ρ(r) for high-capacity re-gions that compensate for errors arising elsewhere, and displacement depends on the optimization protocol as well as on necessity. Two checks support ρ(r) as an allocation target despite this caveat. Oracle Allocation (§V-D), which converts ρ(r) directly into ranks, approaches the full fine-tuning bound, and per-region success recovery on the same runs correlates with ρ(r) at a median per-cell Spearman of 
+
+ρS = 0 .87 .Fig. 4 shows the spectrum on LIBERO. First, ρ(r) varies by roughly an order of magnitude across regions within a sin-gle (architecture, shift) cell, so uniform allocation necessarily overprovisions some regions and underprovisions others. Second, the dominant region for each shift type is consistent across all five architectures, with appearance shifts loading the vision encoders, instruction shifts the language backbone, and novel-object shifts the vision encoder together with the action head. The novel-object shift substitutes geometry as well as material and color (Table II), so recovery requires re-binding perception to new grasp geometry, and the physical shift shows the same signature (§V-F). Third, CALVIN identifies the same dominant region as LIBERO in all 25 
+
+(architecture, shift) cells, with a mean per-cell Spearman of 
+
+ρS = 0 .93 between the two cost profiles, which suggests the spectrum reflects the architecture–shift interaction rather than a benchmark artifact. The spectrum is a descriptive finding for the architectures and benchmarks studied here, and we do not claim it extends beyond them. 
+
+C. Diagnostic Accuracy 
+
+This experiment evaluates whether the diagnostic pre-dicts ρ(r) from N = 10 unlabeled observations without fine-tuning. We report two complementary statistics. The pooled R2 of predicted scores {D(r)} against measured costs {ρ(r)} across all 210 conditions summarizes the fit in Fig. 5, but it inherits between-region variance, since vision encoders score high and language backbones low TABLE III: Diagnostic accuracy across the five architectures with N =10 unlabeled target observations and no fine-tuning. R2 is the pooled fit of predicted scores against measured costs over all conditions, and ρS is the median per-cell Spearman correlation. Brackets give the range of each statistic across the five architectures, computed per architecture. Bold marks the best result per column. 
+
+Diagnostic Variant Spearman ρS R2
+
+Na¨ ıve baselines 
+
+Random scores 0.02 [0.01, 0.03] 0.01 [0.00, 0.01] Frobenius norm 0.33 [0.29, 0.37] 0.18 [0.15, 0.21] Cosine dist. of means 0.40 [0.36, 0.44] 0.22 [0.19, 0.25] 
+
+Tier ablations 
+
+Tier 1 (CKA + Fisher) 0.77 [0.71, 0.83] 0.59 [0.51, 0.66] Tier 2 (Grad. + MC Drop.) 0.82 [0.77, 0.88] 0.68 [0.61, 0.74] Uniform blend (no gate) 0.87 [0.82, 0.92] 0.78 [0.70, 0.85] 
+
+Two-tier (proposed) 0.91 [0.86, 0.96] 0.89 [0.80, 0.93] 0 0.2 0.4 0.6 0.8 1                                 
+
+> D(r)
+> 0246810 12 14
+> ρ(r) × 10 −2
+> Appearance ( R2= 0.94) 00.2 0.4 0.6 0.8 1
+> D(r)
+> Spatial ( R2= 0.88) 00.2 0.4 0.6 0.8 1
+> D(r)
+> Novel Object ( R2= 0.83) 00.2 0.4 0.6 0.8 1
+> D(r)
+> Instruction ( R2= 0.89) 00.2 0.4 0.6 0.8 1
+> D(r)
+> Combined ( R2= 0.73) vision encoder cross-modal bridge language backbone multimodal backbone action head LIBERO CALVIN xArm-7 fit
+
+Fig. 5: Predicted score D(r) against measured cost ρ(r) by shift type. Each point is one region of one architecture, benchmark, and seed, colored by region role, and squares overlay the physical xArm-7 measurements with OpenVLA-OFT. The combined panel spans a narrower cost range, which lowers its per-panel R2 but not the pooled R2 = 0 .89 (Table III). 
+
+across most deployments, and therefore overstates within-deployment discrimination. The median per-cell Spearman 
+
+ρS over each (architecture, shift, benchmark, seed) cell’s regions measures the within-deployment ordering the al-locator consumes, though a correlation over 3–6 regions is individually coarse. We read the two jointly. The CKA matrices of Fig. 3 show the raw Tier 1 signal, with each shift darkening the blocks whose regions require adaptation. Table III and Fig. 5 support three conclusions. First, na¨ ıve distributional measures (Frobenius norm, cosine distance) fall far short of either tier. Second, neither tier alone matches the gated blend, and the ordering holds within every archi-tecture (bracketed ranges in Table III). Third, the uniform 
+
+0.5 blend trails the gated blend on every architecture. 
+
+D. Adaptive Allocation Performance 
+
+This experiment asks whether the allocation converts pre-diction accuracy into task success at reduced parameter cost. Table IV reports success rates on the LIBERO combined-shift environment for all five architectures, and Fig. 6 traces the parameter–success frontier under each of the five shift types. Four observations follow. First, at the matched bud-get, Adaptive outperforms every matched-budget baseline on every architecture in our experiments, with significance against both Uniform LoRA matched and AdaLoRA in all 
+
+TABLE IV: Task success rate ( %) on the LIBERO combined shift, mean 
+
+± SEM over 5 seeds and 50 rollouts per task across 40 tasks. Column headers give each architecture’s matched budget, about half of Uniform LoRA at rank 32 . Matched-budget methods meet it within ±5% , (IA )3
+
+runs at its native 0.05 M– 0.5M, and Full Fine-Tuning updates all parameters. Bold marks the best matched-budget result per column. † and ‡ mark results significantly better than Uniform LoRA matched and AdaLoRA at p < 0.05 
+
+(paired t-tests across tasks, Bonferroni-corrected).                                                                         
+
+> Method OpenVLA-OFT (16M) π0(12M) SmolVLA (3.4M) DTP (2.6M) Octo (1.4M) No Adaptation 23.4 ±3.6 25.2 ±3.4 19.8 ±2.8 21.4 ±1.9 18.6 ±4.9 Full Fine-Tuning 74.6 ±1.2 76.8 ±1.3 67.2 ±1.1 62.7 ±1.2 58.4 ±1.0 Uniform LoRA r=32 71.2 ±2.3 73.4 ±2.4 64.1 ±2.1 60.3 ±2.7 56.1 ±1.5 Oracle Allocation 73.8 ±1.4 75.1 ±0.8 65.7 ±1.0 61.4 ±0.9 57.8 ±0.9 Uniform LoRA matched 62.4 ±4.3 64.8 ±5.6 51.4 ±6.1 49.8 ±3.7 47.2 ±4.7 DoRA matched [27] 64.7 ±2.1 67.4 ±3.7 53.8 ±4.0 52.1 ±5.4 49.5 ±5.7
+> (IA )3[28] 51.2 ±8.1 53.4 ±6.0 42.6 ±6.4 41.5 ±5.0 38.4 ±10.8 Random Allocation 42.8 ±7.7 44.2 ±5.9 35.8 ±8.1 33.2 ±11.5 31.6 ±10.1 Surgical (dominant region) 56.1 ±3.6 58.4 ±4.2 45.2 ±3.1 43.8 ±4.8 41.5 ±3.9 AdaLoRA [8] 67.3 ±3.8 69.5 ±3.5 57.9 ±2.7 55.7 ±1.6 52.7 ±2.9 LoRA-SP [9] 67.2 ±2.4 71.8 ±1.8 59.9 ±4.9 59.4 ±1.9 46.3 ±2.1
+> Adaptive 73.4 ±1.3 †‡ 76.3 ±1.2 †‡ 64.6 ±1.1 †‡ 61.5 ±1.1 †‡ 57.9 ±1.5 †‡
+
+TABLE V: Task success rate ( %) on CALVIN environment D, mean ±
+
+SEM over 5 seeds and 50 rollouts per task. Budgets, bold, and †/‡ follow Table IV.                                                                         
+
+> Method OpenVLA-OFT (16M) π0(12M) SmolVLA (3.4M) DTP (2.6M) Octo (1.4M) No Adaptation 19.7 ±3.8 22.4 ±2.9 15.8 ±3.3 18.9 ±4.4 14.6 ±3.6 Full Fine-Tuning 71.2 ±1.4 73.5 ±1.1 64.0 ±1.6 59.6 ±1.3 55.7 ±1.2 Uniform LoRA r=32 67.8 ±2.5 69.8 ±1.9 61.3 ±2.8 57.2 ±2.2 53.2 ±1.7 Oracle Allocation 70.4 ±1.2 71.6 ±0.9 62.5 ±1.3 58.5 ±1.0 54.6 ±1.1 Uniform LoRA matched 59.6 ±4.4 60.7 ±5.8 49.3 ±6.3 45.2 ±3.9 43.6 ±5.1 DoRA matched [27] 61.9 ±2.6 64.2 ±4.1 51.0 ±3.3 48.9 ±5.0 45.4 ±4.6
+> (IA )3[28] 46.2 ±7.4 50.9 ±5.2 38.1 ±6.8 39.7 ±5.9 34.3 ±9.6 Random Allocation 37.1 ±8.8 41.9 ±6.4 30.6 ±9.7 31.8 ±10.9 27.2 ±8.1 Surgical (dominant region) 53.8 ±3.9 54.7 ±3.4 42.6 ±4.5 40.1 ±3.7 38.9 ±4.2 AdaLoRA [8] 64.7 ±2.3 66.8 ±3.6 55.1 ±2.9 52.9 ±1.9 48.7 ±3.1 LoRA-SP [9] 64.5 ±2.7 68.6 ±2.0 56.4 ±4.4 55.8 ±2.2 42.9 ±2.4
+> Adaptive 69.8 ±1.5 †‡ 72.1 ±1.2 †‡ 62.1 ±1.4 †‡ 58.3 ±1.0 †‡ 54.3 ±1.3 †‡
+
+five columns. Second, Adaptive reaches the nominal upper bounds at half their parameters, exceeding the mean of Uniform LoRA at rank 32 on all five architectures and matching Oracle Allocation within the SEMs on all five. We attribute the crossings to constrained-adaptation regu-larization. Full Fine-Tuning and Uniform LoRA at rank 32 
+
+reach near-zero training loss within 3 epochs while held-out validation loss rises from epoch 4, whereas Adaptive’s validation loss decreases monotonically. Because we score every method at its best validation checkpoint (§V-A), the crossings are not an artifact of overfit final checkpoints. Even at its best checkpoint, full fine-tuning of 7.5B parameters on 20 demonstrations generalizes worse at rollout time than constrained adaptation. Third, the advantage concentrates at low budgets (Fig. 6), and we do not claim superiority at every budget. Fourth, Random Allocation collapses at the same budget, so the gains come from where the diagnostic places capacity rather than from non-uniformity per se, and Surgi-cal, which spends the whole budget on the dominant region, trails even Uniform LoRA matched under the combined shift, so graded assignment rather than dominant-region selection drives the gains. The ordering transfers to CALVIN on all five architectures (Table V). 
+
+E. Ablation Study 
+
+Table VI ablates one design choice at a time. On the allocation side, the freezing threshold δ = 0 .1 matches no freezing at the same budget and beats aggressive freezing; the value of freezing lies in budget rather than single-shift success, since frozen regions carry no adapter, which is what yields the 3.1M language budget and the training-time parity with Uniform LoRA matched in Table VII. Replacing the diagnostic-driven assignment with equal or random ranks at the same budget costs 12 and 31 points of success, Appearance Spatial Novel Object Instruction Combined 
+
+OpenVLA-OFT                     
+
+> (7B) 1M 16M 105M 1B 7.5B
+> Params
+> 20 40 60 80
+> Success (%) 1M 16M 105M 1B 7.5B
+> Params
+> 20 40 60 80
+> Success (%) 1M 16M 105M 1B 7.5B
+> Params
+> 20 40 60 80
+> Success (%) 1M 16M 105M 1B 7.5B
+> Params
+> 20 40 60 80
+> Success (%) 1M 16M 105M 1B 7.5B
+> Params
+> 20 40 60 80
+> Success (%)
+
+π0                     
+
+> (3.3B) 0.75M 12M 105M 3.3B
+> Params
+> 20 40 60 80
+> Success (%) 0.75M 12M 105M 3.3B
+> Params
+> 20 40 60 80
+> Success (%) 0.75M 12M 105M 3.3B
+> Params
+> 20 40 60 80
+> Success (%) 0.75M 12M 105M 3.3B
+> Params
+> 20 40 60 80
+> Success (%) 0.75M 12M 105M 3.3B
+> Params
+> 20 40 60 80
+> Success (%) Adaptive (Ours) Uniform LoRA AdaLoRA DoRA LoRA-SP Full Fine-Tuning No Adaptation
+
+Fig. 6: Parameter–performance frontiers on LIBERO for OpenVLA-OFT and π0 under the five deployment shifts, sweeping Adaptive, Uniform LoRA, AdaLoRA, DoRA, and LoRA-SP over nine budgets from one sixteenth of the matched budget to the full model size; the remaining three architectures appear in the accompanying video. Dashed lines mark the No Adaptation floor and Full Fine-Tuning ceiling. The Adaptive advantage is largest at low budgets and narrows as capacity approaches rank 32 .TABLE VI: Ablations on OpenVLA-OFT, LIBERO combined shift, 16 Mmatched budget, 5 seeds. Each row removes or alters one component of the full pipeline (Ours). ρS and R2 follow §V-C. Allocation-only rows leave the diagnostic unchanged and report success rate only. Equal allocation spreads the budget over the pipeline’s region set and so differs in adapter placement from Uniform LoRA matched (Table IV). Every ablated row differs significantly from the full pipeline at p < 0.05 (paired t-test) except Ours − freezing. 
+
+Variant ρS R2 Success ( %)Ours (full pipeline) 0.96 ±0.02 0.93 ±0.03 73.4 ±1.3 
+
+Ours − Tier 2 0.83 ±0.04 0.66 ±0.05 67.0 ±2.6 Ours − Tier 1 0.88 ±0.03 0.74 ±0.04 68.8 ±2.4 Ours − gate (uniform 0.5 blend) 0.92 ±0.03 0.85 ±0.04 70.8 ±1.7 Ours − coreset (random cache) 0.85 ±0.05 0.70 ±0.06 69.2 ±2.9 Ours with N = 1 0.71 ±0.09 0.47 ±0.10 64.2 ±4.7 Ours − freezing ( δ = 0 ) — — 71.0 ±2.4 Ours with δ = 0 .3 — — 65.7 ±3.8 Ours − diagnostic ranks (equal) — — 61.9 ±5.4 Ours − diagnostic ranks (random) — — 42.8 ±7.7 
+
+which supports the claim that placement, not budget, drives the gains. Varying the gate temperature over two orders of magnitude, γ ∈ [0 .1, 10] , changes success by less than one point, so the gate needs only coarse calibration. 
+
+F. Physical Robot Evaluation 
+
+We evaluate the pipeline on a UFactory xArm-7 manip-ulator with a parallel-jaw gripper, OpenVLA-OFT as the base policy, one fixed third-person RGB camera viewing the workspace at a downward tilt, and one wrist-mounted RGB camera. For each of six controlled shifts we collect 20 
+
+examples under the shifted condition, fine-tune each method for 10 epochs on one NVIDIA A100 80GB, and evaluate every method at the shared epoch-10 checkpoint on 30 
+
+paired initial configurations held identical across methods; the shared checkpoint avoids per-method checkpoint selec-tion on the small physical validation sets, and the pairing supports McNemar’s tests on discordant outcomes. For each shift we additionally evaluate a held-out Scene B without 
+
+retraining. Fig. 7 shows the shifts and Table VII reports all results. The diagnostic selects the budget per shift, spanning 
+
+32 × from 3.1M for language to 100 M for mixed, and funds the DINOv2 and SigLIP encoders under appearance, SigLIP together with the action head under novel object and affordance, and rank-3 adapters on the late LLaMA region Scene A   
+
+> adapted
+> Scene B
+> held out
+> Budget
+> Appearance
+> lighting, textures
+> 27 /30
+> 23 /30
+> 37M · 0.49%
+> Novel Object
+> new geometries
+> 26 /30
+> 21 /30
+> 60M · 0.80%
+> Language
+> instruction wording
+> “Pick the teapot” 21 /30
+> “Pick the kettle.” 16 /30
+> 3.1M · 0.04%
+> Affordance
+> snout vs handle grasp
+> 13 /30
+> 11 /30
+> 60M · 0.80%
+> Mixed
+> all axes
+> 25 /30
+> 20 /30
+> 100M · 1.33%
+
+Fig. 7: Five of the six xArm-7 shifts from the fixed third-person camera, with the adaptation condition (Scene A, top) and the held-out condition (Scene B, bottom) evaluated without retraining: appearance (lighting, then lighting plus background), novel object (toy and metallic teapot substitutions for the kettle), language (reworded instructions, with Scene B naming the teapot), affordance (grasping the teapot by its snout rather than its handle), and mixed (a new cup geometry and color against a camouflaging background). Counts are Adaptive’s successes of 30 paired rollouts; the bottom row gives each shift’s selected budget as a parameter count and a fraction of the 7.5Bpolicy. TABLE VII: Physical results on the xArm-7 with OpenVLA-OFT, successes out of 30 paired rollouts at epoch 10 with identical initial configurations across methods (paired McNemar’s tests). We evaluate Scene B without retraining. Budget is the per-shift budget the diagnostic selects, which the matched baselines and LoRA-SP share. AdaLoRA runs at its own allocation (45 –105 M), Uniform LoRA r=32 at 110 M (the hardware recipe adapts every linear layer, not only attention projections), and Full Fine-Tuning updates all 7.5B parameters. Bold marks the best parameter-efficient result per column; shading runs red (worst) to green (best) within each column.                                                                                        
+
+> Appearance Spatial Novel Obj. Language Affordance Mixed Method ABAABABABABWall ↓
+> Budget (selected) 37 M32 M60 M3.1M60 M100 MNo Adaptation 5/30 1/30 4/30 5/30 2/30 5/30 4/30 0/30 0/30 7/30 3/30 —Full Fine-Tuning 25/30 9/30 19/30 24/30 8/30 22/30 11/30 11/30 2/30 24/30 9/30 55 Uniform LoRA r=32 22/30 16/30 17/30 20/30 14/30 18/30 13/30 9/30 5/30 22/30 12/30 22 Uniform LoRA matched 20/30 15/30 15/30 21/30 15/30 7/30 1/30 9/30 5/30 21/30 12/30 20
+> DoRA matched 21/30 16/30 17/30 22/30 16/30 8/30 3/30 10/30 6/30 22/30 13/30 24 AdaLoRA 22/30 17/30 19/30 22/30 16/30 19/30 14/30 10/30 6/30 23/30 14/30 25 LoRA-SP 19/30 18/30 11/30 22/30 14/30 15/30 13/30 9/30 8/30 19/30 12/30 26
+> Adaptive 27/30 23/30 16/30 26/30 21/30 21/30 16/30 13/30 11/30 25/30 20/30 20
+
+under language, whose per-rank cost sets the 3.1M budget. The diagnostic runs in roughly 90 seconds on the same A100 for the 7B model, against 20 minutes of adapter training. The language shift is the sharpest case. At the 3.1Mbudget, Uniform LoRA matched reaches 7/30 against a No Adaptation floor of 5/30 , while Adaptive reaches 21 /30 , sta-tistically indistinguishable from Full Fine-Tuning at 0.04% 
+
+of its trainable parameters; AdaLoRA needs 45 M to reach 
+
+19 /30 , and LoRA-SP reaches 15 /30 at 3.1M, so non-uniform placement is what survives the tight budget and pre-hoc diagnosis extends the margin. On every Scene B, Full Fine-Tuning collapses after adapting to Scene A while Adaptive keeps 11–23 of 30, margins of 5–14 successes that are significant under McNemar’s test. Every PEFT baseline also generalizes to Scene B far better than Full Fine-Tuning, and Adaptive’s margins over the strongest PEFT baseline, 2–5
+
+successes on Scene A and 2–6 on Scene B, are not individ-ually significant at n = 30 . Held-out-scene generalization is therefore a property of constrained adaptation broadly, and what distinguishes Adaptive is delivering it at equal or smaller budgets ( 3.1–100 M against AdaLoRA’s 45 –105 M) while remaining numerically best on every Scene-B column and on five of six Scene-A columns. The regularization behind the simulation crossings appears here too, as Adaptive exceeds Full Fine-Tuning on four of six Scene-A columns; full fine-tuning of 7.5B parameters on 20 examples overfits even in domain, and the Scene-B collapse is the strong form of the same failure. On the affordance shift, No Adaptation returns 0/30 on every column, so reported successes reflect part-grounded grasps, and Adaptive leads the best baseline by three successes on both scenes. The physical spatial shift occludes the target itself, and its diagnostic profile spreads across mid-to-late vision rather than concentrating, unlike the simulated spatial shift, whose clutter leaves the target visible and loads trajectory adjustment in the action head; accordingly, no allocation strategy separates from the others, with Adaptive at 16 /30 against AdaLoRA’s 19 /30 
+
+(not significant) while using 43% of AdaLoRA’s parameters. We report this as the boundary of the claim, as the diagnos-tic helps when the importance signal concentrates and we detect no significant difference among allocation strategies otherwise. VI. C ONCLUSION 
+
+This paper asked whether adaptation cost in VLA models is structured enough to measure before fine-tuning begins. Across five architectures and five deployment shifts, the adaptation spectrum supports an affirmative answer, with each shift type concentrating cost in a characteristic func-tional region regardless of parameter scale or action-decoding paradigm in our experiments. The diagnostic recovers this structure from ten unlabeled target observations without fine-tuning, ranking regions within each deployment at a median Spearman of 0.91 , and the allocator converts the prediction into variable-rank adapters that match or exceed uniform LoRA at every budget we tested. On the physical xArm-7, the selected budgets track shift severity across a 32 ×
+
+range, and constrained adaptation preserves held-out-scene generalization that full fine-tuning loses. 
+
+Limitations and Future Work. The source-side Fisher can misestimate target sensitivity when the domain gap is large (the regime the gate routes to Tier 2), and the measured 
+
+ρ(r) depends on the fine-tuning protocol (§V-B). Hyperpa-rameters calibrated once on LIBERO transferred unchanged to CALVIN and to the xArm-7, though we have not tested them beyond these settings, and the hardware evaluation covers one architecture and one embodiment. The adapt stage still requires roughly 20 labeled demonstrations, so “unlabeled” describes diagnosis, not adaptation. The spatial-occlusion result marks where the pipeline stops helping, when the importance signal spreads rather than concentrates. Finally, the pipeline extends naturally to repeated shifts, by re-running the diagnostic on the adapted model and attaching fresh adapters only where scores are high, and we leave evaluation of this continual setting to future work. REFERENCES [1] M. J. Kim, et al. , “OpenVLA: An open-source vision-language-action model,” in Conference on Robot Learning (CoRL) , 2024. [2] Octo Model Team, et al. , “Octo: An open-source generalist robot policy,” in Robotics: Science and Systems (RSS) , 2024. [3] F. Ferchau, D. Pommer, and C. Axenie, “On the efficiency of LoRA fine-tuning for vision-language-action models in industrial robotic manipulation,” arXiv:2607.10172 , 2026. [4] E. J. Hu, et al. , “LoRA: Low-rank adaptation of large language models,” in International Conference on Learning Representations (ICLR) , 2022. [5] D. M. Wolpert and M. Kawato, “Multiple paired forward and inverse models for motor control,” Neural Networks , vol. 11, no. 7–8, pp. 1317–1329, 1998. [6] Y. Lee, et al. , “Surgical fine-tuning improves adaptation to distribu-tion shifts,” in International Conference on Learning Representations (ICLR) , 2023. [7] H. He, J. Cai, J. Zhang, D. Tao, and B. Zhuang, “Sensitivity-aware visual parameter-efficient fine-tuning,” in IEEE/CVF International Conference on Computer Vision (ICCV) , 2023. [8] Q. Zhang, et al. , “AdaLoRA: Adaptive budget allocation for parameter-efficient fine-tuning,” in International Conference on Learn-ing Representations (ICLR) , 2023. [9] D. Kim, et al. , “Adaptive capacity allocation for vision language action fine-tuning,” arXiv:2603.07404 , 2026. [10] H. Shi, X. Ren, Y. Zhang, et al. , “VLA-Trace: Diagnosing vision-language-action models through representation and behavior tracing,”                                                        
+
+> arXiv:2605.30117 , 2026. [11] B. Liu, et al. ,“LIBERO: Benchmarking knowledge transfer for lifelong robot learning,” in Adv. Neural Inf. Process. Syst. (NeurIPS) ,2023. [12] O. Mees, L. Hermann, E. Rosete-Beas, and W. Burgard, “CALVIN: A benchmark for language-conditioned policy learning for long-horizon robot manipulation tasks,” IEEE Robot. Autom. Lett. , vol. 7, 2022. [13] A. Brohan, et al. , “RT-1: Robotics transformer for real-world control at scale,” in Robotics: Science and Systems (RSS) , 2023. [14] M. J. Kim, C. Finn, and P. Liang, “Fine-tuning vision-language-action models: Optimizing speed and success,” arXiv:2502.19645 , 2025. [15] Z. Hou, et al. , “Diffusion transformer policy,” arXiv:2410.15959 ,2024. [16] K. Black, et al. , “ π0: A vision-language-action flow model for general robot control,” arXiv:2410.24164 , 2024. [17] M. Shukor, et al. , “SmolVLA: A vision-language-action model for affordable and efficient robotics,” arXiv:2506.01844 , 2025. [18] A. Aghajanyan, L. Zettlemoyer, and S. Gupta, “Intrinsic dimen-sionality explains the effectiveness of language model fine-tuning,”
+> arXiv:2012.13255 , 2021. [19] D. Biderman, et al. ,“LoRA learns less and forgets less,”
+> arXiv:2405.09673 , 2024. [20] H. U. K. Shinwari and M. Usama, “ARD-LoRA: Dynamic rank allocation for parameter-efficient fine-tuning of foundation models with heterogeneous adaptation needs,” arXiv:2506.18267 , 2025. [21] J. Liu, H. Kang, Q. Zhao, G. Yu, and J. Wang, “RSRA: Training-free probing of representation sensitivity for efficient LoRA rank allocation,” arXiv:2607.09757 , 2026. [22] S. Kornblith, M. Norouzi, H. Lee, and G. Hinton, “Similarity of neural network representations revisited,” in International Conference on Machine Learning (ICML) , 2019. [23] D. C. Dowson and B. V. Landau, “The Fr´ echet distance between multivariate normal distributions,” J. Multivariate Anal. , vol. 12, 1982. [24] Y. Gal and Z. Ghahramani, “Dropout as a Bayesian approximation: Representing model uncertainty in deep learning,” in International Conference on Machine Learning (ICML) , 2016.
+
+[25] J. Martens and R. Grosse, “Optimizing neural networks with Kronecker-factored approximate curvature,” in International Confer-ence on Machine Learning (ICML) , 2015. [26] S. Har-Peled and A. Kushal, “Smaller coresets for k-median and k-means clustering,” Discrete Comput. Geom. , vol. 37, 2007. [27] S.-Y. Liu, et al. , “DoRA: Weight-decomposed low-rank adaptation,” 
+
+arXiv:2402.09353 , 2024. [28] H. Liu, et al. , “Few-shot parameter-efficient fine-tuning is better and cheaper than in-context learning,” in Adv. Neural Inf. Process. Syst. (NeurIPS) , 2022.
