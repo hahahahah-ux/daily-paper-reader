@@ -1,0 +1,804 @@
+CompVLA: A Variable Compliance Vision-Language-
+Action Model for Contact-rich Manipulation
+Jongmin Kim∗1 Junsu Ha∗1 Che-Sang Park∗1 Minchang Song1 Hyeokju Jeong1
+Himchan Hwang1 Jianlong Fu2 Frank C. Park1
+1Seoul National University, 2Microsoft Research Asia
+{jmkim, hajunsu, cspark, smc, hjjeong, himchan}@robotics.snu.ac.kr,
+jianf@microsoft.com, fcp@snu.ac.kr
+Abstract: Contact-rich manipulation, requiring robots to regulate not only motion
+but also how they yield to external forces, has emerged as the next frontier for
+Vision-Language-Action (VLA) models. However, existing VLAs output purely
+kinematic commands, degrading performance on real-world contact-rich tasks. In
+this paper, we introduce CompVLA, a unified VLA framework that jointly predicts
+motion and stiffness matrix from RGB and language inputs. Our approach augments
+the conventional architecture with a dedicated Compliance Expert, which outputs
+time-varying stiffness and virtual displacement profiles executed via geometric
+impedance control. We demonstrate that CompVLA achieves the highest average
+success rate across diverse contact-rich tasks, outperforming both vanilla and
+compliance-aware VLA baselines, with ablations confirming each component is
+essential.
+Keywords: Vision-language-action model, Compliance control, Contact-rich ma-
+nipulation
+1
+Introduction
+Vision-Language-Action (VLA) models [1, 2, 3, 4, 5] have become a major approach in robot
+learning. By mapping visual and language inputs directly to robot actions, and by training on diverse
+embodiments and tasks, VLAs extend the adaptability of foundation models to robotic control.
+However, most current VLAs use purely kinematic action representations. They execute trajectories
+through position control and do not model the force exchanges that arise during contact. In contact-
+rich tasks such as polishing, peg-in-hole assembly, and whiteboard erasing, small tracking errors
+can cause the robot to lose contact or apply excessive force, which can damage the robot or the
+environment.
+Compliance control addresses this issue by allowing the robot to yield during interaction [6]. Rather
+than rigidly tracking a reference path, the robot absorbs position errors through controlled end-effector
+compliance. This reduces unsafe contact forces and improves robustness to execution errors. However,
+compliance is not always the answer. A stiffer controller tracks free-space motion more accurately. A
+task therefore needs variable compliance that stays stiff for precise free-space tracking and yields on
+contact, rather than a single fixed stiffness. Hand-tuning such profiles for every task does not scale,
+so prior work learns variable compliance from data [7, 8, 9]. Although these methods demonstrate
+the benefits of variable compliance in task-specific settings, they have not been applied to the more
+general setting of VLAs.
+We aim to bring variable compliance to VLAs through two complementary capabilities: directional
+compliance and force modulation. Consider erasing a whiteboard. To follow a wiping path, the robot
+must stay stiff in the plane of motion while remaining compliant normal to the surface, since a single
+uniform stiffness is insufficient for complex contact tasks. This is directional compliance, remaining
+*Equal contribution
+arXiv:2609.23614v1  [cs.RO]  20 Sep 2026
+
+
+compliant along certain directions while staying stiff along others. Both these directions and their
+compliance vary across tasks. Staying compliant, however, is not enough. Erasing also requires
+pressing the eraser into the board with a target force. This is force modulation. Compliance shapes
+the reaction to external forces but does not command pressing. Keeping the target pose fixed and
+lowering stiffness does not help, since the applied force is tied to stiffness and deflection and cannot
+be set independently. Actively applying a desired force is thus a capability distinct from compliance.
+We propose CompVLA, a VLA that learns variable compliance for contact-rich manipulation (Fig-
+ure 1). It provides directional compliance and force modulation through a compliance expert added
+alongside the action expert of standard VLA architectures. Like the action expert, the compliance
+expert is conditioned on the VLM embedding, but it also takes the reference trajectory predicted by
+the action expert as input. It then predicts a time-varying diagonal stiffness and a virtual displace-
+ment. The diagonal stiffness entries set the compliance along each axis and the virtual displacement
+orients those axes, jointly providing directional compliance, while the same virtual displacement
+also generates the contact force the task requires, providing force modulation. Together with the
+action expert’s desired trajectory, these outputs drive a geometric impedance controller [10] that
+produces coordinate-free compliant motion. This controller-aware design couples low-frequency
+motion generation with high-frequency interaction control, a connection that prior VLA studies often
+overlook.
+We evaluate CompVLA on three challenging contact-rich tasks chosen to measure diverse capabilities,
+including directional compliance and force modulation. CompVLA outperforms existing baselines
+for contact-rich manipulation on average, including ones that use additional force [11] or torque [12]
+inputs. Ablations show that variable compliance helps but is insufficient on its own, confirming that
+both variable compliance and virtual target contributes. CompVLA also generalizes to non-contact-
+rich tasks such as pick-and-place. These results show that modeling compliant motion through
+variable stiffness and virtual displacement is an effective way to extend VLAs to physical interaction.
+2
+Related Work
+Vision-Language-Action Models.
+Vision-Language-Action (VLA) models have advanced quickly
+by combining robot learning with large-scale vision-language priors. RT-1 [1], RT-2 [2], and
+OpenVLA [3] fine-tune pretrained VLMs on large robot demonstration datasets such as Open
+X-Embodiment [13], often representing actions as discretized language tokens. More recent models
+replace tokenized actions with continuous action distributions. Octo [14] uses a diffusion head, while
+the π0 family [4, 15] uses a flow-matching action expert. However, these models typically predict
+target joint or end-effector poses, with the controller treated as an external component. This limits
+the policy’s ability to specify how the robot physically interacts with the environment, a capability
+crucial for contact-rich manipulation.
+VLA for Contact-Rich Manipulation.
+Recent work incorporates contact information into VLAs
+along two directions: input augmentation, which adds contact signals while keeping pose-based
+action outputs, and output augmentation, which expands the policy output itself. Input-augmentation
+methods introduce additional sensing modalities, such as a 6-axis wrench in ForceVLA [11], joint
+torque in TA-VLA [12] (which also predicts torque as an auxiliary output), and tactile images in
+VTLA [16]. In all cases, these signals help the policy choose better target poses, while the pose-
+tracking controller itself remains unlearned. Output-augmentation methods are closer to our setting.
+ForceVLA2 [17] predicts a target wrench alongside the target pose via a Cross-Scale Mixture-of-
+Experts, effectively learning a hybrid force-position controller [18]. However, hybrid force-position
+control requires a binary partition between force and position axes, infinite stiffness along position-
+controlled directions, and discrete mode switching at contact, making it sensitive to impact forces
+and unstable contact transitions.
+In our experiments, we compare against TA-VLA and ForceVLA. We could not include VTLA and
+ForceVLA2 as baselines because we lack a tactile sensor and their code has not yet been publicly
+released.
+2
+
+
+Compliance in Imitation Learning.
+Classical compliance control [6] has motivated a body of
+work on learning variable compliance [19]. Prior methods estimate time-varying stiffness from human
+demonstrations using EMG [20], demonstration variance [21, 22], or contact forces on the SPD
+manifold [23]. However, recovering both target pose and stiffness from a single demonstration is
+ill-posed because many pose–stiffness pairs yield the same trajectory and wrench. Comp-ACT [8] and
+DIPCOM [9] avoid this inverse problem by collecting stiffness labels through teleoperator supervision,
+but such labels are costly to gather and depend on the teleoperator’s intuition. Adaptive Compliance
+Policy (ACP) [7] instead infers the compliance profile and target pose from position and wrench data
+via a heuristic. These methods are built on imitation-learning architectures such as ACT [24] and
+diffusion policy [25], leaving variable compliance unexplored in modern VLAs. CompVLA closes
+this gap, scaling variable-compliance learning to modern VLAs. Adapting ACP’s approach, we infer
+the underlying stiffness and virtual displacement from force-feedback teleoperation demonstrations,
+and train CompVLA with a π0 backbone.
+3
+Preliminaries: Compliance Control
+Compliance control specifies the end-effector’s closed-loop behavior as a virtual mass–spring–damper,
+Λd ¨˜x + Dd ˙˜x + Kd ˜x = Fext,
+(1)
+where ˜x = x −xd is the position error, Fext the external force, and Λd, Dd, Kd ≻0 the desired
+virtual inertia, damping, and stiffness. Intuitively, Kd governs the trade-off between tracking xd and
+yielding to external forces, thereby bounding the contact force. This model, however, is only an
+abstract Cartesian target, whereas a real manipulator moves on SE(3) and must be driven by joint
+torques. We now lift (1) to SE(3) and realize it at the actuator level.
+Compliant behavior on SE(3).
+The Cartesian form (1) does not extend to SE(3): it treats ˜x as a
+vector, but SE(3) is not a vector space. We instead specify the behavior directly on SE(3), following
+the frame-invariant construction of Seo et al. [26]. Let X = (R, p) ∈SE(3) be the end-effector pose,
+Xd = (Rd, pd) its reference, and Vb, Vb
+d ∈R6 the body twists of X and Xd. The body-frame pose
+and twist errors are
+Xe = log
+ X−1
+d X
+
+,
+Ve = Vb −AdX−1Xd Vb
+d,
+(2)
+where Ad(·) transports Vb
+d into the body frame at X, placing both terms of Ve in a common frame.
+The desired compliant behavior on SE(3) is
+Λd ˙Ve + Dd Ve + Kd Xe = Fext,
+(3)
+with Λd, Dd, Kd ≻0 ∈R6×6. Because (2) depends only on the relative transformation X−1
+d X,
+the specification is coordinate-free. For a suitable Kd, the closed-loop system is almost-globally
+exponentially stable [26], unlike Euler-angle parameterizations, which are only locally stable near
+their singularities.
+Realization via Impedance Control.
+We realize (3) through impedance control [6], which com-
+mands joint torques τ that make the closed-loop dynamics match (3).* The task-space dynamics
+are [28]
+Λ(θ) ˙V + η(θ, V) = F + Fext,
+τ = J⊤(θ) F,
+(4)
+where θ are the robot joint coordinates, J(θ) the Jacobian with V = J(θ) ˙θ, Λ(θ) the task-space
+inertia, and η(θ, V) the centripetal, Coriolis, and gravity terms. Eliminating ˙Ve between (3) and (4)
+gives the task wrench
+F = Λ(θ) ˙Vd + η(θ, V) −Λ(θ) Λ−1
+d (DdVe + KdXe) +
+ Λ(θ) Λ−1
+d
+−I
+
+Fext.
+(5)
+*An alternative is admittance control, which uses position control: it integrates the measured wrench Fext
+through (3) into a position reference that an inner controller tracks. This suits position-controlled robots without
+a torque interface [27].
+3
+
+
+Figure 1: Overall framework of CompVLA and geometric impedance controller. CompVLA outputs
+time-varying diagonal stiffness and virtual displacement vectors to realize directional compliance
+and force modulation.
+Realizing the desired compliant behavior (3) through the impedance law (5) constitutes geometric
+impedance control (GIC) [10], the low-level controller our method builds on.
+Within GIC, we learn only the stiffness Kd, fixing the remaining gains as in prior work [7, 8, 9]. We
+set Λd = Λ(θ), which cancels the last term of (5) and removes the need for force sensing, and the
+damping Dd = 2ξ√ΛdKd with damping ratio ξ ≤1. Learning only Kd is a reasonable trade-off,
+since stiffness is the dominant term in the compliant behavior. In the quasistatic regime, where
+velocity and acceleration are negligible, (3) reduces to KdXe = Fext, so Kd largely governs the
+force–displacement relationship.
+4
+Method
+In this section, we describe how CompVLA learns to produce directional compliance and force
+modulation. We represent each motion’s compliant behavior with a diagonal stiffness kt and a virtual
+displacement dt, which together set how the robot yields along each axis and how it presses on the
+environment. We first describe how these targets are obtained from demonstrations. We then present
+the model that predicts them, followed by the controller that executes the predicted commands.
+4.1
+Learning Compliance from Demonstration
+We derive both capabilities from the interaction forces recorded during demonstration, expressing
+each motion’s compliance as the diagonal stiffness kt and the virtual displacement dt. We define
+kt = [kR
+t ; kp
+t ] ∈R6 and dt = [dR
+t ; dp
+t ] ∈R6, where the superscripts R and p denote rotational and
+translational components. These quantities are computed separately for the rotational and translational
+spaces. We use the Tool Center Point (TCP) frame as the reference frame for execution.
+Directional Compliance.
+The robot should yield along the contact direction, where reaction forces
+concentrate, while remaining stiff in the orthogonal directions to preserve tracking. We estimate this
+direction from the measured interaction force or torque and set the direction of dt accordingly. For
+each translational and rotational space, we define a compliance frame whose first axis is aligned
+with this direction. The remaining rotational freedom of each frame is resolved by choosing the
+orientation closest to the TCP frame along the shortest geodesic path. In this frame, we assign a
+low stiffness klow to the contact axis and a high stiffness kmax to the two orthogonal axes, yielding
+K0 = diag(klow, kmax, kmax). Following Adaptive Compliance Policy [7], we set klow from the force
+or torque magnitude to obtain the stiffness target kt. Together, kt and dt define the direction and
+magnitude of the anisotropic compliance used by the controller.
+4
+
+
+Force Modulation.
+Stiffness alone is passive and cannot actively press on the environment. We
+use dt to shift the equilibrium pose into the contact direction. Under impedance control, this shift
+acts as a virtual spring and produces a contact force or torque proportional to the product of stiffness
+and displacement. Recovering (kt, dt) from a target force or torque is ill-posed, since many pairs can
+produce the same value. With the contact direction and klow fixed as above, we set the displacement
+magnitude to the demonstrated force or torque magnitude divided by klow, treating translation and
+rotation separately. Thus, dt provides both the direction of the virtual shift and the displacement
+magnitude for force generation, while kt sets the corresponding stiffness.
+4.2
+CompVLA
+We now describe the policy architecture that predicts the compliance-aware action representation
+defined above. CompVLA extends a standard VLA policy with a compliance branch that predicts
+the stiffness vector kt and virtual displacement vector dt in addition to motion commands. We first
+define the policy inputs and action tokens, then describe the model architecture and how its outputs
+generate compliant motion via GIC.
+Problem Formulation.
+At each timestep t, CompVLA receives a language instruction l and an
+observation Ot = It, st, where It denotes camera images and st denotes the robot state. The state
+includes the gripper state and the current Tool Center Point (TCP) pose Xt = (Rt, pt) ∈SE(3).
+From these inputs, the policy π(Mt | Ot, l) predicts a motion chunk over a horizon of T steps:
+Mt = (mt, mt+1, . . . , mt+T −1).
+(6)
+Each motion token mt ∈Mt is parameterized as
+mt = (Vt, gt, kt, dt),
+(7)
+where Vt ∈R6 is the reference TCP twist and gt ∈0, 1 is the gripper command. The stiffness vector
+kt ∈R6 specifies the diagonal stiffness, and the virtual displacement dt ∈R6 specifies the direction
+and amount of virtual target shift. Together, they define the anisotropic compliance profile and the
+contact force generated by the impedance controller.
+Model Architecture.
+As illustrated in Figure 1, CompVLA builds upon a core Vision-Language
+Model (VLM) coupled with a dual-expert structure consisting of a Action Expert and a Compliance
+Expert. Both experts interact with the VLM base via cross-attention layers to effectively decode
+multimodal context. Given the visual inputs, language instruction, and robot state, the Action Expert
+first predicts the reference TCP twist Vt and the binary gripper command gt. This predicted twist is
+integrated to generate a reference trajectory, which then serves as an explicit conditioning signal for
+the Compliance Expert. Processing this trajectory alongside the VLM context, the Compliance Expert
+outputs the diagonal stiffness kt and the virtual displacement dt. Finally, the generated reference
+trajectory, diagonal stiffness, and virtual displacement are transmitted to the downstream controller
+for physical execution.
+Compliant Motion Generation.
+Upon receiving the predicted motion chunk, the robot executes it
+with a high-frequency GIC. A standard variable impedance controller tracks a reference trajectory with
+a prescribed stiffness profile, whose compliance frame is typically fixed or specified independently of
+the motion. In contrast, CompVLA uses the predicted virtual displacement dt to modify the reference
+trajectory and define the compliance frame.
+Specifically, the reference trajectory is shifted by dt to form a virtual target pose Xv
+t = (Rv
+t , pv
+t ) ∈
+SE(3). Tracking this virtual target induces force modulation through the spring term of the impedance
+controller. At the same time, the direction of dt determines the primary compliance axis, enabling
+directional compliance as described above. Let ˜RR
+t , ˜Rp
+t ∈SO(3) denote the orientations of the
+rotational and translational compliance frames with respect to the TCP frame. We use these rotations
+to map the predicted diagonal stiffness values into the TCP frame and construct the task-space
+stiffness matrix Kt. The resulting stiffness matrix, together with the virtual target pose, is then used
+in the impedance control law in (5) to compute the control command.
+5
+
+
+Figure 2: Overview of tasks used in the experiments. Tasks (a)–(c) are three cases where compliance
+is essential. Task (d), Pick and Place, verifies that CompVLA is also capable of standard manipulation.
+5
+Experiments
+5.1
+Experiment Setup
+Figure 3: Hardware setup used for our
+experiments.
+Hardware Setup.
+Our hardware platform consists of
+a force aware leader-follower teleoperation system built
+around two 7-DoF Franka Research 3 (FR3) arms, shown
+in Figure 3. The follower arm, used for both data collection
+and evaluation, is controlled via a task-space compliance
+controller. It is equipped with three Intel RealSense D435i
+cameras mounted at the front, side, and wrist, providing com-
+plementary viewpoints for policy learning. We replace the
+default FR3 fingers with the UMI fingertip design [29] to im-
+prove grasping performance. An ATI Axia force/torque sen-
+sor is mounted at the wrist; while its readings are recorded
+during data collection, they are not used by the policy at eval-
+uation time. From each demonstration, we collect camera
+images from all three cameras, joint positions, joint torques,
+and force/torque sensor readings. We release this contact-rich demonstration dataset to support future
+research on compliant manipulation. For details about the dataset, please refer to the Appendix.
+Tasks.
+To evaluate the compliance control capability of the VLA model, we conduct experiments on
+three contact-rich tasks, shown in Figure 2: Erase Whiteboard, Pivot, and Cup Dispense. These tasks
+span the regimes in which compliance is essential: surface tracking under pose uncertainty (Erase),
+continuously varying compliance direction (Pivot), and force-regulated pressing to a precise depth
+(Cup Dispense) [11]. Success is binary for all tasks except Erase, for which we report the fraction of
+letters successfully erased from the board. We additionally include a Pick and Place task (Figure 2(d))
+to evaluate CompVLA on standard manipulation. For each task, we collect 100 demonstrations for
+training and evaluate over 20 episodes with randomized environment initialization. An episode is
+marked as a failure if it exceeds a task-specific time limit or triggers the FR3’s built-in safety stop
+due to excessive contact force.
+Baselines.
+We compare CompVLA against three baselines: π0 [4], a typical VLA model, and two of
+its variants designed for contact-rich manipulation, ForceVLA [11] and TA-VLA [12]. We modified
+ForceVLA to accept three camera views instead of its original two, matching our three-camera
+setup. For TA-VLA, we adopt the DePost-1 architecture with the unified training objective that uses
+6
+
+
+Table 1: Success rates are reported as mean ± standard deviation over three runs, with 20 evaluation
+episodes per task per run. CompVLA achieves the best average performance across the contact-rich
+tasks, with the highest success rates on Erase and Pivot.
+METHOD
+Contact-rich
+Standard
+Task
+Erase
+Pivot
+Cup Dispense
+Average
+PnP
+π0 [4]
+17.8±7.1
+31.7±10.4
+38.0±12.1
+29.2±9.2
+80.0±10.0
+ForceVLA [11]
+68.1±4.1
+45.0±15.0
+50.0±8.7
+54.4±4.3
+45.0±15.0
+TA-VLA [12]
+52.8±9.7
+26.7±10.4
+0.0±0.0
+26.5±2.0
+83.3±12.6
+CompVLA (ours)
+92.9±3.7
+73.3±10.4
+35.0±10.0
+67.1±7.2
+76.7±5.8
+future torques as an auxiliary training signal alongside action prediction, following the configuration
+evaluated in the original paper. For fair comparison, we also leverage π0 as a backbone of CompVLA.
+5.2
+Results
+Table 1 reports the success rates of CompVLA and the baselines. On the contact-rich tasks, CompVLA
+achieves an average success rate of 67.1%, outperforming the strongest baseline by 12.7 percentage
+points. Although ForceVLA and TA-VLA try to incorporate force/torque information to enhance
+performance in contact-rich tasks, their position-only action outputs leave them unable to actively
+regulate contact forces during execution.
+As shown in Figure 4, baseline rollouts typically fail in one of two modes. For the first case, the
+pivot task, the end-effector drifts away from the contact, leaving the black box failing to tip. Second
+case, erase the board task, the robot presses too aggressively into the environment, triggering the
+FR3’s built-in safety stop due to excessive contact force. In contrast, CompVLA’s explicit stiffness
+prediction lets the policy modulate compliance on the fly, maintaining stable contact while keeping
+interaction forces within safe limits.
+Additionally, the rightmost column of Table 1 reports performance on Pick and Place, a standard
+manipulation task that does not require compliance. CompVLA achieves performance comparable to
+π0 (76.7% vs. 80.0%), suggesting that it remains effective even when compliance is unnecessary.
+5.3
+Ablation Study
+In this section, we conduct ablation studies to validate (i) the necessity of each component in the
+Compliance Expert and (ii) the benefit of variable compliance over a fixed stiffness matrix.
+Table 2: Ablation of the Compliance Ex-
+pert components on the Erase White-
+board task.
+Method
+Erase Whiteboard
+Comp w/o virtual
+7%
+Comp w/o K&virtual
+15.3%
+CompVLA (ours)
+96%
+Removing Components of the Compliance Module.
+We evaluate two ablations of CompVLA on the Erase
+Whiteboard task with 10 episodes. Comp w/o virtual re-
+moves the virtual displacement during evaluation, and
+Comp w/o K&virtual removes the Compliance Expert en-
+tirely, making it identical to pure position control. As
+reported in Table 2, removing each component drops the
+success rate from 96% to 7.0% and 15.3% respectively,
+confirming that both components are essential.
+Table 3: Ablation with a fixed stiffness
+matrix on the Pivot task.
+Method
+Pivot
+Fixed K
+40%
+CompVLA (ours)
+70%
+Fixed Stiffness Matrix K.
+Variable compliance is a
+core design choice in CompVLA. We test its necessity
+by holding the stiffness matrix fixed at kR
+t = 30 Nm/rad
+and kp
+t = 500 N/m on the Pivot task with 10 episodes. As
+shown in Table 3, fixing the stiffness matrix significantly
+degrades performance, confirming that adaptive stiffness
+is essential for handling tasks with changing compliance
+requirements.
+7
+
+
+Figure 4: Qualitative comparison of CompVLA and position-only baseline rollouts. CompVLA (top)
+leverages directional compliance to maintain contact as the contact direction changes (left), and force
+modulation to apply controlled forces (right). In contrast, position-only baselines (bottom) exhibit two
+characteristic failures: losing contact with the manipulated object (left), and pressing too aggressively
+into the surface, triggering the FR3’s safety stop (right).
+6
+Conclusion
+We present CompVLA, a vision-language-action policy that enables physical interaction by predicting
+reference motion together with diagonal stiffness and virtual displacement profiles. When integrated
+with GIC, CompVLA connects low-frequency multimodal policy outputs with a high-frequency
+compliant control loop. Through a dual-expert architecture, the policy predicts reference TCP motion,
+stiffness, and virtual displacement commands, which are used to form virtual target poses and task-
+space stiffness matrices for directional compliance and force modulation. Robot experiments across
+diverse tasks such as whiteboard erasing, pivoting, and cup dispensing demonstrate that CompVLA
+improves average performance over kinematics-only and force-conditioned baselines, while preserv-
+ing standard manipulation performance in pick-and-place routines. Ultimately, these results show
+that incorporating directional compliance and force modulation into VLA action representations is an
+effective way to extend foundation models to contact-rich environments.
+7
+Limitations and Future Work
+One limitation of CompVLA is that its compliance behavior still depends on the quality of the
+predicted reference motion. The compliance expert can regulate contact once the end-effector reaches
+the relevant interaction region, but it cannot fully compensate for large trajectory errors. This limitation
+is most visible in the cup dispensing task, where the robot must reach a small button before force
+modulation can be effective. In contrast, erasing and pivoting have broader contact regions and are
+more tolerant to moderate pose errors. This suggests that CompVLA would benefit from stronger
+reference motion generation, especially for tasks with small contact targets or narrow affordance
+regions.
+Another limitation comes from how the compliance targets are defined. We derive them from
+force/torque measurements, which works well after contact is established but is less suited to pre-
+contact phases where no force signal is available. The current representation also focuses on a
+dominant compliance direction, which may be insufficient for tasks that require compliance across
+multiple directions or strongly coupled rotational and translational behavior. Future work should
+reduce the reliance on force-derived labels, explore richer stiffness representations, and scale the data
+to more diverse contact conditions.
+8
+
+
+References
+[1] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, J. Dabis, C. Finn, K. Gopalakrishnan, K. Haus-
+man, A. Herzog, J. Hsu, et al. Rt-1: Robotics transformer for real-world control at scale. arXiv
+preprint arXiv:2212.06817, 2022.
+[2] B. Zitkovich, T. Yu, S. Xu, P. Xu, T. Xiao, F. Xia, J. Wu, P. Wohlhart, S. Welker, A. Wahid, et al.
+Rt-2: Vision-language-action models transfer web knowledge to robotic control. In Conference
+on Robot Learning, pages 2165–2183. PMLR, 2023.
+[3] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair, R. Rafailov, E. Foster,
+G. Lam, P. Sanketi, et al. Openvla: An open-source vision-language-action model. arXiv
+preprint arXiv:2406.09246, 2024.
+[4] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, L. Groom, K. Hausman,
+B. Ichter, et al. π0: A vision-language-action flow model for general robot control. arXiv
+preprint arXiv:2410.24164, 2024.
+[5] M. Shukor, D. Aubakirova, F. Capuano, P. Kooijmans, S. Palma, A. Zouitine, M. Aractingi,
+C. Pascal, M. Russi, A. Marafioti, et al. Smolvla: A vision-language-action model for affordable
+and efficient robotics. arXiv preprint arXiv:2506.01844, 2025.
+[6] N. Hogan. Impedance control: An approach to manipulation. In 1984 American control
+conference, pages 304–313. IEEE, 1984.
+[7] Y. Hou, Z. Liu, C. Chi, E. Cousineau, N. Kuppuswamy, S. Feng, B. Burchfiel, and S. Song.
+Adaptive compliance policy: Learning approximate compliance for diffusion guided control. In
+2025 IEEE International Conference on Robotics and Automation (ICRA), pages 4829–4836.
+IEEE, 2025.
+[8] T. Kamijo, C. C. Beltran-Hernandez, and M. Hamaya. Learning variable compliance control
+from a few demonstrations for bimanual robot with haptic feedback teleoperation system. In
+2024 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS), pages
+12663–12670. IEEE, 2024.
+[9] M. Aburub, C. C. Beltran-Hernandez, T. Kamijo, and M. Hamaya. Learning diffusion policies
+from demonstrations for compliant contact-rich manipulation. In 2026 IEEE/SICE International
+Symposium on System Integration (SII), pages 28–34. IEEE, 2026.
+[10] J. Seo, N. P. S. Prakash, A. Rose, J. Choi, and R. Horowitz. Geometric impedance control on se
+(3) for robotic manipulators. IFAC-PapersOnLine, 56(2):276–283, 2023.
+[11] J. Yu, H. Liu, Q. Yu, J. Ren, C. Hao, H. Ding, G. Huang, G. Huang, Y. Song, P. Cai, et al.
+Forcevla: Enhancing vla models with a force-aware moe for contact-rich manipulation. Advances
+in Neural Information Processing Systems, 38:93409–93439, 2026.
+[12] Z. Zhang, H. Xu, Z. Yang, C. Yue, Z. Lin, H.-a. Gao, Z. Wang, and H. Zhao. Ta-vla: Elu-
+cidating the design space of torque-aware vision-language-action models. arXiv preprint
+arXiv:2509.07962, 2025.
+[13] A. O’Neill, A. Rehman, A. Maddukuri, A. Gupta, A. Padalkar, A. Lee, A. Pooley, A. Gupta,
+A. Mandlekar, A. Jain, et al. Open x-embodiment: Robotic learning datasets and rt-x models:
+Open x-embodiment collaboration 0. In 2024 IEEE International Conference on Robotics and
+Automation (ICRA), pages 6892–6903. IEEE, 2024.
+[14] O. Mees, D. Ghosh, K. Pertsch, K. Black, H. R. Walke, S. Dasari, J. Hejna, T. Kreiman,
+C. Xu, J. Luo, et al. Octo: An open-source generalist robot policy. In First Workshop on
+Vision-Language Models for Navigation and Manipulation at ICRA 2024, 2024.
+9
+
+
+[15] K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail, M. R. Equi, C. Finn, N. Fu-
+sai, M. Y. Galliker, et al. π0.5: a vision-language-action model with open-world generalization.
+In 9th Annual Conference on Robot Learning, 2025.
+[16] C. Zhang, P. Hao, X. Cao, X. Hao, S. Cui, and S. Wang. Vtla: Vision-tactile-language-action
+model with preference learning for insertion manipulation. Biomimetic Intelligence and Robotics,
+page 100333, 2026.
+[17] Y. Li, H. Jiang, J. Xia, H. Zhang, J. Du, Y. Zhou, J. Zeng, C. Hao, J. Ren, Q. Yu, et al. Forcevla2:
+Unleashing hybrid force-position control with force awareness for contact-rich manipulation.
+arXiv preprint arXiv:2603.15169, 2026.
+[18] M. H. Raibert and J. J. Craig. Hybrid position/force control of manipulators. 1981.
+[19] F. J. Abu-Dakka and M. Saveriano.
+Variable impedance control and learning—a review.
+Frontiers in Robotics and AI, 7:590681, 2020.
+[20] A. Ajoudani, N. Tsagarakis, and A. Bicchi. Tele-impedance: Teleoperation with impedance
+regulation using a body–machine interface. The International Journal of Robotics Research, 31
+(13):1642–1656, 2012.
+[21] S. Calinon, I. Sardellitti, and D. G. Caldwell. Learning-based control strategy for safe human-
+robot interaction exploiting task and robot redundancies. In 2010 IEEE/RSJ International
+Conference on Intelligent Robots and Systems, pages 249–254. IEEE, 2010.
+[22] K. Kronander and A. Billard. Learning compliant manipulation through kinesthetic and tactile
+human-robot interaction. IEEE transactions on haptics, 7(3):367–380, 2013.
+[23] F. J. Abu-Dakka, L. Rozo, and D. G. Caldwell. Force-based variable impedance learning for
+robotic manipulation. Robotics and Autonomous Systems, 109:156–167, 2018.
+[24] T. Z. Zhao, V. Kumar, S. Levine, and C. Finn. Learning fine-grained bimanual manipulation
+with low-cost hardware. arXiv preprint arXiv:2304.13705, 2023.
+[25] C. Chi, Z. Xu, S. Feng, E. Cousineau, Y. Du, B. Burchfiel, R. Tedrake, and S. Song. Diffusion
+policy: Visuomotor policy learning via action diffusion. The International Journal of Robotics
+Research, 44(10-11):1684–1704, 2025.
+[26] J. Seo, N. P. S. Prakash, J. Choi, and R. Horowitz. A comparison between lie group-and lie
+algebra-based potential functions for geometric impedance control. In 2024 American Control
+Conference (ACC), pages 1335–1342. IEEE, 2024.
+[27] M. Pelletier and M. Doyon. On the implementation and performance of impedance control
+on position controlled robots. In Proceedings of the 1994 IEEE International Conference on
+Robotics and Automation, pages 1228–1233. IEEE, 1994.
+[28] K. M. Lynch and F. C. Park. Modern robotics. Cambridge University Press, 2017.
+[29] C. Chi, Z. Xu, C. Pan, E. Cousineau, B. Burchfiel, S. Feng, R. Tedrake, and S. Song. Universal
+manipulation interface: In-the-wild robot teaching without in-the-wild robots. arXiv preprint
+arXiv:2402.10329, 2024.
+[30] R. Cadene, S. Aliberts, F. Capuano, M. Aractingi, A. Zouitine, P. Kooijmans, J. Choghari,
+M. Russi, C. Pascal, S. Palma, et al. Lerobot: An open-source library for end-to-end robot
+learning. arXiv preprint arXiv:2602.22818, 2026.
+[31] S. Butterworth et al. On the theory of filter amplifiers. Wireless Engineer, 7(6):536–541, 1930.
+10
+
+
+Appendix
+A
+Implementation Details
+A.1
+Details for Network Architecture
+CompVLA.
+The model architecture used in our experiments is shown in Figure 1. Our implementa-
+tion is based on the π0 implementation in LeRobot v0.4.3 [30]. Following the original π0 design [4],
+we use PaliGemma as the VLM backbone and a Gemma-based model for the action expert. We add a
+compliance expert with the same architecture as the action expert.
+The action expert predicts the reference TCP twists and gripper commands over the motion-chunk
+horizon T = 25. It takes the robot state, flow time, and noisy action as input. It then applies blockwise
+causal attention to the key-value representations produced by the VLM and outputs a denoising
+vector. During inference, denoising starts from noise and runs for 10 steps. The final TCP twists are
+integrated from the current TCP pose to obtain the reference trajectory.
+The compliance expert predicts the diagonal stiffness and virtual displacement values over the same
+horizon. It uses the VLM context and a TCP trajectory condition. For each timestep, the TCP pose
+is represented by flattening the rotation matrix and concatenating it with the position and gripper
+command, producing a 13-dimensional condition. This condition is inserted into the unused padding
+channels of the noisy compliance input and embedded together with the flow time. The compliance
+expert then applies blockwise causal attention to the VLM key-value representations, following
+the same structure as the action expert, and outputs the denoising vector for stiffness and virtual
+displacement. Together, the predicted TCP twists, gripper commands, stiffness values, and virtual
+displacements instantiate the motion chunk Mt in Eq. (6).
+Training.
+We train the VLM backbone, action expert, and compliance expert jointly with flow
+matching. Let Y a
+t denote the target sequence of TCP twists and gripper commands over the horizon
+T, and let Y c
+t denote the target sequence of diagonal stiffness and virtual displacement values over
+the same horizon. For a target sequence Yt at environment timestep t, we sample Gaussian noise ϵ
+and flow time τ, and define the noisy target as
+˜Yt(τ) = τϵ + (1 −τ)Yt,
+(8)
+where τ = 1 corresponds to noise and τ = 0 corresponds to the data target. Since inference integrates
+from τ = 1 to τ = 0, the target vector field is ϵ −Yt.
+The action expert is trained with the conditional flow matching loss
+La = Eτ∼U(0,1), Y a
+t ∼p(Y a
+t |Ot,l), ϵa∼N (0,I)
+va
+θ( ˜Y a
+t (τ), τ | Ot, l) −(ϵa −Y a
+t )
+
+2
+2
+
+,
+(9)
+where Y a
+t
+= (Vt:t+T −1, gt:t+T −1), Ot represents the multimodal observation, and l denotes the
+language instruction. The compliance expert is trained with
+Lc = Eτ∼U(0,1), Y c
+t ∼p(Y c
+t |Ot,l,Xt:t+T −1), ϵc∼N (0,I)
+vc
+θ( ˜Y c
+t (τ), τ | Ot, l, Xt:t+T −1) −(ϵc −Y c
+t )
+
+2
+2
+
+,
+(10)
+where Y c
+t
+= (kt:t+T −1, dt:t+T −1), and Xt:t+T −1 is the ground-truth TCP trajectory condition
+obtained from the dataset. The final objective is
+L = La + Lc.
+(11)
+All inputs and targets are normalized by the preprocessor during training and unnormalized by
+the postprocessor during inference. We initialize the model weights from the pi0 base checkpoint
+provided through Hugging Face*. The compliance expert is initialized by copying the weights of the
+*https://huggingface.co/lerobot/pi0_base
+11
+
+
+action expert. To better preserve the information in the pretrained checkpoint, we include joint angles
+as auxiliary prediction targets during training, which are subsequently discarded at inference. We
+train CompVLA for 100,000 steps with a batch size of 32 in bfloat16 precision, leveraging gradient
+checkpointing to ensure memory efficiency. Optimization is performed using the AdamW optimizer
+with a peak learning rate of 2.5 × 10−5, which undergoes a warmup phase of 1,000 steps, decays to a
+minimum learning rate of 2.5 × 10−6 over the subsequent 30,000 steps, and remains constant for the
+remainder of the training.
+A.2
+Details for Control
+This section details the practical implementation of the robot control law. For notational simplicity,
+the time subscript t is omitted throughout the following derivations. First, the virtual target pose
+Xv = (Rv, pv) ∈SE(3) is established by deforming the reference pose (R, p) ∈SE(3) using the
+predicted virtual displacement vector d = [dR; dp] ∈R6:
+Rv = R Exp(dR),
+pv = p + Rdp
+(12)
+where Exp(·) denotes the exponential map from R3 to SO(3). Since the virtual displacement compo-
+nents dR and dp are defined entirely within the local TCP frame, the translational displacement is
+mapped to the base frame via the reference rotation matrix R.
+As outlined in Section 4.1, distinct direction-dependent compliance frames are identified for both
+orientation and position tracking. When evaluated within the TCP frame, the orientations of these
+compliance frames relative to the TCP frame are denoted by the rotation matrices ˜RR and ˜Rp,
+respectively. The diagonal stiffness parameters kR and kp provided by CompVLA are defined
+within these respective frames. To control the robot in the task space, the stiffness matrices relative
+to the TCP frame are computed for orientation and position as KR = ˜RRdiag(kR)( ˜RR)⊤and
+Kp = ˜Rpdiag(kp)( ˜Rp)⊤, respectively. These are then represented as a single 6 × 6 block diagonal
+matrix:
+K =
+
+KR
+0
+0
+Kp
+
+=
+ ˜RRdiag(kR)( ˜RR)⊤
+0
+0
+˜Rpdiag(kp)( ˜Rp)⊤
+
+.
+(13)
+For damping, the diagonal parameters cR and cp are defined element-wise from their stiffness
+counterparts as ci = 2√ki. The task-space damping matrix C is then formulated through an identical
+block-wise transformation of these diagonal matrices, yielding CR = ˜RRdiag(cR)( ˜RR)⊤and
+Cp = ˜Rpdiag(cp)( ˜Rp)⊤, which forms the final 6 × 6 block diagonal matrix:
+C =
+
+CR
+0
+0
+Cp
+
+=
+ ˜RRdiag(cR)( ˜RR)⊤
+0
+0
+˜Rpdiag(cp)( ˜Rp)⊤
+
+.
+(14)
+Based on the obtained K and C, the robot is controlled by the generalized spring-damper relationship.
+The resulting task-space wrench F within the TCP frame is then computed as:
+F = −KXe −CVe
+(15)
+where Ve denotes the task-space twist error defined analogously to (2) relative to the virtual target,
+and Xe = [Re; pe] ∈R6 represents the decoupled pose error evaluated in the TCP frame. Specifically,
+the rotational error is defined as Re = Log((Rv)⊤R) ∈R3, and the translational error is given by
+pe = R⊤(p −pv) ∈R3, where Log(·) denotes the logarithmic map from SO(3) to R3. This intrinsic
+geometric formulation on SE(3) ensures that the compliance behavior remains strictly coordinate-free
+and invariant to the choice of the global reference frame.
+Finally, to realize this specification at the actuator level, the joint torque command τ is computed
+by mapping the task wrench through the body Jacobian J(θ), while the robot’s low-level controller
+implicitly compensates for the internal dynamics η(θ, V) defined in (5):
+τ = J⊤(θ)F
+(16)
+where θ denotes the current joint configuration vector. Consequently, the anisotropic stiffness matrices
+establish the desired directional compliance, while tracking the virtual target pose implicitly regulates
+the contact forces, achieving the desired force modulation.
+12
+
+
+B
+Dataset Generation
+B.1
+Data Collection Setup
+Figure 5: Teleop Data Collection Setup.
+Our data collection setup is illustrated in Figure 5.
+The platform consist of two 7-Dof Franka Re-
+search 3 (FR3) arms which left arm act as a leader
+and right arm acts as a follower. The operator tele-
+operates the arm by moving the leader robot. The
+follower robot mimics the joint position of the
+leader robot with slight compliance. To reduce the
+difficulty of teleopration, haptic feedback is given
+to the leader robot so the operator can respond to
+the contact made in the follower robot. Figure 5
+shows the operator teleoperating the system to
+collect data for Erase Board task.
+B.2
+Learning K from Demonstration
+To extract the time-varying diagonal stiffness kt = [kR
+t ; kp
+t ] from the human demonstrations, we
+provide the concrete formulation of the force-dependent heuristic outlined in Section 4.1. While
+classical variable impedance learning typically estimates stiffness based on electromyography (EMG)
+signals [20] or demonstration variance [21, 22], our approach, similar to ACP [7], dynamically
+modulates the stiffness along the axis of the applied force or torque based on its filtered magnitude at
+each time step t. Specifically, the time-varying stiffness klow(|ft|) is computed via piecewise linear
+interpolation according to the following formulation:
+klow(|ft|) =
+
+
+
+
+
+kmax,
+|ft| < fmin
+kmax −(kmax −kmin) |ft|−fmin
+fmax−fmin ,
+fmin ≤|ft| ≤fmax
+kmin,
+|ft| > fmax
+(17)
+where |ft| denotes the magnitude of the filtered interaction force (for translation) or torque (for
+rotation) at time t. These four bounding parameters are configured independently for each space;
+specifically, we set (kmax, kmin, fmin, fmax) to (500 N/m, 200 N/m, 1 N, 15 N) for the translational
+space and (30 Nm/rad, 10 Nm/rad, 0.1 Nm, 2.5 Nm) for the rotational space. This yields eight hyper-
+parameters in total, successfully accommodating the distinct physical scales of forces and torques
+across different tasks. Finally, the diagonal stiffness vectors kp
+t and kR
+t are constructed by assigning
+the modulated klow(|ft|) to the specific axis of the applied wrench, while the remaining unaligned
+axes are maintained at kmax, thereby fully determining the complete compliance profile kt = [kR
+t ; kp
+t ].
+B.3
+Dataset Conversion from Raw Data
+During human demonstrations, we record multiple modalities from the follower robot at their
+respective sampling rates: joint angles (100 Hz), force/torque (F/T) measurements (100 Hz), gripper
+widths (15 Hz), and three camera views (30 fps). To align these asynchronous streams, all modalities
+are synchronized using global timestamps and downsampled to a uniform frequency of 10 Hz. For
+continuous states, including joint angles, gripper widths, and F/T signals, synchronization is achieved
+via time-aware linear interpolation. For the video streams, downsampling is performed by selecting
+the frame closest to each synchronized timestamp. Utilizing the synchronized joint states, the Tool
+Center Point (TCP) poses and twists are computed via forward kinematics.
+The F/T signals undergo a multi-stage preprocessing pipeline to ensure signal quality. First, they
+are processed with gravity and inertial force compensation. Subsequently, the measurements are
+transformed from the F/T sensor frame to the TCP frame using the Adjoint transformation matrix
+Ad(T TCP
+S
+), where T TCP
+S
+∈SE(3) denotes the homogeneous transformation matrix representing
+the spatial calibration offset from the sensor frame to the TCP frame. To ensure smoothness, the
+13
+
+
+transformed signals are filtered using a Butterworth low-pass filter [31], followed by magnitude
+clipping to limit excessively large force or torque targets. Finally, after compiling the comprehensive
+dataset statistics, the processed streams are converted into the LeRobot [30] format and saved for
+policy training.
+C
+Real-world Experiments Visualization
+In this section, we present key frames of the experimental tasks to illustrate the detailed motion.
+Figure 6: Key frames of tasks used for training and evaluation.
+14
