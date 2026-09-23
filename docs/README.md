@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-22</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-23</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 27 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>15</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-22 19:19:34 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-23 19:21:45 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-22 日报精选27篇，精读15篇速读12篇，聚焦VLA与世界模型的高效优化与强化学习。最值得看两篇满分精读：Prioritized Rollouts 提升世界模型VLA策略优化效率，Imagine-RL 用残差置信引导跨注意力增强VLA强化学习。普通读者可先读这两篇，再顺带浏览速读中的抓取与持续适应工作。</p>
+<p>2026-09-23 日报完成 19 篇筛选（精读 7、速读 12），重点集中在具身智能与视觉-语言-动作模型方向。最值得看的是两篇 9.0 分精读《MaskVLA》和《MachEmbodied-U0》，前者用视觉掩码缓解轨迹过拟合，后者统一理解与生成。普通读者可先从这两篇入手，再按兴趣补看速读中的灵巧操作与世界模型工作。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">15 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Prioritized Rollouts for Efficient World Model-based Vision-Language-Action Policy Optimization">Prioritized Rollouts for Efficient World Model-based Vision-Language-Action Policy Optimization</span></li><li><span class="dpr-home-dashboard-paper-title" title="Imagine-RL: Residual-Confidence-Guided Cross-Attention for World-Model-Augmented VLA Reinforcement Learning">Imagine-RL: Residual-Confidence-Guided Cross-Attention for World-Model-Augmented VLA Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="What Matters in Designing World Action Models: An Empirical Study">What Matters in Designing World Action Models: An Empirical Study</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MaskVLA: Visual Masking Against Trajectory Overfitting of Vision-Language-Action Model">MaskVLA: Visual Masking Against Trajectory Overfitting of Vision-Language-Action Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="MachEmbodied-U0: Unified Understanding and Generation Model for Embodied Intelligence">MachEmbodied-U0: Unified Understanding and Generation Model for Embodied Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="VisForce: Visual Grounding of Current and Desired Forces for Goal-Conditioned Dexterous Manipulation">VisForce: Visual Grounding of Current and Desired Forces for Goal-Conditioned Dexterous Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>13</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Grasping by interconnection: robust closing motions from coarse object templates">Grasping by interconnection: robust closing motions from coarse object templates</span></li><li><span class="dpr-home-dashboard-paper-title" title="EmbodiedMind: Adaptive Data Curation and Prefix-Tree Reinforcement Learning for Efficient Embodied Intelligence">EmbodiedMind: Adaptive Data Curation and Prefix-Tree Reinforcement Learning for Efficient Embodied Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="FAN: Foresight Action Normalization for Continual Adaptation of Vision-Language-Action Models">FAN: Foresight Action Normalization for Continual Adaptation of Vision-Language-Action Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="EgoWild2Dex: Learning Dexterous Robotic Manipulation from In-the-Wild Human Experience">EgoWild2Dex: Learning Dexterous Robotic Manipulation from In-the-Wild Human Experience</span></li><li><span class="dpr-home-dashboard-paper-title" title="When Does Touch Matter? Charting the Vision-Interaction Gap in Cluttered Dexterous Grasping">When Does Touch Matter? Charting the Vision-Interaction Gap in Cluttered Dexterous Grasping</span></li><li><span class="dpr-home-dashboard-paper-title" title="NeuIDO: Neural Intrinsic Dynamics Operator for Physics-Informed 4D World Models">NeuIDO: Neural Intrinsic Dynamics Operator for Physics-Informed 4D World Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>9</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>8</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>4</strong></span></div>
 </section>
 </div>
 
