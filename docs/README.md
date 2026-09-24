@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-23</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-24</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 19 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-23 19:21:45 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-24 19:09:28 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-23 日报完成 19 篇筛选（精读 7、速读 12），重点集中在具身智能与视觉-语言-动作模型方向。最值得看的是两篇 9.0 分精读《MaskVLA》和《MachEmbodied-U0》，前者用视觉掩码缓解轨迹过拟合，后者统一理解与生成。普通读者可先从这两篇入手，再按兴趣补看速读中的灵巧操作与世界模型工作。</p>
+<p>2026-09-24日报共筛出19篇、精读7篇，视觉-语言-动作与灵巧操作成为今日最亮眼方向。最值得看两篇9分精读：BEE用视觉-语言-动作模型做干预自适应真实世界强化学习，LiMA用异步扩散把长时想象接到实时灵巧操作。普通读者可先读这两篇，再按兴趣从触觉演示、接触速度控制、全直线手指手内操作等8分速读切入。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -81,9 +81,9 @@
     <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MaskVLA: Visual Masking Against Trajectory Overfitting of Vision-Language-Action Model">MaskVLA: Visual Masking Against Trajectory Overfitting of Vision-Language-Action Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="MachEmbodied-U0: Unified Understanding and Generation Model for Embodied Intelligence">MachEmbodied-U0: Unified Understanding and Generation Model for Embodied Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="VisForce: Visual Grounding of Current and Desired Forces for Goal-Conditioned Dexterous Manipulation">VisForce: Visual Grounding of Current and Desired Forces for Goal-Conditioned Dexterous Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="BEE: Intervention-Adaptive Real-World Reinforcement Learning with Vision-Language-Action Models">BEE: Intervention-Adaptive Real-World Reinforcement Learning with Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="LiMA: Bridging Long-term Imagination to Real-time Dexterous Manipulation via Asynchronous Diffusion">LiMA: Bridging Long-term Imagination to Real-time Dexterous Manipulation via Asynchronous Diffusion</span></li><li><span class="dpr-home-dashboard-paper-title" title="2nd Place Solution to the HANDS 2026 Workshop Challenge-Dexterous Grasp Motion Track: Single-Shot Trajectory Warping for Grasp Motion Generation">2nd Place Solution to the HANDS 2026 Workshop Challenge-Dexterous Grasp Motion Track: Single-Shot Trajectory Warping for Grasp Motion Generation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="EgoWild2Dex: Learning Dexterous Robotic Manipulation from In-the-Wild Human Experience">EgoWild2Dex: Learning Dexterous Robotic Manipulation from In-the-Wild Human Experience</span></li><li><span class="dpr-home-dashboard-paper-title" title="When Does Touch Matter? Charting the Vision-Interaction Gap in Cluttered Dexterous Grasping">When Does Touch Matter? Charting the Vision-Interaction Gap in Cluttered Dexterous Grasping</span></li><li><span class="dpr-home-dashboard-paper-title" title="NeuIDO: Neural Intrinsic Dynamics Operator for Physics-Informed 4D World Models">NeuIDO: Neural Intrinsic Dynamics Operator for Physics-Informed 4D World Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Touch2Robot: Robot Touch in the Human Demonstration Loop">Touch2Robot: Robot Touch in the Human Demonstration Loop</span></li><li><span class="dpr-home-dashboard-paper-title" title="Relative Contact Velocity-Controlled Hand-Object Mechanism for Dexterous Tool Manipulation">Relative Contact Velocity-Controlled Hand-Object Mechanism for Dexterous Tool Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="The Cartesian Hand: In-Hand Manipulation with All-Linear Fingers">The Cartesian Hand: In-Hand Manipulation with All-Linear Fingers</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>8</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>6</strong></span></div>
 </section>
 </div>
 
