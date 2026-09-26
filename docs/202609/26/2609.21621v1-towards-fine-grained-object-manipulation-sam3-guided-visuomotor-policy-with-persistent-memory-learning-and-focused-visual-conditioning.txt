@@ -1,0 +1,871 @@
+Towards Fine-Grained Object Manipulation: SAM3-Guided
+Visuomotor Policy with Persistent Memory Learning and
+Focused Visual Conditioning
+Haolong Meng1,2, Fangbo Qin∗1,2,4, Mengchen Bai1, Houwu Wang1, Cirong Liu3,4, Shan Yu1,2,4
+Abstract— Fine-grained object (FO) manipulation requires
+robots to distinguish a specified FO from visually similar
+objects and execute actions reliably despite scene distractors.
+However, scene-level visual conditioning lacks explicit object
+selection, while category-level guidance cannot reliably distin-
+guish FOs within the same category. We present a SAM3-guided
+visuomotor framework that addresses these challenges through
+persistent object memory and focused visual conditioning. First,
+we introduce FO Memory-driven SAM3 (FOM-SAM3), which
+learns reusable FO memory tokens from limited multi-view
+registration images while keeping SAM3 fully frozen. Through
+one-vs-rest learning, these tokens encode persistent memories
+for localizing target FOs and rejecting similar alternatives,
+which can be stored in a memory bank. Second, we propose
+Focused Spatial-Appearance Encoding (FSAE), which combines
+in-FO local appearance features with explicit bounding-box
+coordinates to condition action policies including Diffusion Pol-
+icy (DP) and Action Chunking with Transformers (ACT). The
+effectiveness of the proposed FOM-SAM3 was validated on the
+FO-30 dataset comprising 30 physical objects across four coarse
+categories. Across three real-robot FO manipulation tasks,
+our FOM-SAM3-guided policies demonstrated the robustness
+against distractors, discrimination ability among similar FOs,
+and extendibility to new FOs. Videos and code are available at
+Project Page.
+I. Introduction
+Visuomotor policies, which map visual and proprioceptive
+sensing to flexible actions, provide a key foundation for
+robotic manipulation [1]. Imitation learning enables transfer-
+ring human demonstrations to robot skills efficiently. The pi-
+oneering works studied action modeling and visual represen-
+tation [2]–[4], paving the way to skillful object manipulation.
+Action Chunking with Transformers (ACT) [5] and Diffusion
+Policy (DP) [6] are two representative visuomotor policies
+and have achieved widespread adoption in recent years. The
+former combines action chunking with temporal ensembling
+to mitigate compounding errors and enable learning smooth
+manipulation from limited demonstrations. The latter models
+continuous action sequences through conditional denoising,
+capturing multimodal action distributions. The following
+This work was supported by the Brain Science and Brain-like In-
+telligence Technology - National Science and Technology Major Project
+(2025ZD0219300) and the Beijing Nova Program (202604841208). Corre-
+sponding author: F. Qin; Email: fangbo.qin@ia.ac.cn
+1Institute of Automation, Chinese Academy of Sciences, Beijing 100190,
+China. 2School of Artificial Intelligence, University of Chinese Academy of
+Sciences, Beijing 100049, China. 3Center for Excellence in Brain Science
+and Intelligence Technology, Chinese Academy of Sciences, Shanghai
+200031, China. 4State Key Laboratory of Brain Cognition and Brain-Inspired
+Intelligence Technology, Shanghai 200031, China
+Fig. 1.
+Fine-grained object (FO) manipulation with FOM-SAM3 guided
+policy. In contrast to category-level object manipulation, FO manipulation
+requires identifying and focusing on an object with specified attributes,
+category, brand, and model. The current methods using scene- and category-
+level visual conditioning are unable to handle FO manipulation tasks. Our
+framework leverages SAM3 for FO-level visual guidance, which can be
+extended to different FOs belonging to the same coarse category via persistent
+memory learning.
+works further extended these policies through 3D vision [7]–
+[9], model pruning [10], multi-arm interdependencies [11],
+and data scaling [12] among others, to improve precision,
+efficiency, and generalization ability.
+In this work, we address an underexplored challenge
+in visuomotor policy learning: Fine-Grained Object (FO)
+manipulation, which has significant value across various real-
+world applications. Here, the definition of FO is a target
+object defined by a set of stable, observable, fine-grained
+attributes, such as brand, model, color, pattern, or local
+shape, which distinguish it from other objects within the
+same coarse-grained category. As shown in Fig. 1, when
+multiple similar objects occur in the same scene, the robot
+needs to pick out the one defined with a fine-grained de-
+scription. Common visuomotor policies do not consider the
+multi-target issue, and the robot relies solely on scene-level
+observations, without any object selection mechanism. S2-
+Diffusion [13] introduced Grounded-SAM2 [14] to provide
+category-level object masks as visual guidance for over-
+instance generalization, which can filter category-irrelevant
+distracting objects. However, how to manipulate the target
+FO while minimizing the confusion and distraction from sim-
+ilar co-occurring objects is still a challenging open problem
+for on-device visuomotor policies.
+A. Related Works
+1) Visual Encoders for DP and ACT: Visual encoders
+play a crucial role in visuomotor policies by extracting task-
+relevant information from environmental observations [15],
+arXiv:2609.21621v1  [cs.RO]  18 Sep 2026
+
+
+[16]. The original DP and ACT employ ResNet-18 backbones
+for image encoding, while subsequent studies explore richer
+visual representations with improved geometric precision
+and generalization, including LoRA-adapted DINOv2 fea-
+tures [17], cross-domain visual alignment [18], 3D point-
+cloud encoders [7], [8], [19], [20], RGB-D-based lifting
+of visual features into 3D scene representations [9], and
+task-conditioned scene representation modulation [21]. Nev-
+ertheless, these methods condition policies on scene- or
+workspace-level representations without explicitly decom-
+posing observations into task-relevant object instances. This
+may leave object features entangled with irrelevant scene
+content, potentially limiting robustness to distractors and
+generalization across layouts.
+2) SAM-Guided Visuomotor Policies: The SAM family
+of visual foundation models [22]–[24] supports visuomotor
+learning through transferable visual features and promptable
+segmentation. At the feature level, segmentation pretrain-
+ing provides visual priors that can be adapted to robotic
+observations. SAM-E [25] transfers the SAM encoder’s vi-
+sual priors to multi-view manipulation through parameter-
+efficient fine-tuning. SAM2Act [26] combines SAM2 features
+with multi-resolution upsampling to support precise action
+localization. At the representation level, SAM segmentation
+masks facilitate the selection of action-relevant information.
+GROOT [27] combines SAM proposals with DINOv2 fea-
+tures to establish object correspondences. HODOR [28] uses
+SAM-based segmentation to construct hierarchical represen-
+tations of scenes, objects, and parts. Lan-O3DP [29] projects
+SAM masks onto point clouds, focusing policy observations
+on task-relevant objects and reducing interference from back-
+ground clutter. 𝑆2-Diffusion [13] combines Grounded-SAM2
+masks with monocular depth to preserve task-relevant spa-
+tial and semantic information while suppressing appearance
+variations, facilitating skill transfer across instances within
+the same category. Similarly, Ding et al. [30] use SAM3
+to segment target objects and the robot gripper, rendering
+these entities with fixed semantic colors and incorporating
+monocular depth to construct task-aware observations that are
+robust to appearance shifts.
+Although SAM can be utilized to enhance the visual
+conditioning of action policies, it still lacks fine-grained
+concept prompting ability. SAM3’s concept prompt is limited
+to noun phrases and common modifiers. Lightweight adapters
+and fine-tuning can improve SAM’s performance on spe-
+cific segmentation tasks [31], [32]. Prompt tuning optimizes
+learnable prompts while keeping pretrained model weights
+frozen [33]. PTSAM [34] learns prompt tokens to special-
+ize SAM for specific segmentation tasks, with additional
+encoder prompt tuning mitigating domain shifts. M2C [35]
+optimizes concept embeddings within frozen SAM3 using
+a few annotated images. However, these methods primarily
+focus on semantic- or concept-level adaptation and have not
+explicitly explored mechanisms for enhancing discrimination
+among similar FOs while preserving the model’s original
+segmentation capabilities and enabling sustained reuse of the
+adapted representations across subsequent tasks.
+B. Contributions
+First, we introduce a novel FOM-SAM3-guided visuomotor
+framework for manipulating specified FOs in a familiar scene.
+By registering new FOs in a persistent memory bank, the
+framework enables a shared action policy to be reused across
+different FOs within the same coarse category.
+Second, we propose a persistent FO memory learning
+mechanism that keeps SAM3 fully frozen. Through one-vs-rest
+learning on randomly composed FO images, this mechanism
+adapts concept-level prompt tokens into FO-specific memory
+tokens for persistent storage and retrieval.
+Third, we design Focused Spatial-Appearance Encoding
+(FSAE) to connect FOM-SAM3 with the action policy. FSAE
+combines explicit bounding-box coordinates with implicit
+appearance features extracted within the target FO mask,
+providing visual states for FO-centric action guidance.
+II. Method
+A. Problem Definition
+We picture an application paradigm: a robot is deployed
+in a specific scenario with learned manipulation skills and
+gradually becomes familiar with the FOs it encounters, such
+as “red Wontae strawberry juice can”. Each familiar FO can
+be registered as a persistent memory and indexed by an FO
+ID. During manipulation, the corresponding FO Memory is
+retrieved and fed to SAM3 as prompt tokens, allowing the
+robot to recognize the intended FO across different scenes
+without external explicit per-image prompts. The first problem
+is how to persistently specify and localize a registered FO with
+SAM3 [24]. Given an RGB frame 𝐼and the FO Memory
+Tokens 𝑀𝑖
+𝐹𝑂of the 𝑖-th FO, FOM-SAM3, denoted as S,
+provides the mask 𝑌𝑖, bounding box 𝐵𝑖, and corresponding
+SAM3 visual feature map 𝐻, as expressed by
+
+𝑌𝑖, 𝐵𝑖, 𝐻
+
+= S  𝐼; 𝑀𝑖
+𝐹𝑂
+ .
+(1)
+When more than one FO exists, FOM-SAM3 can run in
+batch mode and infer {𝑌𝑖} and {𝐵𝑖} from a batch of FO
+Memory Tokens {𝑀𝑖
+𝐹𝑂} (𝑖= 𝑖1, 𝑖2, . . . , 𝑖𝑁). In most cases,
+an action refers to 𝑁= 2 FOs: one is the active object that
+the gripper contacts, and the other is the passive object that
+interacts with the active one.
+The second problem is the FO-centric visual conditioning
+mechanism bridging FOM-SAM3 and the action policy 𝜋.
+Since the preceding FOM-SAM3 has provided FO masks and
+rich visual features, they can be leveraged as the informative
+inputs of the encoder E to obtain the spatial-appearance
+representation of each FO in a camera view,
+𝑣𝑖= E  𝐻,𝑌𝑖, 𝐵𝑖 .
+(2)
+To enable 3D manipulation, this work adopts a compact
+dual-view vision setup. The cameras 𝑐1 and 𝑐2 provide
+a static third-person view and an active first-person view,
+respectively. Thus, when two FOs are involved, the action
+policy is conditioned on four FO representations and the robot
+state 𝑟, as given by
+𝐴𝑡= 𝜋 𝑣𝑖1,𝑐1
+𝑡
+, 𝑣𝑖2,𝑐1
+𝑡
+, 𝑣𝑖1,𝑐2
+𝑡
+, 𝑣𝑖2,𝑐2
+𝑡
+, 𝑟𝑡, 𝑧𝑡
+,
+(3)
+
+
+Fig. 2. Persistent FO memory learning for SAM3.
+where 𝐴𝑡∈R𝑇𝑎×𝐷𝑎is the action chunk. For DP [6], 𝑧𝑡∼
+N (0, 𝐼) initializes the noisy action sequence; for ACT [5], 𝑧𝑡
+is the latent style variable, set to zero during deployment. For
+brevity, the history input to the policy is omitted in Eq. (3).
+B. Persistent FO Memory Learning for SAM3
+The original SAM3 [24] is a powerful promptable foun-
+dation model, which takes a simple noun phrase or image
+exemplar as a concept prompt. A generic concept prompt
+describes a semantic object concept, such as “green can” or
+“cup lid”, but may correspond to multiple visually similar
+objects. The memory bank of SAM3 in video object tracking
+stores transient spatial-temporal tracking memory. Unlike this
+episode-local tracking memory, FO Memory persists across
+scenes and represents which target FO should be retrieved.
+Similar memory-based temporal propagation is also used in
+SAM2 [23].
+Inspired by the human ability to memorize and recognize
+familiar FOs, we propose a persistent FO memory learning
+mechanism built upon a frozen SAM3. In essence, SAM3
+inference is conditioned on internal prompt tokens, which
+interact extensively with the fusion encoder and decoders
+of SAM3. The prompt tokens can be temporarily generated
+from an external text prompt by the pretrained text encoder,
+or learned from limited data as a persistent memory of a
+specific FO. Therefore, we define the persistent FO memory
+𝑀𝑖
+𝐹𝑂as a set of internal prompt tokens that directly condition
+the SAM3 modules to segment the memorized FO, while
+excluding similar FOs belonging to the same concept.
+As shown in Fig. 2, to learn the effective memory of an FO,
+we first obtain its concept-level prompt tokens 𝐶𝑖
+𝑡𝑒𝑥𝑡∈R𝑐×256
+using a noun phrase and the frozen text encoder of SAM3. Then
+the memory tokens are formed by a linear transformation of
+the concept-level prompt tokens, namely,
+𝑀𝑖,𝑘
+𝐹𝑂=
+(
+𝑊𝑖
+𝐹𝑂𝐶𝑖,𝑘
+𝑡𝑒𝑥𝑡,
+if 𝑚𝑘= 0,
+𝐶𝑖,𝑘
+𝑡𝑒𝑥𝑡,
+if 𝑚𝑘= 1,
+(4)
+where 𝑊𝑖
+𝐹𝑂∈R256×256 is a learnable transformation matrix,
+which is initialized as an identity matrix. 𝑚𝑘is the padding
+mask that controls the validity of the 𝑘-th token.
+Since SAM3 already possesses strong generalizable priors
+on objectness, shapes, and semantics [24], learning 𝑊𝑖
+𝐹𝑂
+mainly aims to distinguish different fine-grained objects within
+the same concept, such as “red Wontae strawberry juice can”
+and “red CocaCola soda can”. The learning for each FO is
+realized in a one-vs-rest (OvR) paradigm. For the 𝑖-th FO,
+while freezing the entire SAM3 and the concept-level tokens
+𝐶𝑖
+𝑡𝑒𝑥𝑡, we treat only the 𝑖-th FO as the positive target and all
+remaining FOs as negatives, with same-category SimilarFOs
+explicitly included as hard negatives. 𝑊𝑖
+𝐹𝑂is optimized via
+gradient backpropagation.
+Fine-grained registration requires both accurate localization
+when the queried FO is present and rejection when it is absent.
+The loss function is therefore constructed as
+L𝑖
+𝐹𝑂𝑀= L𝑖
+𝑝𝑟𝑒𝑠𝑒𝑛𝑡+ 𝜆L𝑖
+𝑎𝑏𝑠𝑒𝑛𝑡,
+(5)
+where L𝑖
+𝑝𝑟𝑒𝑠𝑒𝑛𝑡is calculated when the 𝑖-th FO is present,
+mainly to guarantee the detection and segmentation accuracy.
+On the contrary, L𝑖
+𝑎𝑏𝑠𝑒𝑛𝑡is calculated when the 𝑖-th FO
+is absent, mainly to reject the remaining FOs, especially
+SimilarFOs. L𝑖
+𝑝𝑟𝑒𝑠𝑒𝑛𝑡contains all the original loss items used
+in SAM3 training [24]. L𝑖
+𝑎𝑏𝑠𝑒𝑛𝑡contains only the original
+presence token loss used in SAM3 training. The weight 𝜆is
+set to 0.1 so that absent-target rejection serves as an auxiliary
+constraint without dominating the positive localization and
+segmentation objectives. The token sequence 𝑀𝑖
+𝐹𝑂given by
+the learned 𝑊𝑖
+𝐹𝑂is stored as persistent FO memory in an FO
+memory bank.
+The dataset for FO memory learning contains multiple FOs
+that appear in a specific scenario, which can be collected in
+a cumulative manner. Each time a new FO is involved in
+the current scenario, we simply capture tens of RGB frames
+of this FO in a pure background from various perspectives.
+The FO images can be automatically annotated by foreground
+segmentation. With the single-FO images and their masks, we
+can further synthesize multi-FO scenes using random copy-
+paste compositing.
+C. Focused Spatial-Appearance Encoding
+The condition of the visuomotor policy should be focused
+on target FOs and not distracted by irrelevant objects or
+background changes. We propose a compact representation
+that concentrates on the spatial and appearance states of target
+FOs, as illustrated in Fig. 3.
+The explicit spatial state is represented by the normalized
+bounding box 𝐵𝑖= [𝑐𝑖
+𝑥, 𝑐𝑖
+𝑦, 𝑤𝑖, ℎ𝑖]., which reflects the pose,
+
+
+Fig. 3. FOM-SAM3 guided policy with focused spatial-appearance encoding. Two FSAE versions are designed for DP and ACT, respectively. Here, SSP and
+TP stand for spatial softmax pooling and token projection, respectively.
+scale, and shape of the FO. The appearance state is represented
+by the in-FO features 𝐻𝑖
+𝑖𝑛𝐹𝑂from SAM3’s feature pyramid
+representation, which retain local visual cues associated with
+object appearance, viewpoint, and manipulation state. The
+inside-FO features are obtained by
+𝐻𝑖
+𝑖𝑛𝐹𝑂= Resize  Crop  𝐻⊙𝑌𝑖, 𝐵𝑖 ,
+(6)
+where ⊙is the Hadamard product. Namely, we crop the
+masked FPN feature map within the box 𝐵𝑖, then resize it
+to a unified resolution. In implementation, the crop-and-resize
+operation is realized using ROIAlign on the FPN feature map
+and the aligned mask. In this work, the unified resolution
+is 16 × 16, while the resolutions of the input image and
+FPN feature map are 336 × 336 and 24 × 24, respectively.
+Thus, 𝐻𝑖
+𝑖𝑛𝐹𝑂∈R16×16×256 encodes the appearance cues
+as an aligned feature map for arbitrarily-shaped FOs. The
+two components serve complementary roles: 𝐵𝑖explicitly
+describes where the FO is in the current view, while 𝐻𝑖
+𝑖𝑛𝐹𝑂
+describes its local visual state. Together, they form the focused
+spatial-appearance representation supplied to the action policy.
+D. Visual Conditioning for DP and ACT
+The proposed FSAE is compatible with the two represen-
+tative visuomotor policy models DP [6] and ACT [5]. The
+DP with the CNN structure utilizes a feature vector as the
+condition. The ACT with the Transformer structure utilizes a
+sequence of tokens as the condition. Accordingly, FSAE uses
+the same spatial-appearance information but converts it into
+policy-specific forms.
+For DP, we project 𝐻𝑖
+𝑖𝑛𝐹𝑂from 256 channels to 16 channels
+as e
+𝐻𝑖
+𝑖𝑛𝐹𝑂, then apply spatial softmax pooling (SSP) to obtain
+one spatial keypoint from each channel. Spatial softmax
+provides a compact way to convert convolutional feature
+maps into spatial keypoints for visuomotor learning [36]. The
+resulting 16 keypoints and the bounding box form the DP
+condition vector:
+𝑣𝑖
+DP = Concat   SSP( e
+𝐻𝑖
+𝑖𝑛𝐹𝑂), 𝐵𝑖.
+(7)
+For ACT, we pool 𝐻𝑖
+𝑖𝑛𝐹𝑂to the 8×8 resolution, then project
+it to 512-D as the appearance embeddings { ¯𝐻𝑖,𝑘
+𝑖𝑛𝐹𝑂}𝑘=1:64, to
+align with the token dimension of ACT [5]. Alongside, we
+project 𝐵𝑖from 4-D to 512-D as the spatial embedding ¯𝐵𝑖.
+The ACT visual tokens are formed by the sum of appearance
+embeddings and the spatial embedding, as given by
+𝑣𝑖
+ACT =
+n
+¯𝐻𝑖,𝑘
+𝑖𝑛𝐹𝑂+ ¯𝐵𝑖o
+𝑘=1:64 .
+(8)
+The execution pipeline of the FOM-SAM3 guided visuomo-
+tor policy is summarized below. First, a structured command
+is sent to the robot, for example, “Action: DP Collect Can,
+Active FO: red Wontae strawberry juice can, Passive FO: white
+plastic basket”. The IDs of the active and passive FOs are used
+to retrieve their FO Memory Tokens from the FO memory
+bank. Second, the FO Memory Token sequences for the two
+target FOs are assigned to prompt SAM3. If the two FOs are
+detected in the dual-view images, the segmentation results
+are used to initialize video object tracking. If tracking fails,
+the FO memory-driven segmentation is rerun to relocalize
+the FOs. Third, the FO masks, boxes, and SAM3 features are
+fed to FSAE to obtain the policy conditions. The dual-view
+conditions of two FOs along with the robot state, are used to
+generate a new action chunk.
+III. Experiments
+A. FOM-SAM3 Learning and Evaluation
+1) FO-30 Dataset: We constructed the FO-30 dataset from
+30 physical FOs spanning four coarse categories, including
+can, cup, lid, and box. For each FO, we used a cellphone camera
+to casually capture up to 60 training images of it from various
+viewpoints on a plain background, then automatically obtained
+the mask annotations with the foreground cutout method. The
+test dataset was built with the robot camera and randomly
+placed FOs, which comprises FO-30-S, with 600 standard test
+images, and FO-30-C, with 400 challenging test images. The
+former has ∼2 FOs per image on average. The latter has ∼3
+FOs per image on average and exhibits more occlusion cases.
+All the images have the 504×504 resolution. Therefore, the test
+and training data differ in cameras, backgrounds, and clutter
+degrees, mainly to study FOM-SAM3’s performance across
+domains in a familiar scenario.
+2) Learning Details: For each FO, we optimized the
+objective in Eq. (5) with AdamW using a learning rate of 10−4,
+weight decay of 0.1, gradient clipping at 1.0, batch size of 8,
+and a maximum of 30 epochs. Each training epoch contained
+320 randomly composed images: 256 target-present scenes
+
+
+Fig. 4.
+FO segmentation results on the FO-30 test set with the original SAM3 text prompting and the proposed FOM-SAM3. The red text indicates that the
+target FO is absent in the image.
+TABLE I
+Comparison of FO Perception Performance (%).
+Method
+mIoU↑
+Recall@0.5↑
+Prec@0.5↑
+Sim. FPR↓
+FO-30-S: Standard
+SAM3 Text Prompt [24]
+70.18
+71.85
+76.30
+35.46
+Text-Token Opt. [33]
+84.77
+86.83
+78.03
+34.63
+PTSAM [34]
+68.22
+69.79
+78.32
+29.00
+M2C [35]
+84.85
+86.99
+78.12
+34.80
+FOM-SAM3 (Ours)
+93.04
+94.87
+93.47
+13.29
+FO-30-C: Challenge
+SAM3 Text Prompt [24]
+57.46
+59.06
+53.66
+35.87
+Text-Token Opt. [33]
+68.84
+70.89
+57.40
+34.73
+PTSAM [34]
+53.19
+54.70
+58.06
+31.30
+M2C [35]
+69.63
+71.73
+57.27
+34.90
+FOM-SAM3 (Ours)
+83.25
+85.32
+87.00
+17.03
+and 64 target-absent. The learning time was ∼15 minutes on
+our NVIDIA RTX 5090 GPU. scenes.
+3) Evaluation Metrics: Each test image was evaluated
+against all 30 FO identities, yielding30,000 image–FO queries.
+FO-30-S contains 1,268 FO-present and 16,732 FO-absent
+queries, while FO-30-C contains 1,192 FO-present and 10,808
+FO-absent queries. For the 2,460 FO-present queries, we
+report mIoU, Recall@0.5, and Prec@0.5 using a mask IoU
+threshold of 0.5. Among the 27,540 FO-absent queries, we
+identify SimilarFO-negative queries, where the queried FO is
+absent but at least one SimilarFO from the same predefined
+group is present. We report the SimilarFO false-positive rate
+(Sim. FPR) as the percentage of these queries that produce
+an accepted prediction under SAM3’s default prediction
+threshold. This metric evaluates the rejection ability of visually
+similar FOs.
+4) Comparison Results on FO Perception Performance:
+Based on SAM3, we compared FO Memory Learning with
+SAM3’s Original Text Prompt [24], Text-Token Optimiza-
+tion [33], PTSAM [34], and M2C [35]. Table I shows
+that FOM-SAM3 achieved the best performance on all four
+metrics in both test sets. On FO-30-S, it obtained 93.04%
+mIoU, 94.87% Recall@0.5, and 93.47% Prec@0.5, while
+reducing the SimilarFO FPR to 13.29%. On FO-30-C, the
+corresponding results were 83.25%, 85.32%, 87.00%, and
+17.03%. These results demonstrate more reliable localization
+and discrimination ability when facing visual distractors and
+similar FOs. Figure 4 provides representative comparisons
+with SAM3’s Original Text Prompt for localization, SimilarFO
+discrimination, and absent-query rejection. The inference
+times of the Original Text Prompt-driven and preloaded FO
+Memory-driven modes were 48.18 ± 4.11 ms and 43.26 ±
+5.17 ms, respectively, showing that preloaded FO Memory also
+reduced online perception latency.
+B. FO Manipulation Experiments with Real Robot
+1) Platform and Tasks: As shown in Fig. 5, we used
+a single-arm AgileX PiPER-X manipulation setup, with a
+second PiPER-X arm serving only as a static camera mount.
+Two Intel RealSense D405 cameras provided an active first-
+person view and a static third-person view. For better real-time
+performance, raw camera frames were resized to 336 × 336.
+Demonstrations and policy inference used a 10 Hz loop
+frequency, while the online action published interpolated robot
+commands at 50 Hz. We evaluated the action policies on three
+tasks: Collect Can, Push Box, and Lid Cup, and collected 120
+human demonstrations per task.
+2) Imitation Learning Details: For our FOM-SAM3-guided
+DP, the two-FO visual states from two views formed a 144-
+D visual condition. Together with the 20-D robot pose and
+gripper state, they formed a 164-D observation condition,
+which is further concatenated with a 128-D diffusion-time
+embedding to yielded a 292-D FiLM condition. The 1D U-Net
+DP had a prediction horizon of 24, and an execution horizon
+of 16. The policy was trained for 150k steps using Adam with
+a batch size of 16, learning rate of 1 × 10−3, and weight decay
+of 1 × 10−5. We used 100 diffusion timesteps during training
+and 35 denoising steps during deployment.
+
+
+Fig. 5.
+Real-robot platform, three actions, and experimental objects. DemoFO is the object used in teleoperated demonstration. Distractors are dissimilar
+objects from different coarse categories. SimilarFOs are visually confusing objects of the same category.
+Fig. 6. Success rates of different methods in all real-robot evaluations.
+For our FOM-SAM3-guided ACT, the 256 visual tokens
+from two views, together with the latent and robot-state tokens,
+yield 258 encoder tokens. The policy was trained for 100k steps
+using AdamW with a learning rate of 1 × 10−4, weight decay
+of 1×10−3, batch size of 16, and an action chunk length of 30.
+During deployment, only the temporally ensembled current
+action was executed before receiving the next observation,
+with an ensemble coefficient of 0.01.
+3) Evaluation Setup: We designed three evaluation settings
+with increasing levels of difficulty. Under each evaluation
+setting, an action was uninterruptedly performed for 10
+rollouts. A rollout was counted as successful only if the robot
+selected the target FO and completed the full task. A completed
+action with wrong FO selection was also counted as a failure.
+Each method was evaluated on all three tasks under all three
+settings. Predefined positions were marked on the desk to
+ensure test consistency across methods. Thus, each method
+was evaluated for 90 rollouts in total. The three evaluation
+settings are as follows.
+DemoFO: To evaluate the action performance across dif-
+ferent object positions and orientations, this setup retained
+the target FO used in the demonstrations (DemoFO), without
+involving distractors and confusing FOs in the scene.
+DemoFO+Distractors: To evaluate robustness to distracting
+objects, we introduced two objects from a different coarse
+category as visual distractors.
+DemoFO+SimilarFOs: To evaluate SimilarFO discrimina-
+tion, we placed SimilarFOs from the same coarse category
+beside DemoFO.
+4) Comparison Results on DemoFO Manipulation Per-
+formance with Distractors and SimilarFOs: We used dual-
+view-conditioned DP [6] and ACT [5] as baselines. We also
+compared with S2-Diffusion [13], expanding its original im-
+TABLE II
+Success Rates on DemoFO Manipulation.
+Method
+Collect Can
+Push Box
+Lid Cup
+Overall
+DP [6]
+15/30
+13/30
+10/30
+38/90
+S2-Diff. [13]
+22/30
+19/30
+14/30
+55/90
+Ours-DP
+30/30
+27/30
+28/30
+85/90
+ACT [5]
+14/30
+18/30
+10/30
+42/90
+Ours-ACT
+26/30
+28/30
+25/30
+79/90
+TABLE III
+Success Rates on SimilarFO Manipulation.
+Method
+Collect Can
+Push Box
+Lid Cup
+Overall
+Ours-DP
+10/10
+10/10
+8/10
+28/30
+Ours-ACT
+7/10
+8/10
+8/10
+23/30
+plementation from single-view to dual-view. Our FOM-SAM3
+guided DP (Ours-DP) shared the same policy architecture
+and training configuration with DP and S2-Diffusion, while
+the only difference lay in the visual conditioning approach.
+Similarly, our FOM-SAM3 guided ACT (Ours-ACT) shares
+the same policy architecture and training configuration with
+ACT. Table II reports the success rates of the different methods
+and setups. Our FOM-SAM3 guided DP achieved the best
+overall success rate, followed by our FOM-SAM3 guided ACT.
+Effect of Focused Visual Conditioning: As shown in Fig. 6,
+when only the DemoFO was in the scene, all the methods
+achieved success rates of 0.66∼0.93, among which our meth-
+ods performed the best. With visual distractors, the success
+rates of DP and ACT decreased significantly due to scene-
+level visual conditioning. In contrast, S2-Diffusion and our
+methods demonstrated robustness to distractors of other coarse
+categories.
+Effectiveness of FOM-SAM3: When the confusing Simi-
+larFOs were involved in the scene, the success rates of DP,
+ACT, and S2-Diffusion all fell to 0.13∼0.5, because their visual
+conditioning did not explicitly specify the intended FO when
+SimilarFOs coexisted. In contrast, our methods kept the high
+success rates due to the fine-grained guidance of our FOM-
+SAM3.
+5) SimilarFO Manipulation Performance with Shared Pol-
+icy: We further tested whether our FOM-SAM3-guided policy
+could be applied to different FOs while sharing the same
+policy trained with DemoFO. The SimilarFOs were registered
+
+
+Fig. 7.
+Visualization of FSAE representations in the left view (a) and the right view (b). In each subfigure, the first row shows the boxes and mask given
+by FOM-SAM3. The second row visualizes the in-FO appearance features after unified PCA feature dimensionality reduction. The waypoint number on the
+top-left corner of each picture corresponds to that in the t-SNE map on the far right.
+in FOM-SAM3 but unseen during policy training; no new
+demonstrations or policy finetuning were used. In contrast to
+the DemoFO+SimilarFO evaluation setting, here we used a
+SimilarFO as the manipulated object, and the DemoFO as the
+confusing distractor. For each task, only the FO memory tokens
+were altered, then the action was performed in 10 rollouts. The
+first five rollouts used SimilarFO1 and the remaining five used
+SimilarFO2. As shown in Table III, our FOM-SAM3-guided
+DP and ACT achieved success rates of 93.3% and 76.7%,
+respectively.
+6) Visualization of Explicit Spatial and Implicit Appear-
+ance Representation in FSAE: We collected the dual-view
+images at six predefined robot waypoints (𝑃1–𝑃6) for three
+rounds. In rounds 1 (FO1) and 3 (SimilarFO2), a Coca-Cola
+lemon soda can and its similar FO, Schweppes grape soda can
+were used as the target, and no distractors were involved. In
+round 2 (FO1+Distractor), the Coca-Cola lemon soda can was
+used as the target, and several distractors were placed beside
+it. The image panels in Fig. 7(a) and (b) illustrate the FO
+perception results in round 2 from the left and right views,
+respectively. First, the boxes reflect the position and scale of
+the FOs in each view. Second, the masks were further used
+to remove the non-FO pixels within and outside the boxes.
+Third, the in-FO appearance features were visualized after
+PCA dimensionality reduction to qualitatively demonstrate the
+variance of the FO appearance representation. We found that
+the in-FO features were highly conditioned on the distance,
+attitude, and shapes of FO. Therefore, the in-FO appearance
+features contribute more visual guidance information beyond
+box-level spatial information.
+As shown in the rightmost t-SNE plots of Fig. 7(a) and (b),
+we compared the in-FO appearance feature distributions in
+the three rounds by projecting them into shared t-SNE spaces
+for the left and right views, respectively [37]. The pale-colored
+points display the features of all the in-FO pixels. The centroids
+of the features in each round are marked and connected as
+a trajectory. As we can see, when the robot approached the
+target FO from 𝑃1 ∼𝑃3, the image appearances presented
+limited changes, so the pixel features and centroids shifted in
+a relatively small range. When the robot gripped and lifted the
+FO from 𝑃4 ∼𝑃6, the appearance features shifted significantly
+in the t-SNE space. Notably, in the left-view images at 𝑃1 ∼𝑃3
+and the right-view images at 𝑃4 ∼𝑃6, the FO appearances
+remained approximately unchanged, so their in-FO features
+were also clustered together in the t-SNE space. Therefore, the
+appearance representation of FSAE could effectively indicate
+the variation and similarity of FO state in a whole manipulation
+process. Meanwhile, visual distractors and replacing the target
+with a SimilarFO only slightly perturbed the focused in-FO
+appearance encoding.
+C. Limitations
+We mainly observed three limitations in this work. First, the
+FO perception might fail when the discriminative features are
+invisible. For example, we cannot identify the brand and flavor
+of a can from its top view. However, view angle changes and
+severe occlusion are inevitable in real applications. Second, the
+FSAE method excludes irrelevant objects, which might limit
+the obstacle avoidance ability of a visuomotor policy. Third,
+incorporating SAM3 as a visual encoder provides object-
+focused visual information but increases the latency from
+frame input to motion command.
+IV. Conclusion
+We presented a FOM-SAM3-guided visuomotor framework
+that combines persistent FO memory with focused visual
+conditioning for FO manipulation. FOM-SAM3 learns and
+stores FO-specific memory tokens, enabling registered FO to
+be localized and distinguished from visually similar alterna-
+tives. FSAE then combines the target FO’s local appearance
+features and explicit spatial states to guide the action policy.
+Evaluations on FO-30 and three real-robot tasks demonstrate
+
+
+improved fine-grained perception and manipulation success
+in the presence of distractors and confusing FOs. Beyond
+manipulating demonstration objects, the framework supports
+policy reuse across registered, task-compatible objects within
+the same coarse category by changing only the retrieved FO
+Memory. These results highlight the value of persistent object
+memory for extendinglearned manipulationskillsto additional
+familiar objects. Future work will address ambiguous views
+and occlusion, incorporate surrounding scene information for
+obstacle-aware manipulation, and reduce perception-to-action
+latency.
+References
+[1] Y. Zheng et al., “A survey of embodied learning for object-centric robotic
+manipulation,” Machine Intelligence Research, vol. 22, no. 4, pp. 588–
+626, 2025.
+[2] H. Kim et al., “Transformer-based deep imitation learning for dual-arm
+robot manipulation,” in 2021 IEEE/RSJ International Conference on
+Intelligent Robots and Systems (IROS).
+IEEE, 2021, pp. 8965–8972.
+[3] H.-G. Cao et al., “Learning sim-to-real dense object descriptors for
+robotic manipulation,” in 2023 IEEE International Conference on
+Robotics and Automation (ICRA).
+IEEE, 2023, pp. 9501–9507.
+[4] J. Gao et al., “K-vil: Keypoints-based visual imitation learning,” IEEE
+Transactions on Robotics, vol. 39, no. 5, pp. 3888–3908, 2023.
+[5] T. Z. Zhao et al., “Learning fine-grained bimanual manipulation with
+low-cost hardware,” in Robotics: Science and Systems (RSS), 2023.
+[6] C. Chi et al., “Diffusion policy: Visuomotor policy learning via action
+diffusion,” The International Journal of Robotics Research, vol. 44, no.
+10-11, pp. 1684–1704, 2025.
+[7] Y. Ze et al., “3D diffusion policy: Generalizable visuomotor policy
+learning via simple 3D representations,” in Proceedings of Robotics:
+Science and Systems (RSS), Delft, Netherlands, Jul. 2024.
+[8] H. Zhu et al., “Point cloud matters: Rethinking the impact of different
+observation spaces on robot learning,” Advances in Neural Information
+Processing Systems, vol. 37, pp. 77 799–77 830, 2024.
+[9] T.-W. Ke et al., “3D diffuser actor: Policy diffusion with 3D scene
+representations,” in Proc. Conf. Robot Learn. (CoRL), 2025, pp. 1949–
+1974.
+[10] Y. Wu et al., “On-device diffusion transformer policy for efficient
+robot manipulation,” in 2025 IEEE/CVF International Conference on
+Computer Vision (ICCV).
+IEEE, 2025, pp. 14 073–14 083.
+[11] A. C.-W. Lee et al., “InterACT: Inter-dependency aware action chunking
+with hierarchical attention transformers for bimanual manipulation,” in
+Proc. Conf. Robot Learn. (CoRL), 2025, pp. 1730–1743.
+[12] T. Z. Zhao et al., “ALOHA Unleashed: A simple recipe for robot
+dexterity,” in Proc. Conf. Robot Learn. (CoRL), 2025, pp. 1910–1924.
+[13] Q. Yang et al., “𝑆2-Diffusion: Generalizing from instance-level to
+category-level skills in robot manipulation,” IEEE Robot. Autom. Lett.,
+vol. 10, no. 12, pp. 12 995–13 002, 2025.
+[14] T. Ren et al., “Grounded sam: Assembling open-world models for
+diverse visual tasks,” arXiv preprint arXiv:2401.14159, 2024.
+[15] P. Mandikal et al., “Mash, spread, slice! learning to manipulate object
+states via visual spatial progress,” in Proc. IEEE Int. Conf. Robot.
+Autom. (ICRA), 2026.
+[16] L. Adriaens et al., “SPILL: Size, pose, and internal liquid level
+estimation of transparent glassware for robotic bartending,” IEEE Robot.
+Autom. Lett., vol. 10, no. 12, pp. 13 288–13 295, 2025.
+[17] S. Xia et al., “CAGE: Causal attention enables data-efficient general-
+izable robotic manipulation,” in Proc. IEEE Int. Conf. Robot. Autom.
+(ICRA), 2025, pp. 13 242–13 249.
+[18] S. Kareer et al., “EgoMimic: Scaling imitation learning via egocentric
+video,” in Proc. IEEE Int. Conf. Robot. Autom. (ICRA), 2025, pp.
+13 226–13 233.
+[19] C. Wang et al., “RISE: 3D perception makes real-world robot imitation
+simple and effective,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst.
+(IROS), 2024, pp. 2870–2877.
+[20] Y. Ze et al., “Generalizable humanoid manipulation with 3D diffusion
+policies,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst. (IROS),
+2025, pp. 2873–2880.
+[21] L. Sun et al., “HyperTASR: Hypernetwork-driven task-aware scene
+representations for robust manipulation,” in Proc. Conf. Robot Learn.
+(CoRL), 2025, pp. 4524–4544.
+[22] A. Kirillov et al., “Segment anything,” in Proc. IEEE/CVF Int. Conf.
+Comput. Vis. (ICCV), 2023, pp. 4015–4026.
+[23] N. Ravi et al., “SAM 2: Segment anything in images and videos,” in Int.
+Conf. Learn. Represent. (ICLR), 2025.
+[24] N. Carion et al., “SAM 3: Segment anything with concepts,” in Int.
+Conf. Learn. Represent. (ICLR), 2026.
+[25] J. Zhang et al., “SAM-E: Leveraging visual foundation model with
+sequence imitation for embodied manipulation,” in Proc. Int. Conf.
+Mach. Learn. (ICML), 2024, pp. 58 579–58 598.
+[26] H. Fang et al., “SAM2Act: Integrating visual foundation model with
+a memory architecture for robotic manipulation,” in Proc. Int. Conf.
+Mach. Learn. (ICML), 2025, pp. 15 925–15 942.
+[27] Y. Zhu et al., “Learning generalizable manipulation policies with object-
+centric 3D representations,” in Proc. Conf. Robot Learn. (CoRL), 2023,
+pp. 3418–3433.
+[28] J. Qian et al., “Task-oriented hierarchical object decomposition for
+visuomotor control,” in Proc. Conf. Robot Learn. (CoRL), 2025, pp.
+1891–1909.
+[29] H. Li et al., “Language-guided object-centric diffusion policy for
+generalizable and collision-aware manipulation,” in Proc. IEEE Int.
+Conf. Robot. Autom. (ICRA), 2025, pp. 12 834–12 841.
+[30] H. Ding et al., “Choose what to observe: Task-aware semantic-
+geometric representations for visuomotor policy,” arXiv preprint
+arXiv:2603.07875, 2026.
+[31] T. Chen et al., “SAM2-Adapter: Evaluating & adapting segment
+anything 2 in downstream tasks: Camouflage, shadow, medical image
+segmentation, and more,” arXiv preprint arXiv:2408.04579, 2024.
+[32] T. Chen et al., “SAM3-Adapter: Efficient adaptation of segment anything
+3 for camouflage object segmentation, shadow detection, and medical
+image segmentation,” arXiv preprint arXiv:2511.19425, 2025.
+[33] B. Lester et al., “The power of scale for parameter-efficient prompt tun-
+ing,” in Proc. Conf. Empirical Methods Nat. Lang. Process. (EMNLP),
+2021, pp. 3045–3059.
+[34] T. Piater et al., “Prompt-tuning SAM: From generalist to specialist with
+only 2,048 parameters and 16 training images,” in Proc. IEEE/CVF
+Conf. Comput. Vis. Pattern Recognit. Workshops (CVPRW), 2025, pp.
+4727–4737.
+[35] Q. Zhou et al., “Mask to concept: Auto-promptable sam3 via efficient
+test-time concept embedding search for few-shot annotation,” arXiv
+preprint arXiv:2606.26711, 2026.
+[36] C. Finn et al., “Deep spatial autoencoders for visuomotor learning,” in
+Proc. IEEE Int. Conf. Robot. Autom. (ICRA), 2016, pp. 512–519.
+[37] L. van der Maaten and G. Hinton, “Visualizing data using t-SNE,” J.
+Mach. Learn. Res., vol. 9, pp. 2579–2605, 2008.

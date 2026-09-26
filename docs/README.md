@@ -48,7 +48,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-25</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-26</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 19 篇</strong>
@@ -58,7 +58,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-25 19:02:18 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-26 19:36:55 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今天筛选了19篇机器人论文，精读7篇、速读12篇，聚焦灵巧抓取、世界模型与具身操作。</p>
-<p>最值得看的是两篇9分工作：准直驱欠驱动非对称灵巧手，以及面向异步机器人操作的Streaming-WAM动作条件世界-动作模型；速读中DEAL-Grasp、形态模仿和主动探索式具身操作也值得关注。</p>
-<p>普通读者可先读两篇9分精读，再按“灵巧手—世界模型—仿真到真实迁移”主线跟进速读论文。</p>
+<p>2026-09-26 日报精选19篇机器人研究，精读7篇、速读12篇。最值得关注的是《Rolling-WAM》（9.0分）用滚动想象提升世界动作模型，以及《VLPSA》（8.0分）用视觉-语言-泊松安全动作保障全身安全。普通读者可先看这两篇精读，再按需浏览《CrossSafe》等速读方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -83,9 +81,9 @@
     <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="A Quasi-Direct-Drive Underactuated Asymmetric Hand for Dexterous and Efficient Grasping and Manipulation">A Quasi-Direct-Drive Underactuated Asymmetric Hand for Dexterous and Efficient Grasping and Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Streaming-WAM: Action-Conditioned World-Action Model for Asynchronous Robot Manipulation">Streaming-WAM: Action-Conditioned World-Action Model for Asynchronous Robot Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="ActGaze: Learning Action-Grounded Gaze through Counterfactual Visual Interventions for High-Precision Manipulation">ActGaze: Learning Action-Grounded Gaze through Counterfactual Visual Interventions for High-Precision Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Rolling-WAM: World Action Models with Rolling Imagination">Rolling-WAM: World Action Models with Rolling Imagination</span></li><li><span class="dpr-home-dashboard-paper-title" title="VLPSA: Vision-Language-Poisson-Safe Actions for Full-Body Safety of Learned Policies">VLPSA: Vision-Language-Poisson-Safe Actions for Full-Body Safety of Learned Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="SCULPT-VLA: Learning Structured Control through Staged Action Grounding">SCULPT-VLA: Learning Structured Control through Staged Action Grounding</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DEAL-Grasp: Decoupled Alignment Representation for Geometry-Aware Dexterous Grasp Generation">DEAL-Grasp: Decoupled Alignment Representation for Geometry-Aware Dexterous Grasp Generation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Morphometric Imitation: From Morphology and Contact Aware Hand Retargeting to Sim-to-Real Visuomotor Policy">Morphometric Imitation: From Morphology and Contact Aware Hand Retargeting to Sim-to-Real Visuomotor Policy</span></li><li><span class="dpr-home-dashboard-paper-title" title="From Passive Execution to Active Exploration: Agentic Embodied Manipulation in Realistic Environments">From Passive Execution to Active Exploration: Agentic Embodied Manipulation in Realistic Environments</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="CrossSafe: Towards Cross-Embodiment Latent Safety Filters">CrossSafe: Towards Cross-Embodiment Latent Safety Filters</span></li><li><span class="dpr-home-dashboard-paper-title" title="Generative Embodied Multiple Behavior Control Systems for Human-like Agents">Generative Embodied Multiple Behavior Control Systems for Human-like Agents</span></li><li><span class="dpr-home-dashboard-paper-title" title="InfiNoVA: Infinite Novel View Augmentation for Viewpoint Invariant Robot Policies">InfiNoVA: Infinite Novel View Augmentation for Viewpoint Invariant Robot Policies</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>7</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>5</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>10</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
 </section>
 </div>
 

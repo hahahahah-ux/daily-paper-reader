@@ -1,0 +1,1020 @@
+VLPSA: Vision-Language-Poisson-Safe Actions
+for Full-Body Safety of Learned Policies
+Meg Wilkinson∗, Emily Fourney∗, Joel W. Burdick, Aaron D. Ames
+Abstract— Vision-language-action (VLA) models enable in-
+creasingly general-purpose robotic manipulation, but such
+learned policies do not provide safety guarantees for collision
+avoidance—especially in environments outside of training dis-
+tributions. This work presents Vision-Language-Poisson-Safe
+Actions (VLPSA), a safety filtering framework that provides
+full-body safety for VLA policies in cluttered and dynamic
+environments without retraining. VLPSA synthesizes Poisson
+Safety Functions (PSF) online from perception data, yielding
+a Control Barrier Function (CBF) that is enforced through a
+CBF-QP safety filter over the full body and any grasped object,
+treated as an extension of the final robot link. To enable real-
+time deployment while maintaining fine spatial resolution in
+critical task regions, VLPSA combines dual resolutions of this
+PSF using Boolean CBF compositions. We evaluate VLPSA on
+SafeLIBERO against safety-filtering baselines, where it achieves
+the highest collision avoidance rate among the evaluated meth-
+ods, increasing collision avoidance from 23.1% for the base
+π0.5 policy to 91.2% while surpassing its task success rate. We
+further deploy VLPSA on a Franka FR3 in cluttered scenes
+with dynamic obstacles and human interference, demonstrating
+real-time full-body safety during manipulation tasks.
+I. INTRODUCTION
+Vision-language-action (VLA) models are advancing gen-
+eral purpose robotic autonomy, with a growing ability to
+generalize across tasks and complex environments. Popular
+models such as π0.5 [1] and OpenVLA [2] demonstrate
+manipulation policies capable of diverse, long-horizon tasks.
+Despite this performance, learned polices do not provide
+formal safety guarantees, leaving a critical gap between their
+demonstrated capabilities and reliable deployment along-
+side humans and in unstructured environments. Closing
+this gap requires deciding how and where safety enters
+an increasingly capable learned policy. This question has
+been approached from several directions [3] without clear
+consensus, particularly for contact-rich manipulation tasks.
+VLA policies produce action chunks at inference rate that is
+below the robot’s desired control rate. A safety mechanism
+acting only on chunks is limited in its ability to respond
+to obstacles entering the workspace, which is a particular
+regime of interest for manipulation tasks executed alongside
+humans. This motivates enforcing safety at the level of
+individual actions, rather than longer-horizon action chunks.
+Existing approaches primarily train safety into the policy
+or via a learned safety representation. Policy-level learning
+approaches include training on safe demonstration data [4]
+∗These authors contributed equally to this work.
+All
+authors
+are
+with
+the
+Department
+of
+Computing
+and
+Mathematical Sciences, California Institute of Technology, Pasadena,
+CA
+91125,
+USA.
+{mwilkins, efourney, burdick,
+ames}@caltech.edu
+Fig. 1: Pipeline for VLPSA: Sensory and semantic input and robot state
+are sent to the VLA for a nominal trajectory and gripper state. Depth
+sensors are fused with robot state information to create an occupancy map
+for the synthesis of PSFs at varying resolutions for safety filtering. When
+grasping, live samples are generated and updated to protect the held object,
+incorporated into the same safety filter.
+and applying constrained policy optimization [5]. Safety
+can further be learned as a separate constraint, with latent
+safety filters offering a method to synthesize Hamilton-Jacobi
+reachability value functions [6] over world-model repre-
+sentations [7]. These approaches allow constraints without
+analytic specifications to be enforced. However, the safety
+behaviors depend on the fidelity of the learned policies or
+world models [8], and thus do not provide independently
+specified geometric guarantees for previously unseen con-
+figurations. In contrast, we enforce safety constraints at
+deployment, at a control rate, over a geometric representation
+of the environment. Our method requires neither policy
+modification nor safety-specific data to be learned, while
+supplying formal guarantees of safety.
+arXiv:2609.22462v1  [cs.RO]  18 Sep 2026
+
+
+Safety filters based on Control Barrier Functions (CBFs)
+provide a principled approach to safety-critical control [9],
+[10]. They enforce forward invariance of a defined safe set
+while providing a modular method for minimally modifying
+nominal commands. Vision-Language-Safe Action (VLSA)
+applies safety filters to VLA policies, substantially improving
+collision avoidance, and in some cases, task performance
+[11]. However, the collision avoidance is limited to the end
+effector in static scenes. Extensions to dynamic obstacles
+have been shown in simulation [12], but full-body collision
+avoidance of VLA policies with moving obstacles has yet
+to be demonstrated on hardware. Held objects have been
+incorporated into CBF-based avoidance for deformable co-
+manipulation [13], though as object-centric constraints under
+hand-designed controllers rather than as incorporated into the
+same full-body safety representation used for the robot.
+Poisson Safety Functions (PSFs) [14] provide a method
+to synthesize CBFs online. One solves an elliptic partial
+differential equation (PDE), Poisson’s equation, over a do-
+main constructed from perception data to yield a functional
+and dynamic safety representation of the environment [15].
+Recent developments incorporate full-body safety guarantees
+for robot manipulators via sampling and buffering in dynamic
+scenes [16]. This formulation assumes a fixed body geome-
+try. Manipulator’s effective geometry changes when an object
+is grasped, so a sample set defined over the links alone ceases
+to cover the system mid-task. PSFs also introduce a tradeoff
+between spatial resolution of the safety representation and
+the cost of the PDE solve: cluttered scenes demand high
+resolution, real-time operation favors coarse grids.
+We
+present
+Vision-Language-Poisson-Safe
+Actions
+(VLPSA), a unified safety framework applied to learned
+polices
+providing
+conditions
+for
+guaranteed
+dynamic
+collision
+avoidance
+for
+both
+the
+full-robot
+body
+and
+its
+grasped
+objects.
+These
+guarantees
+are
+geometric
+and conditioned on the perception pipeline supplying a
+conservative bound on obstacle geometry; we characterize
+sensitivity to this assumption in Section IV-C.
+Our contributions are as follows:
+• Full-body manipulator PSF-CBF safety filter for VLA
+policies in dynamic, cluttered environments that safely
+filters the action chunk with no retraining of the nominal
+policy needed.
+• A multigrid PSF formulation composing a coarse grid
+over the reachable workspace with a nested fine grid
+over the task region, combined through a Boolean ‘OR’
+composition [17].
+• Extension of the robot representation to include unseen
+a priori grasped objects.
+• Hardware validation on a Franka FR3 running a fine-
+tuned π0.5 policy, in cluttered scenes and with obstacles
+entering the workspace during execution, paired with
+evaluation against filtering baselines on SafeLIBERO.
+II. PRELIMINARIES
+A. Control Barrier Functions
+We consider a non-linear control affine system,
+˙x = f(x) + g(x)u,
+(1)
+with state x ∈Rn and control input u ∈Rm, where f :
+Rn →Rn and g : Rn →Rn×m are both locally Lipschitz.
+A locally Lipschitz control law k : Rn × R+ →Rm
+renders a closed-loop system that admits a unique solution
+t 7→x(t); we assume a solution exists ∀t ≥0 [18].
+A safe set can be defined as the unoccupied regions in
+the workspace. We encode the zero-super level set by a
+continuously differentiable function h : Rn × R+ →R,
+Ct = {x ∈Rn|h(x, t) ≥0}.
+We seek a control input that can render the safe set forward
+invariant: given an initial condition x(0) ∈C0, the controlled
+system remains in the safe set x(t) ∈Ct for all t > 0.
+Definition 1 (Control Barrier Functions [19]). Let Ct be the
+time-varying 0-superlevel set of a continuously differentiable
+h : Rn×R+ →R satisfying ∇h(x, t)̸ = 0 whenever h(x, t)=
+0. Then h is a time-varying Control Barrier Function for (1)
+if there exists α∈Ke
+∞such that for all (x, t) ∈Rn×R+,
+sup
+u∈Rm
+˙h(x, t, u) ≜∇h(x, t) ·
+ f(x) + g(x)u
+
++ ∂h
+∂t (x, t)
+≥−α
+ h(x, t)
+
+.
+(2)
+Satisfying (2) point-wise renders Ct forward invariant
+[10]. Given a nominal controller knom, safety is classically
+enforced by the CBF-QP, which returns the minimum-norm
+modification of knom satisfying (2). When a task is specified
+by a Control Lyapunov Function (CLF) V : Rn →R+,
+stability and safety can be combined in a single optimization
+problem. Relaxing the CLF condition with a slack variable
+δ ≥0 preserves feasibility when the two objectives conflict,
+yielding the CLF-CBF-QP [20]:
+(u∗, δ∗) = arg min
+u∈Rm, δ≥0
+∥u∥2
+2 + p δ2
+s.t.
+˙V (x, u) ≤−γV (x) + δ,
+˙h(x, t, u) ≥−α
+ h(x, t)
+
+,
+(3)
+where γ > 0 sets the nominal convergence rate and p > 0
+penalizes relaxation. Safety is enforced as a hard constraint,
+while tracking is sacrificed only as needed.
+B. Poisson Safety Functions
+Definition 2 requires a continuously differentiable h with
+non-vanishing gradient on the safe set boundary. Poisson
+Safety Functions (PSFs) [14] provide a systematic method to
+synthesize smooth CBFs h0 directly from perception data.
+Definition 2. (Poisson Safety Function [14]) Let Ω⊂R3
+denote the open, bounded, and connected free space with
+smooth boundary ∂Ωcorresponding to obstacle surfaces. We
+
+
+call h0 : R3 →R a Poisson Safety Function if it is the unique
+solution to the Dirichlet problem for Poisson’s equation:
+
+
+
+∂2h0
+∂x2 (y) + ∂2h0
+∂y2 (y) + ∂2h0
+∂z2 (y) = f(y)
+∀y ∈Ω,
+h0(y) = 0
+∀y ∈∂Ω,
+(4)
+where f : Ω→R<0 is the prescribed forcing function.
+The Dirichlet boundary conditions enforce the barrier
+function’s zero level set to lie on the obstacle surfaces
+while choosing f
+< 0 forces h0
+> 0 in free space.
+Choosing a smooth forcing function f ∈C∞(Ω) yields
+h0 ∈C∞(Ωc) [21]. As shown in [14], h0 is a valid CBF
+for a single integrator system, h0 := h, and can be further
+extended to higher order systems due to its smoothness. A
+single Poisson solution yields a globally smooth CBF for
+arbitrary environmental occupancy maps, defining the PSF.
+Considering a time-varying domain Ω= Ω(t), we can extend
+Equation (4) to moving obstacles, giving a moving boundary
+value problem solved online to yield t 7→h0(y, t) [15].
+C. Application to Manipulators and VLA Policies
+Following [16], [22], we enforce safety of the manipulator
+at the kinematic level. That is we consider the system
+˙q = v,
+(5)
+with the commanded joint velocity as the control input v ∈
+Rn. Safety guarantees for (5) extend to the full second-order
+manipulator dynamics provided the commanded velocity is
+sufficiently tracked by the low-level controller [22]. Safety
+specifications for manipulators are naturally expressed in task
+space, whereas the control input in (5) acts at the joint-
+velocity level. The two are related by forward kinematics: for
+the i-th point on the robot body, let φi : Rn →R3 denote its
+kinematic map, so that yi = φi(q) and, ˙yi = ∂φi
+∂q ˙q=Ji(q)v,
+with Ji(q) ∈R3×n the corresponding Jacobian. Defining
+hi(q, t)≜h(φi(q), t), the safety condition becomes
+˙hi(q, t, v) = ∇h
+ φi(q), t
+⊤Ji(q) v + ∂h
+∂t
+ φi(q), t
+
+,
+(6)
+where ∇h is the gradient with respect to the task-space argu-
+ment. Note that (6) is affine in v. We assume Ji(q)⊤∇h̸=0
+whenever hi(q, t)=0, so that each hi is a valid CBF for (5).
+Since the manipulator body is a continuum, enforcing (6) at
+every point yields a semi-infinite program; instead we impose
+it pointwise on a finite sample set Y(q)={φi(q)}N
+i=1, each
+point inducing its own constraint:
+(vsafe, δ∗) = arg min
+v∈Rn, δ≥0
+∥v −vnom∥2
+2 + p δ2
+s.t.
+˙hi(q, t, v) ≥−αihi(q, t)
+˙V (q, v) ≤−γV (q) + δ,
+(MC-CBF-QP)
+where vnom is the nominal joint velocity command, αi > 0,
+and γ, p > 0 are as in (3).
+Enforcing safety at these finite points does not provide
+any safety guarantees for the full robot body. Prior work
+[16] combats this issue by sampling the robot surface at
+a fixed resolution ε and buffering the occupancy map by
+that resolution. Solving Poisson’s equation on this buffered
+domain gives the PSF hε(y). Satisfying the safety filter
+formulation of (2) with the buffered safety function renders
+the entire robot surface collision-free with respect to the true
+environment [16]. Any point set meeting the ε bound inherits
+this safety guarantee, which we exploit in Section III-B.
+It remains to specify the nominal control input. Let O =
+Inc × L × Rn denote the observation space; I is the RGB
+input from nc camera images, L is the natural language
+instruction and Rn is the robot state. Then, a VLA policy is a
+map π : O →RT ×m such that a single observation ot ∈O
+is mapped to a size-T action chunk a1:T = π(ot) with each
+action ak ∈Rm. Each action chunk is executed open-loop
+between fresh inference calls at a rate of fπ. The VLA policy
+is trained on demonstrations, and has no input representation
+of free space, nor mechanism of enforcing safety constraints
+out of its training distribution. We provide a method to
+enforce full-body safety on a nominal policy in an arbitrary
+environment while preserving its task performance.
+III. METHOD
+In this section we present a method for safety filtering
+VLA policies using Poisson Safety Functions. Building on
+previous full-body safety work [16], we apply a CBF-CLF
+safety filter to enforce safety constraints while tracking the
+VLA’s desired trajectory. We first present the core safety-
+filtering architecture, then extend it to incorporate grasp-
+triggered sample injections to keep objects the robot has
+picked up safe. Finally, we introduce a multigrid Poisson
+solve, deployed in our hardware experiments, to achieve both
+precision and speed in cluttered, dynamic environments.
+A. VLA + Safety Filter
+Safety is integrated directly over the VLA’s action output
+to ensure full-body safety during deployment. Filtering each
+action independently risks compounding the tracking error
+and losing the VLA’s semantic intent as filtered actions
+diverge from the policy’s plan [23]. Instead, we treat the VLA
+as a high-level planner; given visual and language inputs, the
+policy outputs an action chunk a1:T over a T−step horizon.
+We interpret this as a desired continuous trajectory xd(t),
+obtained by linearly interpolating between the way-points of
+the action chunks, which is tracked by a low-level safety
+filter operating at a faster control rate.
+The tracking error is defined
+e =
+xd −xee
+rpyerr
+
+∈R6.
+The variable rpyerr represents the wrapped angular error
+between the desired and current orientation and xee ∈R3 is
+the current end-effector position. We define V (e) = 1
+2eT We,
+with W ≻0 required for a valid CLF.
+Treating the reference trajectory as quasi-static, the track-
+ing error derivative simplifies to
+˙V = −eT W T Jee(q)u,
+where Jee(q) is the end-effector Jacobian and u ∈R7
+is the commanded joint velocity. In the absence of safety
+
+
+considerations and kinematic limits, this condition drives the
+tracking error to zero. Strict convergence can conflict with
+safety constraints, hence we execute it slacked as in the CLF-
+CBF QP (3).
+B. Grasp-triggered Sample Injection
+Full body safety, in the context of manipulation, requires
+consideration of grasped objects to ensure complete col-
+lision avoidance. An item held by the robot may collide
+with the environment, and thus, it should affect the safety
+constraints in (MC-CBF-QP). Existing learning-based safety
+filters utilize configuration-space representations [24], [25],
+which incorporate geometry during training or representation
+construction, making dynamic changes in the manipulated
+geometry difficult to accommodate [11]. Geometric safety
+filters can dynamically account for grasped objects by adding
+bounding spheres [26]; these representations can be sub-
+stantially over-approximated. In cluttered environments, this
+approximation may classify collision-free motions as unsafe.
+The key advantage of a sample-based safety representation
+is that samples are used to represent generic geometric
+configurations and not tailored to specific robot geometry. A
+rigidly grasped object can be incorporated into the sample-
+based representation by augmenting the robot’s sample set
+without changing the controller’s formulation. Let tg define
+the time at which grasping onset is observed and let C(t) ⊂Ω
+denote the occupied set of the environment representation at
+time t. Rather than a tight pose estimate, we only require a
+bounding volume of the grasped object: a compact set ˆBE
+O,
+expressed in end-effector coordinates, containing the object.
+Proposition 1 (Safety of a Grasped Object). Suppose that
+∀t ≥tg the object remains rigidly fixed to the end-effector
+{E}, and is contained in a fixed compact bounding vol-
+ume ˆBE
+O expressed in end-effector coordinates. Let OE =
+{oE
+1 , . . . , oE
+M} be an εO-cover of ∂ˆBE
+O with εO ≤ε, define
+oi(q) = pE(q) + RE(q) oE
+i ,
+Yaug(q) = Y(q) ∪O(q).
+Assume ˆBO(q(tg))∩C(tg) = ∅. If (MC-CBF-QP) is enforced
+for every y ∈Yaug, then the robot surface and the bounding
+volume ˆBO(q) are collision free with respect to the true
+environment, and hence so is the true object for all t ≥tg.
+Proof. Rigid motions are isometries, so O(q) remains an
+εO-cover of ∂ˆBO(q) for every q. Since Y(q) satisfies the
+ε-sampling condition by construction and εO ≤ε, the aug-
+mented set Yaug(q) satisfies the sampling condition required
+by Theorem 1 in [16]. This establishes forward invariance
+of the safe set for the robot and the represented object
+geometry. Since ˆBO(q(tg)) is initially free of occupancy,
+invariance precludes any subsequent intersection with C, and
+containment of the object in ˆBO transfers the conclusion to
+the object itself.
+Remark 1 (Practical Initial Conditions). At pick up, objects
+are inherently resting in contact and unsafe, thus not in the
+forward invariant set. Enforcing CBF conditions as in MC-
+CBF-QP provides convergence to the safe set [10].
+Fine-Boundary Grid Selection Map: max(hc, hf)
+z 
+y 
+x
+Fig. 2: Multigrid Usage. (Left) Fine-grid usage (% of sample points) for the
+grasped object during a trial in static clutter and with dynamic obstacles. The
+grasped object shows consistent moderate usage under clutter but sparser,
+higher peaks under moving obstacles. (Right) Zero-level set of the fine PSF
+hf in a cluttered environment showing which grid wins at each point.
+C. Multi-resolution Poisson
+The proposed safety filter is formulated in continuous
+space; but implementing Poisson Safety Functions requires
+discretizing the workspace into an occupancy grid. Dis-
+cretization introduces a tradeoff between speed and grid
+resolution. A fine resolution gives a precise occupancy grid
+but causes a significant increase in solve time. Fast solve
+times are required for moving obstacles, but for clutter high
+resolution is key. On hardware, mitigating this trade off is
+prohibitively computationally expensive.
+We therefore construct two safety functions at different
+resolutions: a coarse function over a large domain Ωc ⊂R3
+with grid spacing δc, and a fine function over a nested
+region Ωf ⊆Ωc with δf < δc, placed over the task region.
+Occupancy is transferred conservatively: a coarse cell is
+marked occupied if any fine cell within is occupied. Writing
+Oi and Fi for the occupied and free regions at level i,
+this gives Of ⊆Oc, and hence Fc ⊆Ff on Ωf. Solving
+Equation (4) on each domain yields hc(y) and hf(y). The
+fine solve imposes zero Dirichlet boundary conditions on
+the artificial region boundary ∂Ωf, thus hf vanishes there
+even where the workspace is free; switching to hf inside
+the region would therefore report spurious unsafety at the
+grid walls and forfeit the continuity that Poisson safety
+functions provide. We instead compose the two levels using
+the Boolean OR construction of [17], letting
+h(y) = max
+ hc(y), hf(y)
+
+,
+(7)
+and defining ∆i(y) ≜|h(y) −hi(y)| for i ∈{f, c}. Rather
+than differentiating the nonsmooth maximum, we impose
+one constraint per level, each relaxed by its own difference,
+resulting in the safety filter
+k(y, t) = arg min
+u∈Rm
+∥u −knom(x, t)∥2
+2
+s.t. ˙hf(y, t, u) ≥−α
+ h + ∆f
+
+˙hc(y, t, u) ≥−α
+ h + ∆c
+
+,
+(CBF-QP)
+enforced at every query point y ∈Yaug(q) in the augmented
+sample set, yielding 2|Yaug| total constraints. Whichever
+level attains the maximum has ∆i = 0 and recovers the
+nominal CBF condition, while the inactive level is slackened
+
+
+TABLE I: Solve cost for a fixed workspace extent (2.4 m per side) and a
+fixed 100-iteration budget. Mean ± std over 27–1708 solves per configu-
+ration on an RTX 4090, with |Yaug| = 679. The total time includes all
+numerical processing. The multigrid scheme resolves 1.0 cm over the region
+of interest at coarse-grid cost; it doubles the number of QP constraints, but
+latency is dominated by the Poisson solve.
+Grid (ε, N3)
+Poisson [ms]
+QP [ms]
+Total [ms]
+Single uniform
+3.0 cm, 803
+3.44 ± 0.23
+0.72 ± 0.02
+6.5 ± 1.9
+2.0 cm, 1203
+9.12 ± 0.44
+0.76 ± 0.04
+23.1 ± 6.6
+1.5 cm, 1603
+20.20 ± 0.46
+0.78 ± 0.12
+38.5 ± 5.7
+1.0 cm, 2403
+91.80 ± 0.95
+0.61 ± 0.07
+261.6 ± 9.0
+0.5 cm, 4803
+724.19 ± 3.71
+0.59 ± 0.03
+2059 ± 33
+Proposed (multigrid)
+3.0/1.0 cm, 803+503
+4.75 ± 0.48
+1.35 ± 0.19
+8.5 ± 1.9
+TABLE II: VLPSA vs. VLSA∗[11] (full action space) and nominal π0.5
+on SafeLIBERO (Levels I+II). VLPSA-NI ablates injection of held-object
+samples into the safe set. Success (SR), Avoidance (CAR, 100−collision
+rate), and Safe Success (SSR) rates in %; Steps is the mean number of steps
+to reach success, over successful episodes. ± denotes a 95% confidence
+interval (normal approximation; n=400 episodes per suite). Bold marks
+the best method where its interval does not overlap that of the runner-up.
+Method
+SR ↑
+CAR ↑
+SSR ↑
+Steps ↓
+Spatial
+Nominal
+57.8 ± 4.8
+20.8 ± 4.0
+19.2 ± 3.9
+119.5 ± 6.3
+VLSA∗
+73.8 ± 4.3
+70.5 ± 4.5
+59.8 ± 4.8
+133.4 ± 4.2
+VLPSA-NI
+71.5 ± 4.4
+75.8 ± 4.2
+54.5 ± 4.9
+123.0 ± 5.9
+VLPSA
+72.2 ± 4.4
+89.8 ± 3.0
+66.5 ± 4.6
+136.9 ± 5.9
+Goal
+Nominal
+49.8 ± 4.9
+27.8 ± 4.4
+20.0 ± 3.9
+116.9 ± 7.5
+VLSA∗
+85.2 ± 3.5
+88.2 ± 3.2
+76.8 ± 4.1
+134.7 ± 4.9
+VLPSA-NI
+55.5 ± 4.9
+82.2 ± 3.7
+44.5 ± 4.9
+132.4 ± 7.5
+VLPSA
+57.8 ± 4.8
+86.8 ± 3.3
+53.2 ± 4.9
+147.5 ± 7.2
+Object
+Nominal
+49.5 ± 4.9
+26.8 ± 4.3
+20.8 ± 4.0
+143.0 ± 6.7
+VLSA∗
+68.2 ± 4.6
+73.5 ± 4.3
+55.0 ± 4.9
+170.1 ± 5.0
+VLPSA-NI
+38.0 ± 4.8
+79.8 ± 3.9
+25.2 ± 4.3
+154.3 ± 9.2
+VLPSA
+39.0 ± 4.8
+94.2 ± 2.3
+38.2 ± 4.8
+148.6 ± 7.9
+Long
+Nominal
+39.5 ± 4.8
+17.0 ± 3.7
+13.2 ± 3.3
+297.9 ± 14.2
+VLSA∗
+45.0 ± 4.9
+59.8 ± 4.8
+26.0 ± 4.3
+343.7 ± 11.8
+VLPSA-NI
+43.8 ± 4.9
+69.0 ± 4.5
+27.8 ± 4.4
+267.7 ± 11.8
+VLPSA
+53.0 ± 4.9
+94.0 ± 2.3
+50.2 ± 4.9
+273.3 ± 11.3
+Overall
+Nominal
+49.1 ± 2.4
+23.1 ± 2.1
+18.3 ± 1.9
+160.6 ± 6.5
+VLSA∗
+68.1 ± 2.3
+73.0 ± 2.2
+54.4 ± 2.4
+177.8 ± 5.4
+VLPSA-NI
+52.2 ± 2.4
+76.7 ± 2.1
+38.0 ± 2.4
+161.5 ± 5.6
+VLPSA
+55.5 ± 2.4
+91.2 ± 1.4
+52.1 ± 2.4
+174.3 ± 5.5
+in proportion to its gap. Each ∆i decays continuously to
+zero as the levels cross, hence the filtered input varies
+continuously throughout the transition, and the coarse level
+certifies safety near the fine window’s boundary without any
+explicit mode switch. Figure 2 demonstrates where the fine
+grid safety constraint overrides the coarse. The number of
+constraints is doubled in the MC-CBF-QP, however solve
+time is still under 2ms for 2cm sample points, with the
+Poisson solve time under 5ms (Table I).
+IV. RESULTS
+A. Simulation Benchmark
+Simulation benchmarks are used for analysis of safety-
+filtering capabilities. SafeLIBERO [11] augments LIBERO
+task suites [27] with obstacle-rich variants across two diffi-
+culty levels (16 tasks, 32 scenarios, 50 episodes each). The
+suites isolate distinct sources of variation: Spatial (varied
+layout), Object (varied target object), Goal (varied task
+command), and Long (chained subgoals). Level I places ob-
+stacles near target objects, whereas Level II places obstacles
+along the transport path. Level II challenges end-effector-
+only filters, as safety bounds must continuously protect the
+geometry of the held object during transit. Table II shows
+the combined results.
+Fine-tuning VLAs on obstacle-rich data is costly and in-
+sufficient for hard safety guarantees, as safety degrades under
+spatial reconfigurations or unseen obstacle geometries [4].
+Conversely, zero-shot models perform poorly; for instance,
+the LIBERO-finetuned π0.5 checkpoint [1] exhibits high
+collision rates when deployed on SafeLIBERO (Table II).
+VLSA [11] serves as the primary baseline safety filter.
+It prompts a vision-language model to identify the obstacle
+most probable to cause a collision, grounds it in 3D from
+RGB-D, and fits a minimum-volume enclosing ellipsoid
+to enforce end-effector collision avoidance. We denote the
+authors’ implementation as VLSA*, re-evaluated under our
+standardized protocol; its metrics reflect direct comparability
+across Table II rather than originally reported values. While
+unreleased method implementations assign per-obstacle ellip-
+soids [28], multi-obstacle constraints can scale poorly and re-
+quire complex relaxations [29]. Furthermore, single-ellipsoid
+abstractions over-approximate concave geometries, causing
+admissible control sets to collapse. No prior work addresses
+full-body collision avoidance with held-object protection,
+which we tackle using PSFs [16].
+All methods in Table II are evaluated under a single
+protocol that updates the original VLSA evaluation in four
+key respects. An expanded collision detection scheme scans
+all simulation contacts and distinguishes visual mesh inter-
+sections from MuJoCo [30] collision geometry artifacts. We
+slightly modify the success criteria parameters to align the
+evaluation metrics with qualitative semantic task completion.
+To avoid token use, we replace online vision language model
+(VLM) obstacle identification with ground-truth labels. Fi-
+nally, all controllers run at 100 Hz. While absolute metrics
+differ from the prior literature due to these updates, cross-
+method comparisons in Table II remain self-consistent.
+B. Simulation Discussion
+Safety filtering markedly improves safety and benefits
+performance, but there are trade offs. Note that safe suc-
+cess rates do not meaningfully differ between VLSA* and
+VLPSA overall, but VLPSA results in three times fewer
+collisions. Losing unsafe success is a cost to conservative
+safety filtering, but collision avoidance is a necessary trade
+off for many deployments. Additionally, VLSA* and VLPSA
+both meaningfully improve raw success rates, showing that in
+aggregate there is not necessarily a success cost to filtering.
+In the object suite, while VLPSA reduces the success rate
+
+
+from nominal, the safe success rate nearly doubles. Quali-
+tatively, failures arise when the VLA is filtered off its path
+and attempts to pick up an object it is filtered from touching,
+showing a vision-language failure but highlighting the for-
+ward invariance of the safe set under VLPSA deployment.
+Some unnecessary failures occur, particularly with an object
+in hand, when a long horizon plan would be required while
+the VLA’s short term goal is fundamentally unsafe.
+A note on the fallibility of simulation is warranted.
+MuJoCo [30] resolves contact against simplified collision
+geometries that can extend beyond the rendered visual mesh.
+Hence, contacts can be reported while objects remain visibly
+separated. Filtering this does not preclude contact from being
+recorded, 89% of VLA collisions cannot be rejected, having
+real penetration, versus only 41% of VLPSA collisions. This
+clear discrepancy shows this is a differentiating metric, while
+not perfect. All analysis therefore counts only unrejectable
+collisions: those in which the visual meshes penetrate, or
+in which MuJoCo records no contact pair yet the obstacle
+is displaced. The latter case accounts for fewer than 1 in
+10 collisions tracked. While we consider the unrejectable-
+collision count the more faithful metric, we note that the
+set of statistically separated results in Table II is unchanged
+under the original 1 mm displacement criterion: every bolded
+entry in Table II remains bolded, and no new one appears.
+The leading method changes in two cells, Goal CAR and
+overall SSR, both moving in VLPSA’s favor; in neither case
+does the difference exceed the confidence intervals.
+A full-body safety filter with complete environment cover-
+age should, in principle, produce no unrejectable collisions.
+Three effects prevent this in practice. Perception, even the
+noiseless perception available in simulation, cannot protect
+against obstacles that are never observed, nor against a
+grasped object that slips substantially within the gripper after
+the grasp is established. The third effect is a simulation
+artifact: contact with collision geometry, which the filter
+neither prevents nor is designed to prevent, engages contact
+dynamics that invalidate the velocity-tracking assumption
+upon which the filter rests, and the resulting tracking error
+can carry the visual mesh into a penetration.
+Much of the benefit of VLPSA is erased without account-
+ing for the held object (VLPSA-NI) as shown in Table II, and
+qualitatively from scene construction, end effector collisions
+are mostly what stands to be avoided. Dynamic full body
+collision avoidance is practical using our method, which is
+not fully exercised in this benchmark. We therefore weight
+hardware deployments to establish the method’s practicality.
+C. Hardware Experiments
+We validate the method on a Franka FR3 to demonstrate
+that the filter transfers to real hardware. The safe set is
+constructed from real perception data rather than simulated,
+and the Poisson solve must keep pace with the policy at
+deployment rates. The experiments here establish that the
+full perception-to-filter pipeline closes the loop on physical
+hardware, including dynamic obstacle avoidance.
+1) Perception to Occupancy Map: To deploy safety fil-
+tering on hardware, a dynamic occupancy map is required
+for the multi-resolution Poisson solution (Section III-C).
+Following OctoMap [31], we track per-voxel occupancy in
+log-odds, incrementing on a sensor hit and decrementing
+when a ray passes through, and mark a cell occupied above
+a probability threshold. Because the base is fixed and the
+Poisson solver requires a uniform grid, we forgo the octree
+and define occupancy on a 1.5 × 1.5 × 1.5 m grid at 1 cm
+resolution. Maps are built from two Hesai JT128 LiDARs
+and two ZED2i stereo cameras; parameters are given in the
+supplementary code.
+Feasible collision avoidance requires excluding the arm
+itself. We maintain a robot mask from the sampled surface
+points used in the safety filter QP (Eqn. MC-CBF-QP),
+unioning εE balls about each; any hit within εE of a
+sample is attributed to the robot and discarded. The exclusion
+is inflated to rE = εE + 2 cm to absorb arm motion
+during a LiDAR sweep, extrinsic calibration drift, and depth
+noise. Provided no obstacle initializes inside this buffer and
+the robot keeps its safe distance, self-filtering discards no
+information. Flying pixels and depth uncertainty [32] are
+most damaging when they mark the body or its immediate
+halo as occupied, producing infeasibility or self-evasion. Per
+sensor, we therefore ignore LiDAR hits inside the occlusion
+shadow each robot sample casts at the current pose, and
+camera hits inside an anisotropic ellipse about each sample’s
+projected pixel, elongated along the visual ray: depth images
+carry error in range but not in pixel location, so a sample’s
+(u, v) projection is exact while its measured depth is not.
+Exclusions are per sensor, so no region is blinded: obstacles
+observed by another sensor are still respected.
+Rather than raytrace, we forward-project: voxel centers
+transform into each camera frame as (u, v, d) and each
+LiDAR frame as (θ, ϕ, r), both single matrix operations. A
+voxel is cleared when all neighboring pixels or scans report
+surfaces more than εc beyond its depth, standing in for a
+ray passing through the cell. Hits are recorded by rounding
+point clouds into voxel coordinates, subject to the exclusions
+above. Maps update above 60 Hz, exceeding both the ZED2i
+publish rate and the LiDAR’s 20 Hz bound.
+2) Sample Injection: To deploy the CBF-QP with the
+guarantees of Proposition 1, we require a bounding volume
+of the grasped object ˆBE
+O even under perturbation and sens-
+ing uncertainty. We define d to be the maximum possible
+distance that any point on the held object’s surface can
+move relative to the end-effector frame during the grasp.
+If, at any time during the grasp, all points d away from
+the surface are in ˆBE
+O, the held object will remain a subset
+for the grasp duration. This motivates our injected sample
+initialization, and carving. Given an object bounding box
+and some assumed d, inflating the box by d yields a valid,
+conservative ˆBE
+O. Points in the set can be removed at any time
+if there is no occupancy within d. In practice, we initialize
+with a d-expanded voxelized bounding box from YOLO [33]
+and carve from perception data, resulting in ˆBE
+O & object
+samples sets as shown in yellow and pink, respectively, in
+
+
+Nominal VLA
+VLPSA
+A
+B
+Fig. 3: (A) Hardware validation of the VLA policy with and without the proposed safety layer in a cluttered tabletop environment for the task “Pick up the
+banana.” (Top) The cluttered environment is out-of-distribution for the nominal VLA policy, which completes the task but collides with multiple objects
+in the scene. (Middle) With the proposed full-body safety architecture, the VLA policy completes the same task while avoiding all collisions. (Bottom
+Left) The minimum active Poisson Safety Function value per link remains positive through-out the trial. (Bottom Right) The nominal trajectory versus
+the safety filtered trajectory throughout the trial. (B) The minimum value of the PSF per-link throughout a long horizon trial with the same text prompt
+as above. This dictates two successful executions of the task in clutter with dynamical obstacles.
+Fig 1. These samples can then be used to prevent marking
+the held object as occupied via the same sample method
+described above, preventing catastrophic self-evasion. The
+adaptability of this fast, sample based exclusion method is a
+direct benefit over using model based occupancy elimination.
+3) VLA Training and Deployment: To demonstrate our
+filter’s operation over a learned nominal controller on hard-
+ware, we fine-tune π0.5 [1] from the released base checkpoint
+on 430 teleoperated demonstrations of a tabletop pick-and-
+place task (placing a banana into a bowl) collected on a
+Franka FR3 with compliant Fin Ray fingers. The policy was
+not trained with obstacles and no safety objective enters
+at training. The policy is queried at 10Hz for an action
+chunk of length 16 which is the nominal input. Occupancy
+is constructed from the perception stack of Sec. IV-C.1 at 40
+Hz. The coarse 803 grid at a 3cm resolution covers the entire
+workspace, and the fine 503 grid at a 1cm resolution covers
+the task subset. Poisson’s equation is solved on both of these
+grids to produce the two safety functions of the space at
+40Hz. The safety filter runs at 150Hz with the most recent
+Poisson solutions. Pick up and placement target bounding
+boxes, from YOLO [33], are used to clear the occupancy
+map, allowing for robot interaction with the objects. Cur-
+rently, targets are identified from the task description, but
+could be semantically selected by a VLM.
+4) Demonstration in Clutter: First, we show the effec-
+tiveness of our method for VLA navigation in clutter. The
+nominal policy is finetuned only on unobstructed paths. As
+seen in the upper panel of Figure 3A, the robot collides with
+multiple obstacles in the scene and obstructs the placement
+
+
+object with the nominal VLA. In contrast, our method can
+safely navigate through clutter with a naive VLA policy. In
+the bottom panel of Figure 3A, our safety architecture is
+deployed on top of the nominal policy and safely and suc-
+cessfully complete the task. In clutter, precise representations
+of the environment are required for navigation, especially
+near the obstacles, where the fine grid at a high resolution
+becomes engaged (see Figure 2).
+5) Dynamic Avoidance: The method extends to dynamic
+scenes when using a nominal VLA policy. We extend the
+3D perception stack from [16] for arbitrary dynamic en-
+vironments. There is a sensing and reachability bound for
+the obstacle speed the filter can accommodate. First, the
+occupancy grid is updated at a finite rate, so an obstacle mov-
+ing faster than the occupancy-to-PSF pipeline is represented
+with a delay proportional to its velocity. Even under exact
+occupancy, a fast moving obstacle can induce actions that
+require exceeding the robot’s velocity limits which cannot be
+satisfied. Figure 3B shows the PSF value across a continuous
+trial in which the FR3 completes two successful pick-and-
+place tasks while a human and ball obstacle repeatedly enter
+the workspace and attempt to interfere with the task. Grasped
+object sample points extend safety from the full robot body
+to the held banana throughout. The PSF value maintains its
+positive value throughout and task progress resumes once the
+workspace clears.
+V. CONCLUSION
+We have presented an architecture for full-body dynamic
+safety of VLA policies without retraining. The safety filter
+is modular and can be applied to general learned policies.
+Across a subset of tasks, the safety filter improves task
+success by preventing episode-ending collisions, while other
+tasks are hindered. Our method improved full-body collision
+avoidance in all cases. We extend earlier results to provide
+safety guarantees for grasped objects and develop the percep-
+tion and computational pipeline to enable real-time validated
+operation in dynamic and cluttered environments.
+Future work will investigate how to close the success
+gap in the failure modes, perhaps by utilizing the VLA’s
+plan in combination with modern control methods such
+as Model Predictive Control, or integrating safety earlier
+into the learned pipeline. The current perception pipeline
+is limited by observation occlusions, better shape prediction
+could improve or maintain safety under lower sensor burdens.
+Acknowledgments - This research was supported by The
+Dow Chemical Company through project #227027AW.
+Claude Opus 5 aided in coding and analysis.
+REFERENCES
+[1] P. Intelligence, K. Black, N. Brown, J. Darpinian et al., “π0.5:
+a vision-language-action model with open-world generalization,”
+arXiv:2504.16054, 2025.
+[2] M. J. Kim, K. Pertsch, S. Karamcheti et al., “Openvla: An open-source
+vision-language-action model,” arXiv:2406.09246, 2024.
+[3] R. Thakker, A. Patnaik, V. Kurtz, J. Frey et al., “Risk-guided diffusion:
+Toward deploying robot foundation models in space, where failure is
+not an option,” arXiv:2506.17601, 2025.
+[4] R. Cui, Z. Zhang, J. Pang, H. Chi et al., “LIBERO-safety: A com-
+prehensive benchmark for physical and semantic safety in vision-
+language-action models,” arXiv:2606.23686, 2026.
+[5] B. Zhang et al., “Safevla: Towards safety alignment of vision-
+language-action model via constrained learning,” arXiv:2503.03480,
+2026.
+[6] S. Bansal, M. Chen, S. Herbert, and C. J. Tomlin, “Hamilton-
+jacobi reachability: A brief overview and recent advances,” in IEEE
+Conference on Decision and Control, 2017.
+[7] K. Nakamura, L. Peters, and A. Bajcsy, “Generalizing safety beyond
+collision-avoidance via latent-space reachability analysis,” in Robotics:
+Science and Systems XXI, June 2025.
+[8] J. Seo, K. Nakamura, and A. Bajcsy, “Uncertainty-aware latent
+safety filters for avoiding out-of-distribution failures,” 2025. [Online].
+Available: https://arxiv.org/abs/2505.00779
+[9] A. D. Ames, X. Xu, J. W. Grizzle, and P. Tabuada, “Control barrier
+function based quadratic programs for safety critical systems,” IEEE
+Trans. Automatic Control, vol. 62, no. 8, p. 3861–3876, Aug. 2017.
+[10] A. Ames, S. Coogan, M. Egerstedt, G. Notomista, K. Sreenath, and
+P. Tabuada, “Control barrier functions: Theory and applications,” in
+European Control Conference, Jun. 2019, pp. 3420–3431.
+[11] S. Hu, Z. Liu, S. Liu, J. Cen, Z. Meng, and X. He, “Vlsa: Vision-
+language-action models with plug-and-play safety constraint layer,”
+arXiv preprint arXiv:2512.11891, 2025.
+[12] S. Park, F. Zhang, B. Mirzasoleiman, S. Talebi, and N. Sehatbakhsh,
+“Your model already knows: Attention-guided safety filter for vision-
+language-action models,” arXiv preprint arXiv:2606.09749, 2026.
+[13] B. Aksoy and J. T. Wen, “Planning and control for deformable
+linear object manipulation,” IEEE Trans. Automation Science and
+Engineering, vol. 23, p. 1093–1111, 2026.
+[14] G. Bahati, R. M. Bena, and A. D. Ames, “Dynamic safety in complex
+environments: Synthesizing safety filters with poisson’s equation,” in
+Robotics: Science and Systems, 2025.
+[15] R. M. Bena, G. Bahati, B. Werner, R. K. Cosner, L. Yang, and A. D.
+Ames, “Geometry-aware predictive safety filters on humanoids: From
+poisson safety functions to cbf constrained mpc,” IEEE-RAS 24th Int.
+Conf. on Humanoid Robots, 2025.
+[16] M. Wilkinson, G. Bahati, R. M. Bena, E. Fourney, J. W. Bur-
+dick, and A. D. Ames, “Full-body dynamic safety for robot ma-
+nipulators: 3d poisson safety functions for cbf-based safety filters,”
+arXiv:2604.21189, 2026.
+[17] P. Ong, H. Lee, T. G. Molnar, D. Panagou, and A. D. Ames, “Com-
+binatorial control barrier functions: Nested boolean and p-choose-r
+compositions of safety constraints,” IEEE Control Systems Letters,
+vol. 9, p. 2705–2710, 2025.
+[18] L. Perko, Differential equations and dynamical systems.
+Springer
+Science & Business Media, 2013, vol. 7.
+[19] A. Ames, X. Xu, J. Grizzle, and P. Tabuada, “Control barrier function
+based quadratic programs for safety critical systems,” vol. 62, no. 8,
+pp. 3861–3876, 2017.
+[20] A. D. Ames and M. Powell, “Towards the unification of locomotion
+and manipulation through control lyapunov functions and quadratic
+programs,” Lecture notes in control and information sciences, 2013.
+[21] D. Gilbarg and N. S. Trudinger, Elliptic partial differential equations
+of second order.
+Springer, 1977, vol. 224, no. 2.
+[22] A. Singletary, W. Guffey, T. G. Molnar, R. Sinnet, and A. D.
+Ames, “Safety-critical manipulation for collision-free food prepara-
+tion,” IEEE Robotics and Automation Letters, 2022.
+[23] R. R¨omer, J. Balletshofer, J. Thumm, M. Pavone, A. P. Schoel-
+lig, and M. Althoff, “From demonstrations to safe deployment:
+Path-consistent safety filtering for diffusion policies,” arXiv preprint
+arXiv:2511.06385, 2025.
+[24] K. Long, K. M. B. Lee, N. Raicevic, N. Attasseri, M. Leok, and
+N. Atanasov, “Neural configuration-space barriers for manipulation
+planning and control,” arXiv:2503.04929, 2026.
+[25] H. Chen, Y. Zhou, Y. Zhou, and H. Wang, “Cssdf-net: Safe motion
+planning based on neural implicit representations of configuration
+space distance field,” arXiv:2603.18669, 2026.
+[26] D. Morton and M. Pavone, “Safe, task-consistent manipulation with
+operational space control barrier functions,” in IEEE/RSJ Conf. Intel-
+ligent Robots and Systems, 2025.
+[27] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone, “Libero:
+Benchmarking knowledge transfer for lifelong robot learning,” arXiv
+preprint arXiv:2306.03310, 2023.
+
+
+[28] H. Wang, G. Zhang, Y. Yan, R. R. Kompella, and G. Liu, “Vla
+knows its limits: Adaptive execution horizons for robot policies,”
+arXiv:2602.21445, 2026.
+[29] T. G. Molnar and A. D. Ames, “Composing control barrier functions
+for complex safety specifications,” arXiv:2309.06647, 2023.
+[30] E. Todorov, T. Erez, and Y. Tassa, “Mujoco: A physics engine for
+model-based control,” in IEEE/RSJ Int. Conf. on Intelligent Robots
+and Systems, 2012.
+[31] A. Hornung, K. M. Wurm, M. Bennewitz, C. Stachniss, and W. Bur-
+gard, “OctoMap: An efficient probabilistic 3D mapping framework
+based on octrees,” Autonomous Robots, 2013.
+[32] A. Sabov and J. Kr¨uger, “Identification and correction of flying pixels
+in range camera data,” in Proc. 24th Spring Conference on Computer
+Graphics.
+New York, NY, USA: ACM, 2008, p. 135–142.
+[33] G. Jocher, A. Chaurasia, and J. Qiu, “Ultralytics yolo,” 2023.
+[Online]. Available: https://github.com
