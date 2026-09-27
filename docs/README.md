@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-26</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-27</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 20 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>8</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-26 19:36:55 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-27 19:11:02 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-26 日报精选19篇机器人研究，精读7篇、速读12篇。最值得关注的是《Rolling-WAM》（9.0分）用滚动想象提升世界动作模型，以及《VLPSA》（8.0分）用视觉-语言-泊松安全动作保障全身安全。普通读者可先看这两篇精读，再按需浏览《CrossSafe》等速读方向。</p>
+<p>今日精读8篇、速读12篇共20篇，世界动作模型与VLA力控优化领跑。最值得看的是满分《Latent evolving World Action Model》和9分的《ForceRFT》，分别指向世界模型演化与力引导残差强化学习两条路线。普通读者可先读这两篇的精读笔记，再挑CARE或Zeva-Ego的速读摘要拓展视野。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">8 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Rolling-WAM: World Action Models with Rolling Imagination">Rolling-WAM: World Action Models with Rolling Imagination</span></li><li><span class="dpr-home-dashboard-paper-title" title="VLPSA: Vision-Language-Poisson-Safe Actions for Full-Body Safety of Learned Policies">VLPSA: Vision-Language-Poisson-Safe Actions for Full-Body Safety of Learned Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="SCULPT-VLA: Learning Structured Control through Staged Action Grounding">SCULPT-VLA: Learning Structured Control through Staged Action Grounding</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Latent evolving World Action Model">Latent evolving World Action Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="ForceRFT: Refining VLA Actions through Force-Guided Residual Reinforcement Learning">ForceRFT: Refining VLA Actions through Force-Guided Residual Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Grounded Action Model: 3D Grounding as a Foundation for Robotics">Grounded Action Model: 3D Grounding as a Foundation for Robotics</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>8</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="CrossSafe: Towards Cross-Embodiment Latent Safety Filters">CrossSafe: Towards Cross-Embodiment Latent Safety Filters</span></li><li><span class="dpr-home-dashboard-paper-title" title="Generative Embodied Multiple Behavior Control Systems for Human-like Agents">Generative Embodied Multiple Behavior Control Systems for Human-like Agents</span></li><li><span class="dpr-home-dashboard-paper-title" title="InfiNoVA: Infinite Novel View Augmentation for Viewpoint Invariant Robot Policies">InfiNoVA: Infinite Novel View Augmentation for Viewpoint Invariant Robot Policies</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="CARE: Experience-Guided Atomic Corrective Execution for Vision-Language-Action Policies">CARE: Experience-Guided Atomic Corrective Execution for Vision-Language-Action Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Zeva-Ego: Egocentric Mid-Training with In-Context Causal Learning for Robot Manipulation">Zeva-Ego: Egocentric Mid-Training with In-Context Causal Learning for Robot Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="ME-VLM:A Unified VLM for Embodied Cognition and Agent Coordination">ME-VLM:A Unified VLM for Embodied Cognition and Agent Coordination</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>10</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
 </section>
 </div>
 

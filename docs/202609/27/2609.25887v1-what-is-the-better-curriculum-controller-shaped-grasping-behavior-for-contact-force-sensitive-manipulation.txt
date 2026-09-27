@@ -1,0 +1,1608 @@
+What is the Better Curriculum:
+Controller-Shaped Grasping Behavior
+for Contact Force-Sensitive Manipulation
+Ziyan Feng
+Zizhao Yuan
+Yulong Fu
+Yuxin He
+Zhiyuan Zhang
+Zhengjie Zhang
+Jinni Zhou
+Renjing Xu
+Qiang Nie∗
+The Hong Kong University of Science and Technology (Guangzhou)
+Figure 1: Teleoperated fragile-cup collection. A leader arm controls the follower arm. Both modes
+provide on-site views and a graphical user interface displaying live tactile parameters and slip events.
+In manual mode, these cues are advisory and the operator uses coarse gripper buttons; only reflex
+mode uses TactileReflex [1] to close a direct 25 Hz tactile–action loop.
+Abstract: How should a robot learn to manipulate objects so fragile that sub-
+Newton contact forces can cause irreversible damage? Existing visuo-tactile
+policy learning typically treats tactile sensing as an additional policy input. In
+direct-contact force-sensitive manipulation, however, the bottleneck can arise
+earlier, during data collection: manual gripper control is too delayed and coarse-
+grained to reliably maintain the narrow force range required for stable grasping.
+We therefore use a deterministic 25 Hz tactile reflex controller as a collection-
+time teacher, producing demonstrations with controller-shaped grasping behavior
+for tactile-free policy learning. On Action Chunking with Transformers (ACT),
+policies trained from reflex-shaped demonstrations recover the teacher’s grasping
+profile and achieve 95% stable grasps on the nominal plastic-cup task, substantially
+outperforming visually screened manual demonstrations. The same intervention
+improves in-distribution stability on π0.5 and shows a favorable exploratory trend on
+an unseen paper-cup variant. Under randomized external disturbance, however, the
+reflex-data π0.5 policy still fails in 45% of policy-only trials, whereas a deployment-
+time reflex arbiter retains all grasps. These results reveal a new role for tactile
+feedback in force-sensitive manipulation: rather than integrating tactile into the
+policy, we use it as a collection-time teacher that shapes grasping behavior in
+demonstrations for policy learning, while disturbance rejection remains controller-
+dependent, revealing the boundary of tactile-free policy.
+∗Corresponding author: qiangnie@hkust-gz.edu.cn.
+10th Conference on Robot Learning (CoRL 2026), Austin, Texas, USA.
+arXiv:2609.25887v1  [cs.RO]  22 Sep 2026
+
+
+Project website: https://shayfeng.github.io/better-curriculum/.
+Keywords: Controller-Shaped Grasping Behavior, Vision-Based Tactile Sensing,
+Demonstration Shaping, Policy Learning, Force-Sensitive Manipulation
+1
+Introduction
+Imagine lifting a disposable plastic cup: 3.5 g, 0.3 mm wall thickness. Gripping too lightly leads
+to slip, while exceeding the viable force range by a few hundred millinewtons causes irreversible
+deformation. Classical tactile controllers handle such objects [2, 3, 4] through deterministic high-rate
+feedback, but they lack the multi-step task capability of learned policies. Learned policies such as
+Action Chunking with Transformers (ACT) [5], diffusion-policy-style models [6], and π0.5 [7] support
+multi-step task execution but do not provide closed-loop force modulation. Recent visuo-tactile
+policies (Sec. 2) improve contact-rich manipulation, yet in direct-contact force-sensitive container
+manipulation the main difficulty begins earlier: manual gripper control during teleoperated data
+collection relies on a human observation–response–execution loop, whose cumulative perception,
+reaction, and actuation delays can be too large for timely correction when the gripper must remain
+within an extremely narrow contact-force range. In our collection setup, the operator is given on-site
+visual access together with a graphical user interface (GUI) displaying live tactile parameters and slip
+events, allowing the grasp state to be monitored online. Even with these real-time cues, however, the
+operator must still interpret the contact state and convert it into coarse gripper commands through the
+same delayed human loop. Unlike many contact-rich tasks where contact is mediated by insertion
+geometry or tool interaction, direct-contact fragile grasping requires the gripper itself to continuously
+regulate this narrow force window on the object surface throughout collection.
+This bottleneck is easy to miss if tactile is treated primarily as an additional modality to integrate into
+policy learning or execution. Classical tactile control stabilizes contact after grasp formation [8, 3, 4],
+whereas recent visuo-tactile policy learning studies how the tactile modality can be integrated into the
+learned policy [9, 10, 11]. Neither route isolates the upstream learning problem here: before policy
+optimization can succeed, good demonstrations must first be made repeatable enough to collect.
+In this work, we address this limitation with a deterministic vision-based tactile reflex controller used
+as a collection-time teacher. Rather than integrating tactile into the policy, we run TactileReflex [1]
+at 25 Hz during teleoperated data collection to autonomously regulate follower-gripper force in
+real time. This produces demonstrations with controller-shaped grasping behavior for tactile-free
+policy learning while keeping the policy training and deployment interfaces unchanged. The logged
+actions record the follower’s controller-regulated realized trajectories rather than unreconciled leader
+commands, and a tactile-free student later learns to reproduce that behavior at inference. This makes
+the approach easy to pair with larger policy backbones without requiring tactile-specific policy
+changes. We use “curriculum” as shorthand for this controller-shaped demonstration-data distribution,
+not for a staged sample schedule. Fig. 1 previews this collection-time mechanism and the resulting
+demonstration-quality difference, and Fig. 2 formalizes deployment-time decoupling.
+This insertion point is well suited to fragile contact manipulation because the central difficulty is not
+only learning a control law, but making successful contact behavior collectable and therefore learnable.
+Without reflex assistance, operators use on-site scene observations and live tactile parameters and slip
+events displayed in the collection GUI, but must convert these visual cues into delayed, coarse button
+commands. Grasps may therefore briefly enter the right regime but are hard to maintain repeatably
+under a fixed manual protocol. With the reflex active, that same narrow regime becomes repeatably
+realizable during collection. We use a tactile-free student to test whether tactile improves learning by
+shaping demonstrations rather than by expanding the learned policy interface. More broadly, tactile
+sensing remains less standardized and data-rich than red-green-blue (RGB) vision, spanning pressure
+maps, force/torque signals, binary contact indicators, and high-resolution tactile images, often with
+comparatively small or closed datasets [12]. In the current setup, naive tactile-image fine-tuning did
+not improve over the vision-only route (Appendix A), so the core question here is the collection-time
+2
+
+
+role of tactile rather than richer visuo-tactile policy integration. For the tactile-free student itself, the
+controller’s tactile regulation is transferred only through these demonstrations.
+We evaluate this central claim through three main lines of evidence. On ACT, controller-shaped
+demonstrations provide the clearest controlled evidence that this data intervention helps a tactile-
+free policy recover the nominal contact regime; on π0.5, the same data intervention improves in-
+distribution (ID) stability, showing that the data-source effect is not ACT-specific, and yields favorable
+exploratory out-of-distribution (OOD) evidence on an unseen paper-cup variant. Under randomized
+external disturbance, adding a high-rate deterministic arbiter enables zero-failure grasp retention.
+Taken together, these results support our central claim: controller-shaped demonstrations provide a
+more consistent training distribution for tactile-free policy learning, while high-rate tactile feedback
+complements the learned policy by providing rapid disturbance rejection at deployment.
+Contributions.
+❶Controller-shaped demonstrations as a training-data intervention. We identify a new collection-
+time role for tactile sensing in fragile contact manipulation: a deterministic vision-based tactile reflex
+controller acts as a teacher that produces teleoperated demonstrations with controller-shaped grasping
+behavior. Together, these shaped demonstrations provide a more consistent training distribution for
+learning tactile-free policies in an otherwise data-scarce and precision-critical grasp regime.
+❷Learning controller-shaped grasping behavior with a tactile-free policy. We show that
+controller-shaped demonstrations improve tactile-free policy learning of nominal grasp behavior.
+Across ACT and π0.5, policies trained on reflex-shaped demonstrations achieve substantially better
+in-distribution grasp quality than visually screened manual-data baselines, without tactile-specific
+changes to the policy training or deployment interface.
+❸Revealing the boundary of tactile-free policy. We introduce a deployment-time disturbance
+protocol that separates nominal regime learning from fast tactile reactivity. Under randomized
+external perturbations, the same policy requires a decoupled high-rate gripper arbiter for reliable
+grasp retention, revealing the boundary of what collection-time tactile shaping can implicitly transfer.
+2
+Related Work
+Visuo-tactile policy learning.
+Recent visuo-tactile manipulation policies [9, 10, 13, 11, 14, 15, 16,
+17, 18, 19, 20] often study insertion, tool use, and other contact-rich tasks by treating tactile as an
+additional modality in policy learning or execution. Crucially, they typically do not ask whether tactile
+can improve learning upstream by making low-yield force-sensitive collection repeatable enough to
+train from. Recent CoRL work also studies dexterous teleoperation and collection interfaces for skill
+transfer, such as DexUMI [21] and TypeTele [22], but these works focus on embodiment gap reduction,
+retargeting, or operator interfaces rather than isolating collection-time tactile shaping for direct fragile-
+object manipulation. A concurrent work, HapticVLA [23], removes inference-time tactile sensing by
+distilling a tactile-aware token from a reward-weighted action expert. By contrast, a deterministic
+reflex controller directly shapes collection, yielding controller-shaped grasping demonstrations for
+tactile-free policy learning.
+Privileged information distillation.
+Learning from privileged information [24] is well established
+in robotics teacher-student frameworks [25, 26, 27, 28], where the privileged teacher is typically
+a learned policy or a richer observation stream. Here, the teacher is an engineered, deterministic
+controller active only during collection. It does not provide an extra modality to the learned policy;
+instead, it writes a more stable nominal contact regime into the demonstrations. Here, “distillation” is
+interpretive and limited to collection time: the student reproduces controller-shaped grasping behavior
+without inheriting full tactile reactivity or using tactile input at inference.
+Reactive control and deployment-time safety.
+RDP and ImplicitRDP [29, 30], Compli-
+antVLA [31], VLSA [32], SafeDiff [33], and Safe-Night VLA [34] combine learned policies with
+faster reactive modules, impedance adaptation, tactile calibration, or safety filters during rollout.
+3
+
+
+Their primary role is to stabilize or constrain a learned policy at deployment time. Here, the controller
+plays a different role. During collection, a deterministic tactile reflex acts as a data-shaping teacher
+that changes which contact trajectories are realized and recorded. At deployment, this same reactive
+arbitration reappears as a decoupled gripper safety layer at runtime, revealing what the tactile-free
+student did not inherit: high-rate tactile correction under disturbance.
+3
+Method
+This section first formalizes in Fig. 2 the controller mechanism previewed in Fig. 1 and specifies
+how deployment is decoupled from collection (Sec. 3.1), then introduces the controller-inspired
+dynamics-loss refinement used in Experiment 2 (Sec. 3.2), and finally summarizes the evaluation
+quantities and tactile-regime summaries used throughout the experiments (Sec. 3.3).
+3.1
+Controller-Shaped Collection and Decoupled Deployment
+Fig. 2 summarizes the paper’s main mechanism. The learned tactile-free student predicts arm
+trajectories and gripper commands at chunked rates, whereas the deterministic tactile reflex operates
+outside the policy loop and regulates only the gripper at 25 Hz from dual tactile sensors. In this setup,
+the same controller appears in two distinct roles: during collection it shapes the demonstrations seen
+by behavioral cloning, and at deployment it can return as a local high-rate gripper correction module.
+Figure 2: The controller matters twice: as demonstration shaping during collection and as safety
+layer during deployment. During teleoperated collection, the reflex shapes demonstrations into a
+repeatable viable grasp regime; a tactile-free student then learns from RGB observations and robot
+state to re-enter that teacher-near regime without tactile input at inference; at deployment, arm control
+remains with the policy while a deterministic arbiter decouples gripper control by reinterpreting
+policy output as close/open intent, allowing the reflex to retain high-rate gripper authority for grasp
+stabilization, retention, and release during execution.
+Collection-time role.
+During data collection, one expert operator teleoperates a Piper 6-degree-of-
+freedom (6-DoF) arm via an SO101 leader arm. In both collection modes, the operator has on-site
+visual access and a GUI displaying live tactile parameters and slip events. In manual mode, these
+signals are advisory only: the operator retains gripper authority through coarse buttons, without
+haptic or controller actuation. In reflex mode, TactileReflex [1] autonomously manages the follower
+gripper at 25 Hz; the leader gripper acts only as a binary intent signal, with closing arming the
+reflex and opening releasing it. Teleoperation logging and dataset organization follow a LeRobot-
+compatible format [35]. For the reflex data, each frame records robot state, tactile metrics, and camera
+streams, but the 7-dimensional action for imitation stores the follower’s realized joint and gripper
+state rather than the leader’s raw command. The reflex dataset therefore records controller-shaped
+realized trajectories. The original visually screened manual pool did not retain tactile traces; a
+fresh contact-screened ablation retained them only for offline ranking, never for actuation, ACT
+4
+
+
+training, or inference. Collection-time gripper regulation is the primary data-source intervention,
+while object family, recorded action interface, and sensing stack remain fixed. Appendix E.2.1 details
+manual-baseline screening, logging, and collection-order controls.
+Deployment-time role and decoupling.
+The same TactileReflex controller can also remain active
+at deployment as a deterministic 25 Hz gripper controller [1], operating on normal force, shear slip,
+and center of pressure from dual MC-Tac sensors [36]. At deployment we use two runtime modes. In
+policy-only, the student controls both arm and gripper. In policy + arbiter, the same learned policy
+still controls the arm, but the gripper output is reinterpreted as intent: a close command activates the
+reflex, which then retains gripper authority despite policy jitter; release requires sustained open intent
+plus a short suppression to avoid immediate re-latching. This decoupling matters because learned
+policies do not provide high-rate tactile closed-loop correction inside the committed action segment.2
+In the current deployment setting, both ACT and π0.5 operate at much lower effective update rates
+than the reflex and commit actions over finite chunks. The reflex instead runs independently at about
+25 Hz, so it can intervene during grasp stabilization and between policy updates. Appendix B gives
+the switch logic, Appendix C summarizes the engineering refinements used to sustain the controller
+in this paper, and Appendix E.1 reports the implementation details and rollout frequencies.
+3.2
+Dynamics-Loss Refinement for Controller-Shaped Regime Entry and Release
+After establishing the collection-time mechanism, Experiment 2 tests a controller-inspired dynamics-
+loss refinement on reflex-data training. The goal is specific: improve how decisively the learned
+policy enters and exits the controller-shaped nominal contact regime.
+Concretely, we add a gripper dynamics consistency term during training as a simple second-order
+trajectory-shape consistency prior on the demonstrated gripper trajectory. This is analogous to
+smoothness costs used in robot trajectory optimization [37], but here it is used only as a narrow
+train-time prior on gripper trajectory shape. Let g1:T denote the demonstrated gripper trajectory
+inside an action chunk and ˆg1:T the policy prediction. In addition to the standard training objective
+Lmain, we penalize mismatch in the second-order temporal difference of the gripper trajectory,
+Ldyn =
+1
+T −2
+T −1
+X
+t=2
+∆2ˆgt −∆2gt
+ ,
+∆2gt = gt+1 −2gt + gt−1,
+and optimize
+Ltotal = Lmain + λdyn Ldyn.
+In all Experiment 2 runs, we use λdyn = 0.1. We use the second-order difference because it captures
+how the gripper trajectory bends as it approaches, enters, and settles into contact, rather than whether
+action values are close at each step. The term therefore biases the policy toward the teacher’s contact-
+to-hold trajectory shape and transition sharpness, not just pointwise gripper positions. This refinement
+is training-only: it adds no tactile input at inference and does not alter the rollout or arbiter logic.
+3.3
+Episode Outcomes and Tactile-Regime Evaluation Metrics
+We evaluate both whole-episode task outcomes and a teacher-referenced tactile-regime diagnostic.
+The episode-level outcomes are stable, loose, and drop, which summarize visual grasp quality
+over the full episode. The tactile diagnostic is defined from a contact-qualified (CQ) predicate and a
+teacher-near band around the reflex stable-hold reference. In the main text, we report three summaries:
+CQ episodes as a conservative regime-entry check, the event-style ≥10-frame teacher-near run as the
+primary summary of regime entry and sustained re-entry, and CQ frames near teacher as a secondary
+occupancy-based summary. Because CQ episodes is derived from a conservative frame-level tactile
+contact criterion, tactile regime entry need not coincide with visually stable completion.
+Experiment 2 additionally reports CQ-onset 3 s near/CQ occupancy for early teacher-near entry
+after meaningful contact begins, together with time to release and release-time reduction. Full
+2RDP [29] and ImplicitRDP [30] introduce a “fast layer” but keep it learned and statistical.
+5
+
+
+numerical thresholds and formal definitions are deferred to Appendix D and Appendix E.2.3, and
+matched-comparison controls are given in Appendix E.2.1.
+4
+Experiments
+This section evaluates whether controller-shaped collection improves what a tactile-free student learns
+under ID conditions and explores whether the same data-source effect extends to an unseen paper-cup
+OOD variant (Sec. 4.2); the latter is treated as exploratory scope evidence because its small-sample
+difference is not statistically significant. A small train-time refinement sharpens entry and release
+within the learned nominal regime (Sec. 4.3); and randomized disturbance exposes the residual need
+for deployment-time arbitration (Sec. 4.4).
+4.1
+Setup
+Platform and object.
+We use a Piper 6-degree-of-freedom (6-DoF) arm with a 1-DoF gripper, so the
+recorded robot state is 7-DoF, together with dual MC-Tac vision-based tactile sensors [36], wrist and
+front RGB cameras, and a disposable plastic cup (3.5 g, 0.3 mm wall, narrow sub-Newton deformation
+regime). Experiment 1a uses ACT [5] as the primary controlled testbed; Experiments 1b, 1c, and 3
+use the tactile-free π0.5 model [7]; and Experiment 2 reports matched refinement comparisons on
+both. Detailed hardware and model specifications are deferred to Appendix E.1.
+Evaluation conditions.
+We evaluate nominal-workspace ID grasping with randomized cup place-
+ment, an unseen paper-cup OOD setting, and a randomized external-disturbance test during place.
+Episode labels, tactile-regime metrics, and paired-comparison invariants follow Sec. 3.3. Unless
+otherwise stated, main-text tables report one representative run; additional-seed robustness checks
+are summarized in the result paragraphs and reported in Appendix E.3. Appendix E.2 collects
+matched-comparison controls, metric roles, failure taxonomy, and statistical notes.
+4.2
+Experiment 1: Learning from Controller-Shaped Demonstrations
+Experiment 1 tests the main learning claim: if controller-shaped demonstrations improve what a
+tactile-free student can learn, then a student trained on reflex-data demonstrations should outperform
+a matched student trained on visually screened manual demonstrations under the same deployment
+conditions. Experiment 1a establishes this controlled comparison on ACT as the primary test,
+Experiment 1b checks whether the same data-source effect carries to a different backbone, and
+Experiment 1c probes the same data-source effect on an unseen paper-cup OOD variant.
+4.2.1
+Experiment 1a: ACT as the Primary Controlled Test
+Protocol.
+Two tactile-free ACT instances differ only in training data source: the reflex-data policy
+uses 30 episodes collected with the reflex active at 25 Hz, whereas the visually screened manual-
+data policy uses 30 demonstrations selected from 100 manual trials under the same visually guided
+teleoperation protocol and stable-outcome screening rule. Object, cameras, training budget, archi-
+tecture, training recipe, and evaluation protocol are otherwise matched, so the comparison isolates
+collection-time gripper regulation. Both are evaluated under nominal ID conditions (20 trials each);
+Appendix E.2.1 details the manual-pool construction.
+Table 1: ACT ID deployment (20 trials per row). Rows 1–2 compare training data under policy-only
+runtime; row 3 adds the arbiter to the same visually screened manual-data policy.
+Training data
+Runtime mode
+Stable
+Loose
+Drop
+Reflex-data
+policy-only
+95% (19/20)
+5% (1/20)
+0% (0/20)
+Visually screened manual-data
+policy-only
+15% (3/20)
+55% (11/20)
+30% (6/20)
+Visually screened manual-data
+policy + arbiter
+50% (10/20)
+20% (4/20)
+30% (6/20)
+Main ACT result.
+Table 1 shows a sharp training-data contrast: the reflex-data ACT policy achieves
+95% (19/20) stable grasps with zero drops, whereas the visually screened manual-data policy reaches
+6
+
+
+only 15% (3/20) stable with a 30% (6/20) drop rate (p = 4.1 × 10−7, two-sided Fisher exact
+test). Adding the runtime arbiter to the same manual-data policy raises stability to 50% (10/20) but
+leaves drops unchanged at 30% (6/20), so runtime arbitration rescues some marginal grasps without
+recovering the nominal quality supplied by controller-shaped collection. Additional seeds preserve
+the same ranking (95.0±4.1%, 16.3±4.8%, and 48.8±2.5% stable; Appendix E.3).
+Contact-screened controlled ablation.
+As a separate single-run check, we collected 100 fresh
+manual demonstrations with tactile logging and selected the top 30 by the same teacher-referenced
+CQ-near criterion used for analysis. The logged tactile signals were used only for offline ranking:
+they neither actuated the manual gripper nor entered ACT training or inference. The resulting contact-
+screened manual-data ACT policy achieved 30% (6/20) stable outcomes versus 95% (19/20) for the
+reflex-data policy (p = 3.9 × 10−5, two-sided Fisher exact test). This controlled ablation supports
+the collection-time advantage after contact-quality screening, but, because it uses one training and
+evaluation run, is not a multi-seed robustness claim. See Appendix E.2.2 for full details.
+1
+0
+1
+2
+3
+4
+5
+Time relative to contact onset (s)
+35
+40
+45
+50
+55
+60
+65
+70
+75
+Gripper Position (mm)
+contact
+(a) Policy Closing Profile
+Teacher (Reflex Controller, n=30)
+A-reflex (Policy, n=20)
+A-manual (Policy, n=20)
+1.0
+0.5
+0.0
+0.5
+1.0
+1.5
+2.0
+Normalized phase (contact
+stable = [0, 1])
+35
+40
+45
+50
+55
+60
+65
+70
+75
+Gripper Position (mm)
+contact
+stable
+(b) Normalized Phase
+Teacher (Reflex Controller, n=30)
+A-reflex (Policy, n=20)
+A-manual (Policy, n=20)
+1
+0
+1
+2
+3
+4
+Time relative to contact onset (s)
+35
+40
+45
+50
+55
+60
+65
+70
+75
+Gripper Position (mm)
+contact
+(c) Reflex Training Data 
+ All Episodes
+Mean (n=30)
+1
+0
+1
+2
+3
+4
+Time relative to contact onset (s)
+35
+40
+45
+50
+55
+60
+65
+70
+75
+Gripper Position (mm)
+contact
+(d) Manual Training Data 
+ All Episodes
+Mean (n=30)
+Figure 3: Controlled comparison on ACT. The reflex-data ACT policy tracks the teacher through
+contact-to-hold, whereas the visually screened manual-data ACT policy deviates after closure and
+misses the teacher-defined nominal regime. Some visually screened manual demonstrations enter the
+viable closing range during collection, but the learned manual-data policy does not reliably re-enter
+that regime at deployment. Grey: individual rollouts; color: mean ±1σ.
+Table 2: Tactile-regime diagnostic for ACT under ID deployment (20 trials each). Metrics follow
+Sec. 3.3. Because CQ frames near teacher is computed only on CQ frames, high values in rows with
+very few CQ episodes do not imply regime parity (Appendix E.4.3).
+ACT policy
+CQ episodes ≥10f teacher-near run CQ frames near teacher
+Reflex-data policy
+19/20
+15/20
+68.7%
+Visually screened manual-data policy
+1/20
+0/20
+12.5%
+Visually screened manual-data policy + arbiter
+10/20
+7/20
+39.4%
+Trajectory diagnostic.
+Fig. 3 and Table 2 show the mechanism behind this gap: controller-shaped
+demonstrations let the reflex-data ACT policy repeatedly recover the teacher-defined nominal contact
+regime, whereas the visually screened manual-data policy rarely does; the arbiter yields only partial
+recovery. Controller-shaped collection therefore makes the narrow viable regime learnable, whereas
+careful manual collection without closed-loop tactile actuation does not reliably encode the same
+controller-regulated behavior across contact, lift, transport, and release.
+4.2.2
+Experiment 1b: π0.5 Cross-Backbone ID Validation
+ID corroboration on π0.5.
+On π0.5, the same separation persists under ID conditions: the reflex-
+data policy reaches 95% (19/20) stable grasps, whereas the visually screened manual-data policy
+7
+
+
+reaches 5% (1/20) stable and the same policy with the arbiter recovers only to 55% (11/20) (Table 3).
+Appendix E.4.1 reports the matching teacher-referenced tactile separation, again with only partial
+arbiter recovery. Additional seeds preserve the same ranking (96.3±4.8%, 6.3±4.8%, and 52.5±6.5%
+stable; Appendix E.3); exact tests are in Appendix E.2.4.
+Table 3: π0.5 task outcomes under ID and unseen paper-cup OOD conditions. The upper block reports
+ID results (Exp. 1b); the lower block reports unseen paper-cup OOD results (Exp. 1c).
+π0.5 condition / variant
+Stable
+Loose
+Drop
+ID
+ID, reflex-data policy
+95% (19/20)
+5% (1/20)
+0% (0/20)
+ID, visually screened manual-data policy
+5% (1/20)
+70% (14/20)
+25% (5/20)
+ID, visually screened manual-data policy + arbiter
+55% (11/20)
+25% (5/20)
+20% (4/20)
+Paper cup
+Paper cup, reflex-data policy
+80% (8/10)
+20% (2/10)
+0% (0/10)
+Paper cup, visually screened manual-data policy
+30% (3/10)
+50% (5/10)
+20% (2/10)
+4.2.3
+Experiment 1c: Unseen Paper-Cup OOD Extension
+OOD extension on the unseen paper cup.
+Using the paper-cup block of Table 3, the same
+mechanism is tested on an unseen paper cup. Because this cup is mechanically and visually more
+forgiving than the training cup, the result is treated as exploratory OOD scope evidence rather than as
+a second confirmatory claim. The reflex-data policy is numerically higher (80% stable vs. 30%), but
+the difference is not statistically significant (two-sided Fisher p = 0.0698). Appendix E.4.2 records
+the setup and exact-test note, and Appendix A records the preliminary tactile-image checks that
+motivate centering the main study on a tactile-free student.
+4.3
+Experiment 2: Controller-shaped behavior refinement with Dynamics-Loss
+Experiment 2 is a secondary follow-up to Experiment 1: with backbone, sensing, runtime, and
+deployment interface fixed, can a small train-time refinement sharpen entry and release behavior
+within the learned nominal regime?
+Table 4: Reflex-data policy comparison with and without the dynamics consistency loss.
+Backbone Variant
+≥10f run CQ-onset 3 s near/CQ Time to release Release-time reduction
+ACT
+baseline
+15/20
+72.2%
+15.7 s
+—
+ACT
++ dyn. loss
+18/20
+82.7%
+13.4 s
+14.6%
+π0.5
+baseline
+12/20
+78.5%
+28.1 s
+—
+π0.5
++ dyn. loss
+16/20
+85.3%
+21.7 s
+22.8%
+Result and interpretation.
+Table 4 shows the same refinement trend on both backbones: teacher-
+near runs rise from 15/20 to 18/20 on ACT and from 12/20 to 16/20 on π0.5, with higher onset
+occupancy and earlier release in both cases. We interpret this narrowly as sharper regime entry and
+earlier release onset within the same deployment interface. Additional seeds preserve this CQ-onset
+improvement on both backbones (ACT: 72.3±1.6% to 82.6±1.4%; π0.5: 78.4±0.9% to 85.6±1.5%;
+Appendix E.3); Appendix F discusses the omitted full-horizon teacher-nearness diagnostic.
+4.4
+Experiment 3: Exploring the Boundary of Tactile-Free Policy
+Experiment 3 tests the deployment-time boundary of tactile-free policy: under external disturbance,
+a tactile-free policy with non-negligible inference-to-action delay may still require a decoupled
+real-time gripper controller, even when trained on reflex-data.
+Protocol.
+Once the cup is stably lifted and place begins, a second person applies a lateral stick
+disturbance over 20 randomized trials per mode. In policy + arbiter mode, the arm remains policy-
+controlled while gripper authority is latched to the reflex after grasp intent and released only after
+sustained open intent (Fig. 4), preserving the intended arm–gripper decoupling during disturbance.
+8
+
+
+Runtime mode
+Retained
+Failure
+Policy-only
+55% (11/20)
+45% (9/20)
+Policy + arbiter 100% (20/20) 0% (0/20)
+Table 5: Runtime comparison on the same reflex-
+data π0.5 policy (20 disturbed trials per mode).
+Result and interpretation.
+Table 5 shows that,
+on the same policy, policy-only control fails in
+9/20 disturbance trials, whereas deterministic re-
+flex arbitration retains all 20/20 (p = 1.23×10−3,
+two-sided Fisher exact test). Because the learned
+policy is identical in both modes, the gap is due to runtime control rather than planning: the tactile-
+free student transfers nominal task behavior, but high-rate correction inside a committed chunk
+remains controller-dependent under disturbance. Additional seeds show the same split (52.5±6.5%
+vs. 98.8±2.5% retention; Appendix E.3).
+5
+Conclusion
+We show that a deterministic tactile reflex controller can play a distinct collection-time role by
+producing demonstrations with controller-shaped grasping behavior, providing a more consistent
+training distribution for tactile-free policy learning. This effect is clearest on ACT, carries over to
+π0.5 under ID conditions, and shows a favorable exploratory trend on an unseen paper-cup OOD
+setting. At deployment, high-rate tactile arbitration plays a complementary role: it provides rapid
+grasp correction under external disturbance that is unavailable from policy-only execution. Together,
+these results position tactile feedback not only as a policy input, but also as a teacher for shaping
+demonstrations and as a fast reactive layer that complements learned manipulation policies.
+6
+Limitations and Future Work
+The evidence in this paper is narrow. We evaluate only disposable cups, one unseen paper-cup OOD
+setting, and a single disturbance family, so the claim is strongest for direct-contact fragile containers
+whose success depends on maintaining a narrow gripper-force window. The contact-screened
+controlled ablation contains only one ACT training and evaluation run and no additional-seed study,
+so it is corroborative rather than a robustness result. Both collection modes gave the operator visual
+access to the GUI tactile cues, but manual control still incurred observation, reaction, and button-
+execution delay. Moreover, one expert operator collected the data, reflex data preceded the manual
+pools, and collection order was not randomized. Practice would tend to favor the later manual data,
+but operator and temporal effects remain possible. We do not test broader contact-rich tasks where
+arm motion, object geometry, or tool interaction matter more, and Experiment 3 should be read as a
+reactive-boundary demonstration rather than a calibrated robustness curve. Our findings are similarly
+specific: controller-shaped demonstrations make a viable nominal contact regime more collectable
+and learnable, but they do not close the deployment-time control gap once contact leaves that regime.
+The main limitation is insufficient high-rate recovery under disturbance: the deployed explicit tactile
+real-time controller can preserve gripper-side behavior, but it cannot provide closed-loop real-time
+coordination of the whole arm. A next step is to scale this paradigm to more object families and
+disturbances, and to pair it with richer arm–gripper visuo-tactile coordination.
+9
+
+
+Acknowledgments
+The authors thank the Area Chair and the anonymous reviewers for their constructive feedback. This
+work is partially supported by the Research Travel Grant of the Base of Red Bird MPhil (RBM) at
+The Hong Kong University of Science and Technology (Guangzhou). We would like to thank our
+RBM Project Supervisor Jinni Zhou for the academic support.
+References
+[1] Z. Feng, Y. Fu, Z. Li, Y. He, J. Ren, L. Wang, J. Zhou, Y. Zhong, and Q. Nie. TactileReflex:
+Noise-statistics-driven vision-tactile reflex control for force-sensitive manipulation. CoRR,
+abs/2605.23568, 2026. doi:10.48550/arXiv.2605.23568. URL https://arxiv.org/abs/
+2605.23568.
+[2] R. A. Romeo and L. Zollo. Methods and sensors for slip detection and prevention in robotics:
+A survey. IEEE Access, 8:73027–73050, 2020. doi:10.1109/ACCESS.2020.2987849. URL
+https://doi.org/10.1109/ACCESS.2020.2987849.
+[3] P. Weiner, F. Hundhausen, R. Grimm, and T. Asfour. Detecting grasp phases and adaption
+of object-hand interaction forces of a soft humanoid hand based on tactile feedback. In 2021
+IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS), pages 3320–
+3326. IEEE, 2021. doi:10.1109/IROS51168.2021.9636484. URL https://doi.org/10.
+1109/IROS51168.2021.9636484.
+[4] S. Shang, M. Seo, Y. Zhu, and L. Chin. FORTE: Tactile force and slip sensing on compliant fin-
+gers for delicate manipulation. IEEE Robotics and Automation Letters, 11(4):4473–4480, 2026.
+doi:10.1109/LRA.2026.3662618. URL https://doi.org/10.1109/LRA.2026.3662618.
+[5] T. Z. Zhao, V. Kumar, S. Levine, and C. Finn. Learning fine-grained bimanual manipulation
+with low-cost hardware. In Proceedings of Robotics: Science and Systems, Daegu, Republic
+of Korea, July 2023. doi:10.15607/RSS.2023.XIX.015. URL https://doi.org/10.15607/
+RSS.2023.XIX.015.
+[6] C. Chi, S. Feng, Y. Du, Z. Xu, E. Cousineau, B. Burchfiel, and S. Song. Diffusion policy:
+Visuomotor policy learning via action diffusion. In Proceedings of Robotics: Science and
+Systems, Daegu, Republic of Korea, July 2023.
+doi:10.15607/RSS.2023.XIX.026.
+URL
+https://doi.org/10.15607/RSS.2023.XIX.026.
+[7] Physical Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail,
+M. Equi, C. Finn, N. Fusai, M. Y. Galliker, D. Ghosh, L. Groom, K. Hausman, B. Ichter,
+S. Jakubczak, T. Jones, L. Ke, D. LeBlanc, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair,
+K. Pertsch, A. Z. Ren, L. X. Shi, L. Smith, J. T. Springenberg, K. Stachowicz, J. Tanner,
+Q. Vuong, H. Walke, A. Walling, H. Wang, L. Yu, and U. Zhilinsky. π0.5: a vision-language-
+action model with open-world generalization. In Proceedings of The 9th Conference on Robot
+Learning, volume 305 of Proceedings of Machine Learning Research, pages 17–40. PMLR,
+2025. URL https://proceedings.mlr.press/v305/black25a.html.
+[8] F. Veiga, B. Edin, and J. Peters. Grip stabilization through independent finger tactile feedback
+control. Sensors, 20(6):1748, 2020. doi:10.3390/s20061748. URL https://www.mdpi.com/
+1424-8220/20/6/1748.
+[9] R. Calandra, A. Owens, D. Jayaraman, J. Lin, W. Yuan, J. Malik, E. H. Adelson, and S. Levine.
+More than a feeling: Learning to grasp and regrasp using vision and touch. IEEE Robotics
+and Automation Letters, 3(4):3300–3307, Oct. 2018. doi:10.1109/LRA.2018.2852779. URL
+https://doi.org/10.1109/LRA.2018.2852779.
+[10] B. Huang, Y. Wang, X. Yang, Y. Luo, and Y. Li. 3D-ViTac: Learning fine-grained manipulation
+with visuo-tactile sensing. In Proceedings of The 8th Conference on Robot Learning, volume
+10
+
+
+270 of Proceedings of Machine Learning Research, pages 2557–2578, 2025. URL https:
+//proceedings.mlr.press/v270/huang25e.html.
+[11] D. Zhang, C. Yuan, C. Wen, H. Zhang, J. Zhao, and Y. Gao. KineDex: Learning tactile-informed
+visuomotor policies via kinesthetic teaching for dexterous manipulation. In Proceedings of
+The 9th Conference on Robot Learning, volume 305 of Proceedings of Machine Learning
+Research, pages 4123–4138. PMLR, 2025. URL https://proceedings.mlr.press/v305/
+zhang25l.html.
+[12] Z. Cao, D. Tian, R. Guan, Y. Mu, X. Sun, S. Liang, D. Liu, T. Huang, Y. Yue, H. Ding, B. Fang,
+A. Zhou, Q.-L. Han, and H. Xiong. Tactile-based multimodal fusion in embodied intelligence:
+A survey of vision, language, and contact-driven paradigms. CoRR, abs/2605.17336, 2026.
+doi:10.48550/arXiv.2605.17336. URL https://arxiv.org/abs/2605.17336.
+[13] K. Yu, Y. Han, Q. Wang, V. Saxena, D. Xu, and Y. Zhao. MimicTouch: Leveraging multi-
+modal human tactile demonstrations for contact-rich manipulation. In Proceedings of The 8th
+Conference on Robot Learning, volume 270 of Proceedings of Machine Learning Research,
+pages 4844–4865, 2025. URL https://proceedings.mlr.press/v270/yu25c.html.
+[14] C. Zhang, P. Hao, X. Cao, X. Hao, S. Cui, and S. Wang. VTLA: Vision-tactile-language-
+action model with preference learning for insertion manipulation. Biomimetic Intelligence and
+Robotics, page 100333, 2026. doi:10.1016/j.birob.2026.100333. URL https://doi.org/10.
+1016/j.birob.2026.100333.
+[15] J. Bi, K. Y. Ma, C. Hao, M. Z. Shou, and H. Soh. VLA-touch: Enhancing vision-language-action
+models with dual-level tactile feedback. CoRR, abs/2507.17294, 2025. doi:10.48550/arXiv.
+2507.17294. URL https://arxiv.org/abs/2507.17294.
+[16] J. Huang, S. Wang, F. Lin, Y. Hu, C. Wen, and Y. Gao. Tactile-VLA: Unlocking vision-language-
+action models’ physical knowledge for tactile generalization. CoRR, abs/2507.09160, 2025.
+doi:10.48550/arXiv.2507.09160. URL https://arxiv.org/abs/2507.09160.
+[17] Z. Cheng, Y. Zhang, W. Zhang, H. Li, K. Wang, L. Song, and H. Zhang. OmniVTLA: Vision-
+tactile-language-action model with semantic-aligned tactile sensing. CoRR, abs/2508.08706,
+2025. doi:10.48550/arXiv.2508.08706. URL https://arxiv.org/abs/2508.08706.
+[18] Guo Ye, Z. Zhang, X. Zhao, S. Wu, H. Lu, S. Lu, and H. Liu. Learning to feel the future:
+DreamTacVLA for contact-rich manipulation. CoRR, abs/2512.23864, 2025. doi:10.48550/
+arXiv.2512.23864. URL https://arxiv.org/abs/2512.23864.
+[19] Y. Huang, P. Lin, W. Li, D. Li, J. Li, J. Jiang, C. Xiao, and Z. Jiao. TaF-VLA: Tactile-force align-
+ment in vision-language-action models for force-aware manipulation. CoRR, abs/2601.20321,
+2026. doi:10.48550/arXiv.2601.20321. URL https://arxiv.org/abs/2601.20321.
+[20] K. Zhang, H. Zhang, Z. Xu, Z. Zhang, M. R. I. Prince, X. Li, X. Han, Y. Zhou, A. Ajoudani, and
+Y. She. TacVLA: Contact-aware tactile fusion for robust vision-language-action manipulation.
+CoRR, abs/2603.12665, 2026. doi:10.48550/arXiv.2603.12665. URL https://arxiv.org/
+abs/2603.12665.
+[21] M. Xu, H. Zhang, Y. Hou, Z. Xu, L. Fan, M. Veloso, and S. Song. DexUMI: Using human
+hand as the universal manipulation interface for dexterous manipulation. In Proceedings of
+The 9th Conference on Robot Learning, volume 305 of Proceedings of Machine Learning
+Research, pages 437–459. PMLR, 2025. URL https://proceedings.mlr.press/v305/
+xu25b.html.
+[22] Y. Lin, Y.-L. Wei, H. Liao, M. Lin, C. Xing, H. Li, D. Zhang, M. Cutkosky, and W.-S. Zheng.
+TypeTele: Releasing dexterity in teleoperation by dexterous manipulation types. In Proceedings
+of The 9th Conference on Robot Learning, volume 305 of Proceedings of Machine Learning
+11
+
+
+Research, pages 4975–4993. PMLR, 2025. URL https://proceedings.mlr.press/v305/
+lin25d.html.
+[23] K. Gubernatorov, M. Sannikov, I. Mikhalchuk, E. Kuznetsov, M. Artemov, O. F. Ouwatobi,
+M. Fernando, A. Asanov, Z. Guo, and D. Tsetserukou. Hapticvla: Contact-rich manipulation via
+vision-language-action model without inference-time tactile sensing. CoRR, abs/2603.15257,
+2026. doi:10.48550/arXiv.2603.15257. URL https://arxiv.org/abs/2603.15257.
+[24] V. Vapnik and R. Izmailov. Learning using privileged information: Similarity control and
+knowledge transfer. Journal of Machine Learning Research, 16(61):2023–2049, 2015. URL
+https://jmlr.org/papers/v16/vapnik15b.html.
+[25] D. Chen, B. Zhou, V. Koltun, and P. Kr¨ahenb¨uhl. Learning by cheating. In Proceedings
+of the 3rd Conference on Robot Learning, volume 100 of Proceedings of Machine Learning
+Research, pages 66–75. PMLR, 2020.
+URL https://proceedings.mlr.press/v100/
+chen20a.html.
+[26] J. Lee, J. Hwangbo, L. Wellhausen, V. Koltun, and M. Hutter. Learning quadrupedal locomotion
+over challenging terrain. Science Robotics, 5(47):eabc5986, 2020. doi:10.1126/scirobotics.
+abc5986. URL https://doi.org/10.1126/scirobotics.abc5986.
+[27] A. Kumar, Z. Fu, D. Pathak, and J. Malik. RMA: Rapid motor adaptation for legged robots.
+In Proceedings of Robotics: Science and Systems, Virtual, July 2021. doi:10.15607/RSS.2021.
+XVII.011. URL https://doi.org/10.15607/RSS.2021.XVII.011.
+[28] A. Agarwal, A. Kumar, J. Malik, and D. Pathak. Legged locomotion in challenging terrains
+using egocentric vision. In Proceedings of The 6th Conference on Robot Learning, volume
+205 of Proceedings of Machine Learning Research, pages 403–415. PMLR, 2023. URL
+https://proceedings.mlr.press/v205/agarwal23a.html.
+[29] H. Xue, J. Ren, W. Chen, G. Zhang, Y. Fang, G. Gu, H. Xu, and C. Lu. Reactive diffusion policy:
+Slow-fast visual-tactile policy learning for contact-rich manipulation. In Robotics: Science and
+Systems XXI, 2025. doi:10.15607/rss.2025.xxi.052. URL https://doi.org/10.15607/rss.
+2025.xxi.052.
+[30] W. Chen, H. Xue, Y. Wang, F. Zhou, J. Lv, Y. Jin, S. Tang, C. Wen, and C. Lu. Implic-
+itRDP: An end-to-end visual-force diffusion policy with structural slow-fast learning. CoRR,
+abs/2512.10946, 2025. doi:10.48550/arXiv.2512.10946. URL https://arxiv.org/abs/
+2512.10946.
+[31] H. Zhang, W.-H. Huang, Q. Tong, G. Solak, P. Liu, S. Liu, J. Peters, and A. Ajoudani.
+CompliantVLA-adaptor: VLM-guided variable impedance action for safe contact-rich ma-
+nipulation. CoRR, abs/2601.15541, 2026. doi:10.48550/arXiv.2601.15541. URL https:
+//arxiv.org/abs/2601.15541.
+[32] S. Hu, Z. Liu, S. Liu, J. Cen, Z. Meng, and X. He. VLSA: Vision-language-action models with
+plug-and-play safety constraint layer. CoRR, abs/2512.11891, 2025. doi:10.48550/arXiv.2512.
+11891. URL https://arxiv.org/abs/2512.11891.
+[33] L. Wei, J. Ma, Y. Hu, and R. Zhang. Ensuring force safety in vision-guided robotic manipulation
+via implicit tactile calibration. In Proceedings of The 9th Conference on Robot Learning, volume
+305 of Proceedings of Machine Learning Research, pages 1049–1062. PMLR, 2025. URL
+https://proceedings.mlr.press/v305/wei25a.html.
+[34] D. Yu, Q. Zhou, B. Huang, M. Khadiv, and Z. Yang. Safe-night VLA: Seeing the unseen
+via thermal-perceptive vision-language-action models for safety-critical manipulation. CoRR,
+abs/2603.05754, 2026. doi:10.48550/arXiv.2603.05754. URL https://arxiv.org/abs/
+2603.05754.
+12
+
+
+[35] R. Cadene, S. Aliberts, F. Capuano, M. Aractingi, A. Zouitine, P. Kooijmans, J. Choghari,
+M. Russi, C. Pascal, S. Palma, M. Shukor, J. Moss, A. Soare, D. Aubakirova, Q. Lhoest,
+Q. Gallouedec, and T. Wolf. Lerobot: An open-source library for end-to-end robot learning.
+arXiv preprint arXiv:2602.22818, 2026. URL https://arxiv.org/abs/2602.22818.
+[36] J. Ren, J. Zou, and G. Gu. MC-Tac: Modular camera-based tactile sensor for robot gripper. In
+H. Yang, H. Liu, J. Zou, Z. Yin, L. Liu, G. Yang, X. Ouyang, and Z. Wang, editors, Intelligent
+Robotics and Applications, pages 169–179, Singapore, 2023. Springer Nature. doi:10.1007/
+978-981-99-6495-6 15. URL https://doi.org/10.1007/978-981-99-6495-6_15.
+[37] N. Ratliff, M. Zucker, J. A. Bagnell, and S. Srinivasa. CHOMP: Gradient optimization tech-
+niques for efficient motion planning. In Proceedings of the 2009 IEEE International Conference
+on Robotics and Automation, pages 489–494, 2009. doi:10.1109/ROBOT.2009.5152817. URL
+https://doi.org/10.1109/ROBOT.2009.5152817.
+13
+
+
+A
+Appendix-Only Notes on Naive Tactile-Image Fusion
+This appendix documents appendix-only naive tactile-image fusion variants referenced in Sec. 4.2.3.
+These variants test a naive direct visuo-tactile image-fusion setup and are included only to show what
+this formulation did and did not provide under the current data and sensing setup. They are outside
+the main system and are not a controlled comparison with richer tactile-fusion methods.
+Motivation for the collection-time formulation.
+These preliminary variants motivated the paper’s
+focus. Direct tactile-image fusion did not yield a reliable improvement in our setup, whereas policies
+trained on reflex-shaped demonstrations retained strong nominal task performance without tactile
+input at inference. This observation led us to study tactile sensing as a collection-time mechanism for
+shaping demonstrations, rather than as an additional policy input.
+ACT tactile-image extension.
+An ACT variant was evaluated that augments the vision-only input
+with left and right tactile image streams as additional ResNet-18 image inputs. Under the current
+setup, this naive direct-fusion formulation did not effectively improve policy learning. Instead, it
+caused severe degradation: the policy often lost usable task behavior and could fail to maintain stable
+pick-and-place performance.
+π0.5 tactile-image variant.
+A tactile-image variant of π0.5 was also evaluated by adding the left
+and right tactile views as extra image inputs under the same rollout setting used for the main π0.5
+study. Unlike ACT, π0.5 retained basic task ability and could still complete the task, but it did not
+show clear or reliable improvement over the vision-only baseline in success rate or grasp quality.
+Interpretation.
+Taken together, these diagnostics suggest that directly feeding visuo-tactile image
+streams into policy training did not effectively improve fine-tuning in the current setup. One
+plausible explanation is that raw tactile-image streams are noisy and difficult to exploit through
+this straightforward extra-camera integration, but no definitive mechanism is claimed here. More
+structured visuo-tactile learning may still be promising and requires further study. The negative
+effect was stronger for ACT, while π0.5 remained functional but did not show clear gains. We treat
+these results as appendix-only boundary evidence for this naive direct-fusion formulation, not as a
+statement about tactile information in general or about richer tactile integration schemes. They justify
+the deployment choice studied in this paper, but they are not themselves a main experimental claim.
+14
+
+
+B
+Deployment-Time Arbiter Logic
+Sec. 3.1 gives the main-paper description of the deployment-time arbiter. This appendix records
+the switch logic more explicitly. Here, gt denotes the policy gripper intent, rt indicates whether
+the reflex is latched, st denotes the temporary release-suppression state, and K is the number of
+consecutive open-intent policy ticks required for release. The symbols gclose and gopen are the close
+and open thresholds, respectively. The arbiter changes only gripper authority; the arm remains
+policy-controlled throughout. Algorithm 1 summarizes the latching, release, and suppression logic
+used in the policy+arbiter runtime mode.
+Algorithm 1. Deployment-time gripper arbitration
+1: Require Runtime mode m ∈{policy-only, policy+arbiter}; policy arm action aarm
+t
+; policy
+gripper output gt; reflex-active flag rt ∈{0, 1}; release-suppression flag st ∈{0, 1}; close threshold gclose;
+open threshold gopen; open-intent horizon K
+2: Execute aarm
+t
+from the policy.
+3: if m = policy-only then
+4:
+Apply gt directly to the gripper and return.
+5: else if rt = 1 ∧gt ≥gopen for K consecutive policy ticks then
+6:
+Send stop to the reflex and return gripper authority to the policy.
+7: else if rt = 1 then
+8:
+Execute the reflex gripper command at 25 Hz and return.
+9: else if st = 1 ∧gt ≥gopen then
+10:
+Apply gt directly and suppress immediate re-latching.
+11: else
+12:
+if gt ≤gclose then
+13:
+Send start to the reflex.
+14:
+end if
+15:
+if the reflex has latched after the start request then
+16:
+Execute the reflex gripper command.
+17:
+else
+18:
+Apply gt directly to the gripper for this policy step.
+19:
+end if
+20: end if
+C
+Implementation Notes for the Deployed Reflex Controller
+This appendix summarizes implementation details of the deployed reflex controller used in this paper.
+These details are engineering-oriented and do not change the controller logic described in [1]. The
+tactile metrics, state machine, and gripper decision rules are unchanged; only the runtime pipeline
+was modified to improve operational stability at the target control rate.
+What remained unchanged.
+The controller still uses the same three-channel tactile logic as
+the base formulation: onset detection from the weaker-side normal-contact signal, slip correction
+from shear cues, and over-compression relief from center-of-pressure cues, with the normal-force
+protection branch retaining highest priority. We therefore do not treat the controller itself as a new
+algorithmic contribution.
+Asynchronous tactile acquisition.
+Image capture is decoupled from the control loop through
+persistent background acquisition threads. The controller consumes the latest available preprocessed
+tactile frames rather than synchronously waiting for a fresh read at each step. This reduces blocking
+camera latency and improves loop regularity.
+Parallel left–right metric computation.
+Left and right tactile metrics are computed in parallel
+rather than serially. The underlying processing pipeline remains the same—frame differencing against
+a baseline, contact-mask construction, weighted normal-contact estimation, optical-flow-based shear
+estimation, and center-of-pressure extraction—but the two sensors are processed concurrently at each
+step. This improves wall-clock throughput without changing the controller inputs.
+15
+
+
+Separated calibration and streaming.
+Baseline and noise calibration are performed in a dedicated
+initialization phase before live streaming begins. The controller first collects multiple non-contact
+frames per sensor, estimates a multi-frame baseline image, and sets the per-sensor contact threshold
+from the upper-percentile intensity-difference statistics. Live threaded streaming starts only after
+calibration succeeds.
+Runtime monitoring and logging.
+The implementation records per-step wall-clock timing, moving-
+average loop frequency, controller state, tactile statistics, and discrete corrective actions to comma-
+separated value (CSV) logs. These logs are not part of the control law, but they support debugging
+and rate verification.
+Role in this paper.
+We include these refinements for completeness because the paper relies on a
+controller whose mechanism is fixed and operationally repeatable. The point is not that these changes
+alter what TactileReflex computes, but that they make the same controller more practical to run
+consistently in the collection-time-teacher setting studied here.
+D
+Contact-Qualified Threshold for the Tactile Diagnostic
+Sec. 3.3 defines the tactile-regime diagnostic used in Experiment 1. This appendix only explains the
+provenance of the contact-qualified threshold. We denote by Fn,min the smaller of the two normal-
+contact proxies from the left and right tactile sensors. Here Fn is a dimensionless vision-tactile proxy;
+it has not been calibrated in Newtons. We use the weaker side rather than Fn,max or an average
+because, for fragile grasps, loss of meaningful contact is usually governed by the bottleneck side.
+This makes Fn,min the more conservative proxy for whether the grasp has actually entered a usable
+contact state.
+The threshold Fn,min > 1.5 is not meant to define the teacher-near band itself, nor is it chosen by
+tuning on policy success. Its role is only to exclude incidental light touch and retain frames that have
+entered a minimally meaningful grasp-contact regime. In other words, it defines the lower bound for
+a contact-qualified (CQ) frame, not the teacher-near operating range.
+This lower bound is tied to the TactileReflex controller scale used in [1] rather than introduced as a
+new free hyperparameter. In that controller formulation, the transition from grasp closing to holding
+was triggered once the weaker-side normal-contact proxy reached a small positive contact threshold
+on this same scale [1]. In the controller configuration used throughout this paper, that grasp-onset
+threshold is 1.5, so the same value is reused here as a conservative CQ lower bound. This continuity
+gives the threshold a controller-side physical interpretation: it marks “contact has become meaningful
+enough to count as grasp onset” rather than “the policy is already in the teacher-near band.”
+The teacher-near regime is defined separately. After applying the CQ filter, Fn,min is compared to the
+reflex-cup stable-hold reference statistics. For all teacher-near quantities reported in the main text and
+appendix tables—including ≥10-frame teacher-near run, CQ frames near teacher, and CQ-onset
+3 s near/CQ occupancy—the same stable-hold teacher-near band is used (2.41 ± 0.7, dimensionless,
+in the main-text visualization). A stricter teacher p10–p90 range is kept only as an appendix-side
+alternative sensitivity reference and is not used for the reported results. The logic is intentionally
+two-stage, and the two stages serve different purposes: (1) Fn,min > 1.5 asks whether the policy has
+established meaningful grasp contact at all; (2) the teacher-referenced band asks whether that contact
+lies near the stable regime shaped by the controller demonstrations.
+Separate external-loading observations characterize the cup material, not the tactile proxy. Visible
+deformation appeared near an applied load of approximately 0.5 N, and sustained loading approaching
+but below 1 N produced irreversible deformation that required manual reshaping. These external-
+load values describe the material’s response only; they do not calibrate Fn, the CQ threshold, the
+teacher-near band, or any controller threshold.
+16
+
+
+E
+Additional Experimental Details
+This appendix records secondary experimental details that support the main paper but are not part of
+its primary evidence chain. In particular, it makes the matched-comparison controls, metric roles,
+failure taxonomy, and statistical notes explicit. For readability, it groups these details into setup,
+comparison design, additional-seed robustness, and supplementary Experiment 1 notes.
+E.1
+Platform, Models, and Policy Variants
+Platform and model details.
+The platform uses a Piper 6-degree-of-freedom (6-DoF) arm, dual
+MC-Tac vision-based tactile sensors, an Intel RealSense wrist camera, and an icspring front camera;
+all training and inference run on a single RTX 5090. Teleoperation logging and dataset storage follow
+a LeRobot-compatible format [35]. Action Chunking with Transformers (ACT) uses an 18M policy
+with a ResNet-18 visual encoder and, in the current rollout setting, a 15 Hz full policy-update loop.
+The main tactile-free π0.5 policies use front and wrist red-green-blue (RGB) camera streams plus
+a 7-D robot state and are built on a 2B+ vision-language-action (VLA) model with SigLIP vision
+transformer (ViT) and Gemma, fine-tuned with Low-Rank Adaptation (LoRA) at 10 Hz. In the main
+deployment study, the deployed π0.5 policy executes action steps at 20 Hz under a 10-step full-chunk
+synchronous rollout, which corresponds to an empirical wall-clock policy re-query rate of about
+1.7–1.8 Hz in the recorded rollouts. The tactile reflex operates independently at 25 Hz.
+Policy variants.
+Table 6 summarizes the policy variants referenced in the main paper.
+Table 6: Policy variants. Experiment 1 changes training data, Experiment 2 the training objective, and
+Experiment 3 runtime control under randomized external disturbance; the final block lists appendix-
+only tactile-image variants. All use the same 7-D robot state and front/wrist RGB views.
+Model
+Variant
+Tactile input
+Gripper control
+Experiment 1 (controller-shaped demonstrations):
+ACT (18M)
+reflex-data policy
+none
+policy-only
+ACT (18M)
+visually screened manual-data policy
+none
+policy-only
+ACT (18M)
+visually screened manual-data policy + arbiter
+none
+policy + arbiter
+π0.5 (2B+)
+reflex-data policy
+none
+policy-only
+π0.5 (2B+)
+visually screened manual-data policy
+none
+policy-only
+π0.5 (2B+)
+visually screened manual-data policy + arbiter
+none
+policy + arbiter
+Experiment 2 (dynamics-loss refinement):
+ACT (18M)
+reflex-data + dyn. loss
+none
+policy-only
+π0.5 (2B+)
+reflex-data + dyn. loss
+none
+policy-only
+Experiment 3 (deployment-time arbiter):
+π0.5 (2B+)
+reflex-data policy + arbiter
+none
+policy + arbiter
+Appendix-only explicit tactile diagnostics:
+ACT (18M)
+vision+tactile-image policy
+left, right tactile images
+policy-only
+π0.5 (2B+)
+vision+tactile-image policy
+left, right tactile images
+policy-only
+E.2
+Comparison Design and Evaluation Metrics
+E.2.1
+Matched-Comparison Controls
+Matched-comparison controls and alternative explanations.
+All main comparisons are paired
+to isolate one variable at a time. One expert operator, who was highly familiar with the robot and
+collection system, collected the data on the same platform and task. In both collection modes, the
+operator had on-site visual access and saw live tactile parameters and slip events in the collection
+GUI. In manual mode these visually displayed signals were advisory only: gripper commands still
+passed through human observation, reaction, and coarse button execution, without haptic or controller
+actuation. Only the reflex condition closed a direct 25 Hz tactile–action loop.
+The original visually screened manual-data baseline is not an unfiltered teleoperation pool. We
+first recorded 100 manual trials, then screened the recorded camera streams and retained trials with
+successful task completion and no visually observable cup deformation or obvious grasp instability.
+From this pool, we selected 30 demonstrations to match the reflex-data count; ACT and π0.5 use this
+17
+
+
+same pool in their main matched comparisons. The original manual trials did not retain tactile traces,
+so they cannot be screened post-hoc by CQ or teacher-nearness. Reflex tactile traces were logged
+for analysis, not for selecting its 30 demonstrations. We therefore interpret the main comparison as
+reflex-regulated collection versus a visually screened best-effort manual baseline, not as a symmetric
+contact-screened comparison. The visually screened manual-data + arbiter rows reuse the same policy
+and change only runtime gripper authority, so they are bridge ablations rather than separate training
+baselines. Experiment 2 changes only the training objective within reflex-data training; Experiment 3
+changes only runtime gripper control for the same reflex-data policy and disturbance protocol.
+Reflex data were collected before the manual pools, and collection order was not randomized. Practice
+would tend to favor the later manual data, but temporal effects remain possible.
+E.2.2
+Contact-Screened Controlled Ablation
+To control more directly for contact quality, we collected 100 fresh manual demonstrations with
+tactile logging and ranked them by teacher-referenced CQ-near occupancy. We retained the top 30
+and retrained ACT with the same policy inputs, architecture, training recipe, and deployment protocol.
+The tactile logs were used only for offline ranking: they neither actuated the manual gripper nor
+entered ACT training or inference. Selecting 30 of 100 is not a collection-yield estimate.
+Table 7: Single-run ACT contact-screened controlled ablation. The contact-screened manual set is
+the top 30 of 100 fresh tactile-logged manual demonstrations under offline CQ-near ranking.
+Training data
+Stable CQ eps. ≥10f run CQ near teacher
+Reflex-data
+19/20
+19/20
+15/20
+68.7%
+Contact-screened manual-data
+6/20
+5/20
+5/20
+24.6%
+Stable outcomes differ significantly (95% vs. 30%; two-sided Fisher exact p = 3.9 × 10−5). The
+contact-screened condition has one training and evaluation run and no additional-seed study, so it is
+controlled corroboration rather than a multi-seed robustness result.
+E.2.3
+Metric Roles and Failure Taxonomy
+Metric roles at a glance.
+Stable/loose/drop are whole-episode task outcomes assigned post-trial
+by consensus among five members of the author team from wrist- and front-camera videos. Stable
+means completed placement followed by secure retention, without visible migration or irreversible
+deformation; loose means the object remains retained but shows visible loosening, migration,
+deformation, or unstable placement; and drop means object loss. These are video outcomes, not
+force ground truth. These summaries answer different questions. CQ episodes records whether an
+episode enters the paper’s conservative tactile contact predicate at least once; it is a tactile-side regime
+check and need not coincide with visually stable task completion. The ≥10-frame teacher-near
+run is the paper’s event-style summary of regime entry and sustained re-entry. CQ frames near
+teacher is the full-horizon duration-weighted occupancy statistic over contact-qualified frames. CQ-
+onset 3 s near/CQ occupancy is used only in Experiment 2 to measure early teacher-near entry after
+contact begins, while time to release and release-time reduction are Experiment 2 release-efficiency
+descriptors rather than replacement tactile metrics. For this Experiment 2 onset-window metric, let
+τe denote the first timestamp in episode e for which Ct = 1, where Ct indicates that frame t is
+contact-qualified and Nt indicates that frame t is both contact-qualified and teacher-near under the
+same stable-hold reference band used throughout the paper; over the window [τe, τe + 3 s), CQ-onset
+3 s near/CQ occupancy applies the same P
+t Nt/ P
+t Ct ratio only within that window. We prefer
+this onset-window summary to full-horizon occupancy in Experiment 2 because the refinement is
+meant to sharpen early teacher-near entry after contact begins. When release also becomes more
+efficient, later teacher-near dwell time can shorten, so a full-horizon duration-weighted occupancy
+may decrease even though early regime entry improves. Time to release measures task start to release
+onset; release-time reduction is relative to the matched reflex-data baseline.
+18
+
+
+Qualitative failure taxonomy.
+Across the current rollouts, four recurring failure modes explain
+most of the mismatch between task labels and tactile summaries. First, no meaningful contact:
+the policy never enters CQ. Second, unstable hold: CQ is entered, but sustained teacher-near runs
+or high occupancy do not materialize and the cup remains visibly loose. Third, delayed release /
+place hesitation: the grasp is retained but release lags during place, which can increase full-horizon
+CQ occupancy without implying better early regime entry. Fourth, disturbance-induced drop: the
+nominal grasp is formed, but a lateral perturbation during place exceeds the policy-only within-chunk
+reactive capacity. This taxonomy is interpretive rather than a replacement label set, but it clarifies
+why different summaries can disagree without contradicting one another.
+E.2.4
+Statistical Notes
+Statistical note for the main binary results.
+Table 8 reports exact tests and Wilson confidence
+intervals for the same single-run binary outcomes already summarized in the main paper.
+Table 8: Key binary comparisons already reported in the main text. Intervals are 95% Wilson
+confidence intervals; p-values are two-sided Fisher exact tests.
+Comparison
+Endpoint
+Condition A
+Condition B
+Fisher p
+ACT reflex vs. visually screened manual-data
+Stable
+95.0% [76.4, 99.1]
+15.0% [5.2, 36.0]
+4.1 × 10−7
+ACT reflex vs. visually screened manual-data + arbiter
+Stable
+95.0% [76.4, 99.1]
+50.0% [29.9, 70.1]
+3.3 × 10−3
+ACT reflex vs. contact-screened manual-data
+Stable
+95.0% [76.4, 99.1]
+30.0% [14.5, 51.9]
+3.9 × 10−5
+π0.5 reflex vs. visually screened manual-data
+Stable
+95.0% [76.4, 99.1]
+5.0% [0.9, 23.6]
+5.8 × 10−9
+π0.5 reflex vs. visually screened manual-data + arbiter
+Stable
+95.0% [76.4, 99.1]
+55.0% [34.2, 74.2]
+8.4 × 10−3
+Policy-only vs. arbiter
+Failure
+45.0% [25.8, 65.8]
+0.0% [0.0, 16.1]
+1.23 × 10−3
+E.3
+Additional-Seed Robustness Tables
+Protocol.
+The main-text tables report one representative single-run evaluation: the original run
+with training seed 42. For the later robustness checks summarized briefly in the main text, each
+training variant was retrained with four additional seeds (3407, 2025, 7, 123) under the same dataset,
+training recipe, and evaluation protocol; only the training random seed changed. Experiment 1a,
+Experiment 1b, and Experiment 3 use 20 rollouts per additional seed, and Experiment 2 reports
+seed-wise summary statistics for the same evaluation quantities used in the main paper. The following
+tables retain the full seed-wise values for the reflex and visually screened manual-data studies. The
+fresh contact-screened ablation (Appendix E.2.2) has no additional seeds and is excluded.
+Table 9: Experiment 1a additional-seed ACT robustness summary.
+Seed ACT variant
+Runtime Stable Loose Drop CQ eps. ≥10f run CQ near teacher
+3407 Reflex-data
+policy
+19/20
+1/20
+0/20
+19/20
+15/20
+67.9%
+2025 Reflex-data
+policy
+20/20
+0/20
+0/20
+20/20
+16/20
+72.1%
+7 Reflex-data
+policy
+18/20
+2/20
+0/20
+18/20
+14/20
+65.8%
+123 Reflex-data
+policy
+19/20
+1/20
+0/20
+19/20
+15/20
+69.0%
+3407 Visually screened manual-data policy
+3/20
+12/20
+5/20
+1/20
+0/20
+10.2%
+2025 Visually screened manual-data policy
+2/20
+12/20
+6/20
+0/20
+0/20
+0.0%
+7 Visually screened manual-data policy
+4/20
+9/20
+7/20
+1/20
+0/20
+13.8%
+123 Visually screened manual-data policy
+4/20
+10/20
+6/20
+2/20
+0/20
+11.4%
+3407 Visually screened manual-data arbiter
+10/20
+4/20
+6/20
+9/20
+6/20
+37.8%
+2025 Visually screened manual-data arbiter
+9/20
+3/20
+7/20
+11/20
+8/20
+41.1%
+7 Visually screened manual-data arbiter
+10/20
+5/20
+5/20
+10/20
+7/20
+39.0%
+123 Visually screened manual-data arbiter
+10/20
+4/20
+6/20
+10/20
+8/20
+39.7%
+Experiment 3 disturbance illustration and additional-seed summary.
+Fig. 4 shows two example
+disturbance configurations from the randomized external-disturbance evaluation, and Table 12 reports
+the matching additional-seed runtime robustness summary.
+19
+
+
+Table 10: Experiment 1b additional-seed π0.5 ID robustness summary.
+Seed π0.5 variant
+Runtime Stable Loose Drop CQ eps. ≥10f run CQ near teacher
+3407 Reflex-data
+policy
+18/20
+2/20
+0/20
+17/20
+11/20
+67.3%
+2025 Reflex-data
+policy
+20/20
+0/20
+0/20
+19/20
+13/20
+72.1%
+7 Reflex-data
+policy
+20/20
+0/20
+0/20
+18/20
+12/20
+69.4%
+123 Reflex-data
+policy
+19/20
+1/20
+0/20
+18/20
+12/20
+71.0%
+3407 Visually screened manual-data policy
+2/20
+14/20
+4/20
+2/20
+0/20
+11.2%
+2025 Visually screened manual-data policy
+1/20
+13/20
+6/20
+1/20
+0/20
+0.0%
+7 Visually screened manual-data policy
+0/20
+14/20
+6/20
+0/20
+0/20
+0.0%
+123 Visually screened manual-data policy
+2/20
+13/20
+5/20
+2/20
+0/20
+7.4%
+3407 Visually screened manual-data arbiter
+12/20
+3/20
+5/20
+11/20
+8/20
+57.8%
+2025 Visually screened manual-data arbiter
+10/20
+6/20
+4/20
+9/20
+6/20
+51.4%
+7 Visually screened manual-data arbiter
+11/20
+4/20
+5/20
+11/20
+8/20
+58.6%
+123 Visually screened manual-data arbiter
+9/20
+7/20
+4/20
+8/20
+6/20
+53.2%
+Table 11: Experiment 2 additional-seed refinement summary.
+Seed
+Backbone
+Variant
+≥10f run
+CQ-onset 3 s
+near/CQ
+Time to
+release
+Release-time
+reduction
+3407
+ACT
+baseline
+14/20
+70.4%
+16.1 s
+—
+2025
+ACT
+baseline
+16/20
+74.1%
+15.0 s
+—
+7
+ACT
+baseline
+15/20
+71.8%
+16.4 s
+—
+123 ACT
+baseline
+15/20
+73.0%
+15.4 s
+—
+3407
+ACT
++ dyn. loss
+17/20
+81.0%
+13.8 s
+14.3%
+2025
+ACT
++ dyn. loss
+18/20
+84.3%
+12.9 s
+14.0%
+7
+ACT
++ dyn. loss
+18/20
+82.1%
+13.2 s
+19.5%
+123 ACT
++ dyn. loss
+18/20
+83.0%
+13.5 s
+12.3%
+3407
+π0.5
+baseline
+10/20
+77.4%
+29.3 s
+—
+2025 π0.5
+baseline
+12/20
+79.1%
+27.9 s
+—
+7
+π0.5
+baseline
+12/20
+78.0%
+28.7 s
+—
+123 π0.5
+baseline
+13/20
+79.2%
+27.4 s
+—
+3407 π0.5
++ dyn. loss
+15/20
+84.0%
+22.4 s
+23.5%
+2025 π0.5
++ dyn. loss
+16/20
+85.8%
+22.0 s
+21.1%
+7
+π0.5
++ dyn. loss
+16/20
+85.0%
+21.5 s
+25.1%
+123 π0.5
++ dyn. loss
+17/20
+87.6%
+20.9 s
+23.7%
+Figure 4: Experiment 3 disturbance configurations. Two
+representative stick-contact perturbations are shown after
+stable lift during the place phase.
+Table 12: Experiment 3 additional-seed
+runtime robustness summary.
+Seed Runtime mode Retained Failure
+3407 policy-only
+10/20
+10/20
+2025 policy-only
+12/20
+8/20
+7 policy-only
+11/20
+9/20
+123 policy-only
+9/20
+11/20
+3407 policy + arbiter
+20/20
+0/20
+2025 policy + arbiter
+19/20
+1/20
+7 policy + arbiter
+20/20
+0/20
+123 policy + arbiter
+20/20
+0/20
+20
+
+
+E.4
+Supplementary Experiment 1 Details
+E.4.1
+π0.5 Tactile Corroboration
+π0.5 teacher-referenced tactile corroboration.
+Fig. 5 reports the appendix version of the π0.5
+teacher-referenced tactile corroboration used to support Experiment 1b in the main text.
+(a) Teacher-referenced tactile force distribution.
+A-reflex
+A-manual
+1.5
+2.0
+2.5
+3.0
+3.5
+4.0
+Fn_min in contact-qualified frames
+Teacher-near band [1.71, 3.11]
+Teacher p10-p90 [1.98, 2.87]
+Teacher median 2.41
+(b) Numerical summary.
+π0.5
+policy
+CQ
+eps.
+≥10f
+run
+CQ near
+teacher
+Reflex-data
+18/20 12/20
+70.8%
+visually screened
+manual-data
+1/20
+0/20
+0.0%
+visually screened
+manual-data
++ arbiter
+11/20
+8/20
+56.5%
+Figure 5: π0.5 teacher-referenced tactile corroboration for the ID comparison. (a) Policy-only
+comparison against the teacher reference. (b) Compact summary of the same diagnostic, including
+the visually screened manual-data policy + arbiter bridge ablation.
+The next two notes provide appendix-only scope details for the paper-cup OOD evaluation and the
+sparse-CQ ACT cases.
+E.4.2
+Paper-Cup Scope Notes
+Unseen paper-cup OOD setup.
+Fig. 6 shows the direct-contact grasping setup used in the unseen
+paper-cup OOD evaluation from Experiment 1c.
+Unseen paper-cup OOD statistical note.
+For the paper-cup extension in Experiment 1c, the reflex-
+data policy achieves 80.0% stable [49.0, 94.3] versus 30.0% [10.8, 60.3] for the visually screened
+manual-data policy. The numerical difference is not statistically significant (two-sided Fisher exact
+p = 0.0698), so we present it only as exploratory OOD scope evidence rather than as a second
+confirmatory claim.
+E.4.3
+Sparse-CQ and ACT Boundary Notes
+Sparse-CQ caveats in ACT tactile diagnostics.
+The 12.5% value for the visually screened manual-
+data ACT policy in Table 2 comes from a single contact-qualified episode containing only eight
+CQ frames, so it does not correspond to any sustained teacher-near run. Because CQ frames near
+teacher is conditioned on CQ frames only, the 39.4% value for the visually screened manual-data
+ACT policy + arbiter should also be read conditionally: it is a CQ-conditioned occupancy statistic, not
+a whole-episode success fraction. In the updated ACT arbiter evaluation, the same row corresponds
+to 10/20 CQ episodes and 7/20 sustained teacher-near runs, so we read it as partial recovery rather
+than regime-level parity with the reflex-data policy.
+ACT paper-cup boundary note.
+For completeness, the reflex-data ACT policy can still grasp the
+unseen paper cup, but it often stalls after grasp. We therefore keep Experiment 1a as the primary
+controlled comparison and use π0.5 for the main text’s OOD evidence.
+21
+
+
+Figure 6: Unseen paper-cup OOD setup used in Experiment 1c. The image shows the direct-contact
+grasping configuration for the unseen paper cup used in the OOD evaluation. Compared with the
+training plastic cup, this object has a larger force margin, higher friction, and clearer visual boundaries,
+so we treat it as an OOD setting rather than as a second high-power confirmatory benchmark.
+F
+Dynamics-Loss Refinement Notes
+This appendix records supporting notes for Experiment 2. The dynamics-loss objective itself is
+defined in Sec. 3.2, and the metric definitions are given in Appendix E.2.3. Here we keep only
+the interpretive notes needed to explain the omitted full-horizon diagnostic and the choice of the
+CQ-onset 3 s summary.
+Main-text summary and omitted diagnostic.
+Table 4 in the main text reports the matched
+comparisons most directly aligned with the refinement’s intended benefit: sustained teacher-near
+entry, CQ-onset 3 s near/CQ occupancy, time to release, and release-time reduction. We emphasize
+the CQ-onset 3 s summary because Experiment 2 asks whether the refinement sharpens early teacher-
+near entry after meaningful contact begins. A full-horizon duration-weighted occupancy can move in
+the opposite direction when release becomes more efficient: the baseline may simply accumulate
+more later teacher-near dwell time by holding longer, whereas the dynamics-loss policy can enter
+earlier but also release sooner and thus spend fewer later contact-qualified frames near the teacher.
+In other words, earlier entry and earlier release onset can improve the onset-side summary while
+reducing the total time later spent stably dwelling near the teacher, so a full-horizon occupancy
+statistic can decrease even when the contact transition itself becomes sharper. For completeness, the
+omitted full-horizon CQ near teacher occupancy decreases from 68.7% to 54.8% on ACT and from
+70.8% to 61.2% on π0.5 when the dynamics loss is added. We treat that statistic as a caveat rather
+than as the primary summary of the refinement.
+Interpretation and caveat.
+Across both backbones, we read the refinement narrowly: it is most
+consistent with stronger early regime entry and shorter time to release inside the controller-shaped
+regime, not with uniformly higher values on every duration-weighted tactile summary. We treat it as
+a scoped train-time refinement rather than a co-equal contribution, because the gains are not uniform
+across summaries or task outcomes, and we have not yet tested the same loss under manual-data
+training, on additional backbones, or under a fully unified task-level outcome protocol.
+22
