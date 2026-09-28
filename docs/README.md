@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-27</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-28</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 20 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>8</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-27 19:11:02 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-28 19:08:47 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读8篇、速读12篇共20篇，世界动作模型与VLA力控优化领跑。最值得看的是满分《Latent evolving World Action Model》和9分的《ForceRFT》，分别指向世界模型演化与力引导残差强化学习两条路线。普通读者可先读这两篇的精读笔记，再挑CARE或Zeva-Ego的速读摘要拓展视野。</p>
+<p>2026-09-28 日报精选19篇机器人学习论文，精读7篇、速读12篇，聚焦视觉-语言-动作模型与灵巧操作。最值得看的是两篇9分工作：VLaRL用仿真训练的潜在条件残差强化学习增强VLA模型，VisTacAlign则让灵巧策略同时学习人类和机器人的触觉演示。普通读者可优先从这两篇入手，理解&quot;仿真补强+触觉对齐&quot;如何让机器人操作更稳更灵巧。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">8 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Latent evolving World Action Model">Latent evolving World Action Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="ForceRFT: Refining VLA Actions through Force-Guided Residual Reinforcement Learning">ForceRFT: Refining VLA Actions through Force-Guided Residual Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Grounded Action Model: 3D Grounding as a Foundation for Robotics">Grounded Action Model: 3D Grounding as a Foundation for Robotics</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VLaRL: Augmenting Vision-Language-Action Models with Simulation-Trained Latent-Conditioned Residual RL">VLaRL: Augmenting Vision-Language-Action Models with Simulation-Trained Latent-Conditioned Residual RL</span></li><li><span class="dpr-home-dashboard-paper-title" title="VisTacAlign: Co-Training Dexterous Policies on Tactile Human and Robot Demonstrations">VisTacAlign: Co-Training Dexterous Policies on Tactile Human and Robot Demonstrations</span></li><li><span class="dpr-home-dashboard-paper-title" title="FRAM: Trajectory-Guided Visual Feature Selection for Compact Language-Conditioned Robot Manipulation">FRAM: Trajectory-Guided Visual Feature Selection for Compact Language-Conditioned Robot Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>8</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>3</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="CARE: Experience-Guided Atomic Corrective Execution for Vision-Language-Action Policies">CARE: Experience-Guided Atomic Corrective Execution for Vision-Language-Action Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Zeva-Ego: Egocentric Mid-Training with In-Context Causal Learning for Robot Manipulation">Zeva-Ego: Egocentric Mid-Training with In-Context Causal Learning for Robot Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="ME-VLM:A Unified VLM for Embodied Cognition and Agent Coordination">ME-VLM:A Unified VLM for Embodied Cognition and Agent Coordination</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Self-Supervised Anchoring of Fingertip Sensing to Proprioception and Proactive Actions for Robot Imitation Learning">Self-Supervised Anchoring of Fingertip Sensing to Proprioception and Proactive Actions for Robot Imitation Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Praxis: Distilling Physical Interaction Priors from Egocentric Videos for Generalizable Whole-Body Manipulation">Praxis: Distilling Physical Interaction Priors from Egocentric Videos for Generalizable Whole-Body Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="DualManip: Agentic Dynamic Manipulation via Dual-Path Semantic Reasoning and Geometric Adaptation">DualManip: Agentic Dynamic Manipulation via Dual-Path Semantic Reasoning and Geometric Adaptation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>8</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>4</strong></span></div>
 </section>
 </div>
 
