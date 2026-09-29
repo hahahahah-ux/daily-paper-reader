@@ -1,0 +1,1032 @@
+TAO-DA: Towards Autonomous Operation—A Dual-Arm Vision–Language–Action
+Model for Coordinated Manipulation
+Yongsheng Zhao, Han Gao, Baoping Cheng, Jingyao Tang, Dian Zhou,
+Deng Liang, Ji Ge, Xuanzhang Wen, Lei Zhao, Ye Wang
+China Mobile (Hangzhou) Information Technology Co., Ltd., Hangzhou, China
+Corresponding author: Baoping Cheng, chengbaoping@cmhi.chinamobile.com
+Abstract—Vision–Language–Action (VLA) models provide a
+unified framework for grounding high-level semantic information
+into low-level robot actions, enabling scalable robotic manip-
+ulation across diverse tasks. However, existing VLA models
+lack explicit mechanisms to disentangle the states and intents
+of the two arms, leading to unintended cross-arm interference
+that degrades task execution success. To address this issue, we
+propose a symmetric Dual-Arm Expert (DAE) architecture built
+upon a shared Vision–Language Model (VLM) backbone with
+decoupled, arm-specific expert towers. Expert selection is carried
+out through a two-stage dual-arm intent routing scheme, in which
+experts are routed either by explicit language instructions in the
+first stage or by implicit visual semantics in the second stage.
+Moreover, we introduce a lightweight task progress prediction
+module that leverages cross-attention between the pre-chunk
+temporal features and semantic representations of propriocep-
+tive and visual observations to accurately estimate frame-wise
+task completion progress. This module facilitates task progress
+synchronization to support coordinated scheduling for collabo-
+rative multi-robot tasks. Experimental results demonstrate the
+effectiveness of our model in dual-arm intent routing and the
+disentanglement of cross-arm interference, and further provide
+preliminary evidence of emergent skill generalization from single-
+to dual-arm tasks (as well as the reverse), together with cross-arm
+motion-domain skill transfer.
+Index
+Terms—Bimanual
+manipulation,
+vision–language–
+action, dual-arm expert, intent routing.
+I. INTRODUCTION
+Vision–Language–Action (VLA) models combine language,
+visual observations, and robot states to generate manipulation
+actions, providing a language-conditioned interface for con-
+trol [1]. Recent systems use autoregressive, diffusion-based,
+or flow-matching action generators for structured manipulation
+tasks [2], [3], [4], [5].
+A common bimanual VLA design represents both arms in
+a unified action generator. This simplifies the action interface
+but may couple the executing arm to irrelevant state and visual
+changes from the other arm. Such coupling matters when
+only one arm is required, when the arms execute sequential
+subtasks, or when demonstrations assign asymmetric roles. A
+dual-arm policy should therefore retain shared task semantics
+while selectively controlling arm-level action generation.
+Based on this observation, we propose TAO-DA, a dual-
+arm VLA framework built around two principles: shared
+multimodal representations for task-level reasoning and arm-
+specific action towers for low-level control. DAIR determines
+the active-arm set from language and visual context, and DAE
+generates actions through the selected arm-specific pathways.
+We evaluate this factorization against unified and weakly
+decoupled alternatives.
+The main contributions are as follows:
+• We formulate inactive-arm interference as an action-
+generation problem and study three DAE variants span-
+ning unified, mask-based, and independent arm-level pro-
+cessing.
+• We introduce Dual-Arm Intent Routing (DAIR), which
+combines rule-based language parsing with learned mul-
+timodal classification to predict left-only, right-only, or
+dual-arm execution.
+• We evaluate the architectures on real-robot tasks under
+controlled inactive-arm disturbances, together with rout-
+ing ablations under instructions that do not explicitly
+identify the active-arm set and complementary studies of
+arm-wise skill reuse.
+II. RELATED WORK
+A. Vision–Language–Action Models
+VLA models ground multimodal observations in robot
+actions. Autoregressive methods such as RT-1, RT-2, and
+OpenVLA discretize actions for sequence modeling [6], [7],
+[2]. Diffusion-based policies model continuous action distri-
+butions, while flow-matching methods such as π0 and GR00T
+use continuous generative action models [5], [3], [4]. These
+methods commonly use a unified action representation. TAO-
+DA instead studies whether the action generator should be
+factorized by arm.
+B. Structured Bimanual Manipulation
+Bimanual policies have explored task decomposition, visual
+masking, one-shot demonstrations, and transfer from single-
+arm policies. AnyBimanual uses skill management and visual
+alignment to coordinate unimanual primitives [8]; EgoVLA
+and VLBiMan learn bimanual behaviors from human or
+demonstration-based priors [9], [10]; TwinVLA reuses single-
+arm policies with additional coordination mechanisms [11].
+Recent work introduces more explicit structure into bimanual
+VLA policies. PEAfowl strengthens geometry-aware multi-
+view fusion [12], while See Selectively, Act Adaptively and Co-
+VLA structure action generation through interaction-aware ex-
+perts or shared and arm-specific coordination components [13],
+arXiv:2609.33197v1  [cs.RO]  27 Sep 2026
+
+
++
+Left Arm Expert
+left view
+head view
+right view
+Pick up the objects and 
+place them into the basket
+Grab the items and put 
+them in the basket
+Grab the fruits and bottles,
+place them in the basket
+…
+[𝜽𝟏, 𝜽𝟐, … 𝜽𝒏]
+State
+Vision
+Lang
+VLM
+Right Arm Expert
+Arm
+Routing
+Dual Arm Action Head
+Dual Arm 
+Action 
+Head
+Task progress
+Noise + Condition
+Denoised Action
+DiT
+…
+Noise + Condition
+Denoised Action
+DiT
+…
+Inputs
+Encoder
+𝑬𝑽𝑳
+𝑳𝒊
+𝑺𝒕
+𝑰𝒕
+Backbone
+Action Expert
+𝒂𝑹
+𝒂𝑳
+[𝜽𝟏, 𝜽𝟐, … 𝜽𝒏]
+[𝜽𝟏, 𝜽𝟐, … 𝜽𝒏]
+𝑬𝑽𝑳
+𝑳𝒊
+Stage 1
+Stage 2
+𝒓∈
+𝟎, 𝟏𝟐
+Outputs
+Fig. 1.
+Overview of TAO-DA. SigLIP encodes the multi-view observations, and Eagle-2.5-VL fuses visual and language tokens into the context used by
+DAIR. After routing, inactive end-effector-view tokens are masked at the VLM input when constructing the action-conditioning context. DAE then generates
+actions through the selected arm-specific pathways, trained with flow matching.
+[14]. A complementary approach improves robustness through
+training-time modality masking [15].
+For compositional skill reuse, SkillVLA recombines learned
+single-arm skills across new left–right pairings [16], whereas
+MA-VLA assigns mid-level atomic prompts to individual
+arms to support unseen collaboration patterns [17]. These
+approaches motivate explicit role assignment and selective
+information flow. TAO-DA instead focuses on active-arm-set
+inference and disturbance isolation: DAIR selects left-only,
+right-only, or dual-arm execution, while Dual-Tower separates
+arm-level action-generation parameters.
+III. METHOD
+A. Overview
+We propose TAO-DA (Towards Autonomous Operation with
+a Dual-Arm VLA), as illustrated in Fig. 1. Unlike approaches
+that model bimanual manipulation in a unified action space,
+TAO-DA retains a shared multimodal task representation while
+separating arm-specific action generation.
+TAO-DA takes multi-view visual observations, a language
+instruction, and proprioceptive states as input. The observa-
+tions comprise one egocentric-view image and two optional
+end-effector-view images captured by cameras mounted on
+the left and right arms. Each image is encoded by the same
+pretrained SigLIP vision encoder [18]. The resulting visual
+tokens are concatenated with language tokens and processed
+by the frozen Eagle-2.5-VL backbone to extract fused repre-
+sentations.
+Let EVL ∈RN×D denote the unmasked multimodal repre-
+sentation used by DAIR. After routing, the action-conditioning
+representation is constructed with the inactive end-effector-
+view tokens masked at the VLM input. Proprioceptive features
+are encoded separately, while arm-specific states and action
+tokens are processed by their corresponding action pathways.
+During training, the instruction for each task is randomly
+sampled from a pool of semantically equivalent expressions.
+B. DAIR: Dual-Arm Intent Routing Guided by Language and
+Vision
+1) Intent Representation: We encode the active-arm set as
+the binary vector
+r = [rL, rR] ∈{0, 1}2,
+where rL and rR indicate whether the left and right arms are
+active. The valid classes are left-only, right-only, and dual-arm:
+ϕ(0) = [1, 0],
+ϕ(1) = [0, 1],
+ϕ(2) = [1, 1].
+We train the routing classifier as a three-class problem with
+cross-entropy loss:
+Lroute = −log pc,
+where c ∈{0, 1, 2} is the target class and pc is the predicted
+probability of that class. The three-class interface prevents
+the classifier from producing the invalid no-arm vector [0, 0]
+during normal execution.
+2) Two-stage Arm Intent Inference:
+a) Stage 1: Rule-Based Language Intent Parsing: DAIR
+first applies a rule parser to the language instruction. The
+parser recognizes explicit arm-related expressions, such as
+“left arm,” “right arm,” “both arms,” “left hand,” and “right
+hand,” and maps them to the corresponding active-arm set
+
+
+Single-Tower
+Dual-Mask
+  Dual-Tower
+DiT
+DiT
+DiT
+Arm  
+Routing
+Arm  
+Routing
+mask
+R-Tower
+ L-Tower
+Arm  
+Routing
+R-Tower
+ L-Tower
+Arm  
+Routing
+active
+inactive
+Fig. 2. Architectural variants of DAE. Single-Tower uses a unified state and
+action space, Dual-Mask introduces weak decoupling through selective token
+masking in a shared DiT, and Dual-Tower provides strong decoupling through
+two parameter-independent DiT branches. All variants support single-arm and
+dual-arm execution.
+ˆrrule. When expressions referring to both arms are present,
+the dual-arm intent takes precedence and the parser returns
+ˆrrule = [1, 1].
+The rule parser does not use spatial expressions to infer
+arm intent. If an instruction contains no explicit arm-related
+expression, the parser returns the internal no-match code [0, 0],
+which indicates that the learned multimodal stage should be
+activated rather than a valid no-arm intent.
+b) Stage 2: Model-Based Multimodal Intent Prediction:
+In the second stage, the multimodal features are normalized
+and pooled using a learnable query:
+Enorm = LayerNorm(EVL),
+f = MHA(q, Enorm, Enorm).
+An MLP produces three logits, which are converted to class
+probabilities pi; the predicted class is then mapped to the
+binary interface:
+ˆc = arg max
+i
+pi,
+ˆrmodel = ϕ(ˆc).
+During inference, a previously selected intent can be held
+after the task has progressed sufficiently. Given the predicted
+progress ˆpt, the threshold τhold, and the previous intent ˆrt−1,
+the routing rule is
+ˆrt =
+
+
+
+
+
+
+
+
+
+ˆrrule,
+ˆrrule̸ = [0, 0],
+ˆrmodel,
+ˆrrule=[0,0],
+ˆrt−1 unavailable,
+ˆrmodel,
+ˆrrule=[0,0],
+ˆpt≤τhold ,
+ˆrt−1,
+otherwise.
+This progress-based hold mechanism stabilizes routing deci-
+sions; it is distinct from the deployment-level task scheduler.
+C. DAE: Dual-Arm Expert Module
+We compare three DAE variants spanning unified to fully
+separated arm-level processing, as shown in Fig. 2. Single-
+Tower concatenates both arms’ state and action tokens in one
+DiT; Dual-Mask retains the shared DiT but restricts token
+interactions; and Dual-Tower separates the branches and their
+parameters. All variants use the same multimodal context
+and flow-matching objective. Because Dual-Tower duplicates
+the arm-level components, this is an architectural comparison
+rather than a strictly parameter-matched attribution.
+Unless otherwise specified, TAO-DA refers to the complete
+model comprising DAIR, the task-progress module, and the
+Dual-Tower DAE variant.
+1) Dual-Mask: Weak Decoupling via Token Masking:
+a) Arm-Specific Token Masking:
+Dual-Mask uses a
+shared DiT backbone for both arms, while selectively restrict-
+ing information flow with an arm-mode attention mask. The
+input contains four arm-specific token groups:
+Xin = [XL
+state, XR
+state,
+XL
+action, XR
+action]
+∈RNtok×d,
+where Xk
+state denotes the state tokens of arm k and Xk
+action
+denotes its noisy action tokens, with k ∈{L, R}. For each
+execution mode m ∈{left, right, dual}, we define a binary
+mask
+M(m) ∈{0, 1}Ntok×Ntok,
+and apply the mask to DiT self-attention:
+Attn(Q, K, V | M(m))
+= softmax
+QK⊤
+√
+d
++ log M(m)
+
+V,
+where a zero entry in M(m) suppresses the corresponding
+attention logit. In left-arm mode, only the left state and action
+groups can attend to one another; right-arm mode is defined
+symmetrically; dual-arm mode permits attention across all
+groups. The multimodal task representation remains shared
+across modes.
+Dual-Mask uses the same flow-matching objective as the
+other variants. Its mask limits direct exchange between arm-
+specific token groups, but the two arms still share the DiT
+parameters and conditioning pathway. Dual-Tower therefore
+provides a stronger form of arm-level separation.
+2) Dual-Tower: Strong Decoupling via Independent Action
+Towers: Dual-Tower uses two branches with the same ar-
+chitecture but independent parameters, denoted by TL and
+TR. Each branch has its own state encoder, action tokenizer,
+DiT, and action decoder. Specifically, let sk denote the raw
+proprioceptive state of arm k. The state encoder and action
+tokenizer produce
+Xk
+state = Enck
+state(sk),
+Xk
+action = Tokk
+action(ak
+α),
+where ak
+α is the noisy or interpolated action sequence used by
+flow matching. Thus, Xk
+state and Xk
+action denote encoded token
+sequences rather than raw states or actions. Their concatenated
+inputs are
+XL
+in = [XL
+state, XL
+action] ∈RNL
+tok×d,
+XR
+in = [XR
+state, XR
+action] ∈RNR
+tok×d.
+
+
+The two sequences are processed independently and condi-
+tioned on the routed multimodal context. Their arm-specific
+states, action tokens, and parameters remain separate. During
+training, the annotated routing vector r = [rL, rR] selects TL,
+TR, or both; during inference, it is replaced by DAIR’s predic-
+tion ˆr. Dual-Tower approximately doubles the parameters of
+the arm-level components, while the frozen VLM and DAIR
+remain shared.
+Only the selected tower contributes during single-arm ex-
+ecution; both towers receive the shared task context during
+dual-arm execution.
+a) Routing-Conditioned
+Action
+Generation:
+During
+training, the annotated r selects the arm-specific trajectory
+slices and action targets. Each active tower encodes its state
+and noisy action tokens, conditions the DiT on the routed mul-
+timodal context and predicted task progress, and decodes an
+arm-specific action. Dual-arm samples supervise both towers
+at synchronized time steps; inactive towers receive no action
+supervision for single-arm samples. At inference, ˆr controls
+the same data flow.
+b) Arm-Conditioned
+View
+Masking:
+Let
+V
+=
+[Vego, VL, VR] denote the SigLIP tokens from
+the three views and Elang the language-token sequence. For
+action conditioning, inactive end-effector-view tokens are
+masked before entering the VLM:
+eV(r) = Mask(V, r) ,
+eEVL(r) = VLM
+
+eV(r), Elang
+
+.
+For r = [1, 0], the right end-effector view is masked; the
+right-arm case is symmetric. For r = [1, 1], both views are
+retained. The egocentric view remains available in all modes.
+Thus, the inactive end-effector view does not participate in the
+multimodal fusion used for action conditioning.
+c) Active-Arm Supervision: For Dual-Tower, the routing
+vector r = [rL, rR] selects the supervised towers:
+Lact = rLLL
+FM + rRLR
+FM.
+Here, Lk
+FM denotes the flow-matching objective for arm k.
+For single-arm samples, only one term is active, whereas
+both terms are used for dual-arm samples. Single-Tower and
+Dual-Mask use the same objective with their shared action-
+generation structures.
+D. Task-Progress Prediction Module
+Progress-aware control has been explored for understanding
+execution state and long-horizon subtask transitions [19], [20].
+In TAO-DA, a GRU encodes the DiT temporal features H =
+[h1, . . . , hT ], and cross-attention fuses the resulting sequence
+with the VLM representation:
+S = GRU(H),
+Z = MHA(S, EVL, EVL).
+A regression head predicts ˆpt using normalized trajectory time
+as the target. At inference, this estimate supports DAIR’s hold
+mechanism and the deployment-level scheduler.
+TABLE I
+REAL-WORLD TELEOPERATION DATASET.
+Category
+Task
+Mode
+Traj.
+Duration (h)
+Single-arm
+Steamer Delivery
+Single
+1,200
+3.0
+Bottle Grasping
+Single
+880
+3.2
+Fruit Grasping
+Single
+4,000
+14.4
+Tea Pouring
+Single
+1,600
+6.0
+Dual-arm
+Collaborative Tea
+Dual
+500
+2.0
+Desktop Organization
+Dual
+900
+3.3
+Total
+–
+–
+9,080
+31.9
+IV. EXPERIMENTS
+A. Platform and Dataset
+We collected 9,080 real-world teleoperation trajectories on
+an AGIBOT G1 humanoid robot with two 7-DoF arms and
+three RGB-D cameras operating at 30 Hz. Table I summarizes
+the task composition. For routing evaluation, we randomly
+hold out 10% of the data at the trajectory level; all routing
+variants use the same split. All action-policy variants use the
+same training data, observation interface, and action-execution
+strategy, while object placements vary across trials [21].
+Single-arm tasks use one arm throughout execution, whereas
+dual-arm tasks involve simultaneous or sequential participation
+of both arms. Unless a task-specific protocol specifies oth-
+erwise, each real-robot condition is evaluated over 20 trials.
+Success is defined by the task goal: grasping the target object,
+placing it at the designated location, or completing tea pouring
+without spillage.
+B. Real-World Task Performance
+Tables II and III report success rates on single- and dual-
+arm tasks. Each baseline uses its corresponding pretrained
+checkpoint and is fine-tuned on the same training data with the
+same training strategy and input configuration. For dual-arm
+evaluation, we include GR00T N1.5 and π0.5, two representa-
+tive baselines also evaluated on the complete single-arm task
+suite. A dash denotes a task that a model cannot execute.
+Among models evaluated on the complete single-arm suite,
+TAO-DA has the highest observed average success rate, 88.4%,
+compared with 82.0% for GR00T N1.5 and 80.5% for π0.5. It
+records the best or tied-best value on four tasks, while GR00T
+N1.5 is higher on Steamer Delivery-R. On the dual-arm tasks,
+TAO-DA records 100% on Collaborative Tea and 95% on
+Desktop Organization, matching the highest observed value
+on the former and exceeding both reported baseline values on
+the latter. These comparisons describe the observed outcomes
+under the corresponding task protocols and are not treated as
+statistical significance claims.
+C. Robustness to Inactive-Arm Disturbances
+We compare Single-Tower, Dual-Mask, and Dual-Tower
+during single-arm execution while perturbing the inactive arm.
+MSE is computed between offline model predictions and the
+ground-truth active-arm actions in the recorded trajectories
+
+
+Active arm joints  prediction
+Inactive arm 
+joints
+w/ disturbance
+w/o  disturbance
+Single-Tower
+Dual-Mask
+Dual-Tower
+Fig. 3. Active-arm trajectory predictions when the inactive arm is perturbed.
+TABLE II
+SINGLE-ARM TASK SUCCESS RATES (%). THE AVERAGE INCLUDES ONLY
+MODELS EVALUATED ON ALL FIVE TASKS.
+Task
+GR00T
+π0
+π0.5
+smolVLA
+GO-1
+TAO-DA
+Bottle
+85
+92.5
+95
+45
+30
+95
+Steamer-L
+90
+–
+90
+–
+57.5
+94
+Steamer-R
+97.5
+–
+75
+–
+45
+95
+Green Tea-L
+66.7
+–
+75
+–
+12.5
+75
+Black Tea-R
+70.8
+–
+67.5
+–
+29.2
+83
+Average
+82.0
+–
+80.5
+–
+34.8
+88.4
+TABLE III
+SUCCESS RATES (%) ON REAL-WORLD TASKS REQUIRING COORDINATED
+USE OF BOTH ARMS.
+Model
+Collaborative Tea
+Desktop Organization
+GR00T N1.5
+78.5
+80
+π0.5
+100
+85
+TAO-DA
+100
+95
+TABLE IV
+OFFLINE ROBUSTNESS TO INACTIVE-ARM DISTURBANCES.
+Active arm
+Model
+Clean MSE
+Disturbed MSE
+Ratio
+Right
+Single-Tower
+2.69 × 10−2
+5.23 × 10−2
+1.94
+Dual-Mask
+2.54 × 10−2
+3.73 × 10−2
+1.46
+Dual-Tower
+2.83 × 10−2
+2.80 × 10−2
+0.99
+Left
+Single-Tower
+5.53 × 10−2
+8.85 × 10−2
+1.60
+Dual-Mask
+5.88 × 10−2
+6.67 × 10−2
+1.13
+Dual-Tower
+8.54 × 10−2
+8.54 × 10−2
+1.00
+under clean and disturbed conditions. The ratio is defined as
+MSEdisturbance/MSEclean; a ratio near one indicates lower
+sensitivity to the disturbance.
+As shown in Table IV, the disturbed-to-clean MSE ratios
+for Single-Tower are 1.94 and 1.60 under right- and left-
+TABLE V
+REAL-ROBOT SUCCESS RATES (%) UNDER THE NOMINAL CONDITION,
+RANDOM INITIAL STATES, AND PERSISTENT INACTIVE-ARM
+DISTURBANCES (20 TRIALS PER CONDITION).
+Condition
+Active
+arm
+Single-
+Tower
+Dual-
+Mask
+Dual-
+Tower
+Nominal
+Left
+80
+90
+95
+Right
+70
+95
+100
+Random initial state
+Left
+40
+85
+95
+Right
+60
+80
+95
+Persistent disturbance
+Left
+25
+65
+100
+Right
+20
+65
+95
+arm execution, respectively. Dual-Mask reduces these ratios
+to 1.46 and 1.13, whereas Dual-Tower yields ratios of 0.99
+and 1.00. These results are consistent with the hypothesis that
+separate action towers reduce the sensitivity of the active arm
+to inactive-arm disturbances. Fig. 3 visualizes the correspond-
+ing active-arm trajectory predictions. Absolute clean-condition
+MSE should be interpreted separately from disturbance isola-
+tion.
+We further evaluate real-robot execution from random initial
+states and under persistent inactive-arm disturbances. For the
+latter condition, noise is added to the seven-dimensional joint-
+state input of the inactive arm throughout task execution, while
+the active-arm state remains unchanged. Table V reports the
+resulting success rates. Across the random-initial-state and
+persistent-disturbance conditions, Dual-Tower maintains 95–
+100% success across both active arms, whereas the corre-
+sponding ranges are 20–60% for Single-Tower and 65–85%
+for Dual-Mask.
+Under persistent disturbance, Dual-Tower records 100% and
+95% success for left- and right-arm execution, compared with
+25% and 20% for Single-Tower. The observed differences are
+
+
+w/o 
+routing 
+w/
+routing 
+𝑡1
+𝑡2
+𝑡3
+𝑡4
+𝑡5
+𝑡6
+ො𝒓
+[0, 1]
+[0, 1]
+[0, 1]
+[0, 1]
+[0, 1]
+[0, 1]
+Fig. 4. Qualitative comparison on Desktop Organization from identical initial conditions. The objects are located in the robot’s right-arm workspace. Without
+arm-intent routing, the inactive left arm attempts an empty grasp; with DAIR, it remains stationary while the right arm executes the task.
+75 percentage points in both cases and are consistent with
+the offline isolation analysis. Given the finite trial count and
+the non-parameter-matched architectures, we interpret them as
+evidence within this protocol rather than as a general statistical
+claim.
+D. Arm-Intent Routing under Ambiguous Instructions
+We evaluate DAIR on tasks whose instructions do not
+explicitly identify the active-arm set. The classifier predicts
+left-only, right-only, or dual-arm intent. Fig. 4 shows Desktop
+Organization from identical initial conditions, with objects
+only in the right-arm workspace. Without routing, the left arm
+attempts an empty grasp; with DAIR, it remains stationary
+while the right arm executes the task. This example illustrates
+the intended routing behavior but does not constitute a quan-
+titative comparison of downstream task success.
+On the held-out trajectory split, the full model with diverse
+instructions and task progress records per-class routing accura-
+cies of 85.37%, 83.31%, and 96.13% for left-only, right-only,
+and dual-arm intent, respectively.
+The confusion matrix in Fig. 5 shows no cross-lateral errors
+between left-only and right-only predictions. Instead, 14.6%
+of left-only samples and 16.7% of right-only samples are
+misclassified as dual-arm. Thus, within this evaluation, errors
+are concentrated in distinguishing unimanual from bimanual
+execution rather than in identifying laterality.
+All four ablations in Fig. 6 use the same held-out tra-
+jectories. Multi randomly samples a semantically equivalent
+instruction for each task during training, whereas Fixed uses
+one instruction per task during both training and evalua-
+tion; w/o Progress removes the entire task-progress module.
+Within Multi, removing progress changes right-only accuracy
+from 83.31% to 68.48% and dual-arm accuracy from 96.13%
+to 89.22%. With progress retained, Fixed records 78.66%
+right-only accuracy, compared with 83.31% for Multi. These
+protocol-specific differences characterize how routing accu-
+racy changes with the availability of task-progress information
+and instruction diversity; they do not establish corresponding
+improvements in downstream task success. In addition, Fig. 7
+Left-only
+Right-only
+Dual-arm
+Predicted class
+Left-only
+Right-only
+Dual-arm
+Ground-truth class
+85.4
+0.0
+14.6
+0.0
+83.3
+16.7
+3.2
+0.7
+96.1
+0
+20
+40
+60
+80
+100
+Percentage (%)
+Fig. 5. Row-normalized confusion matrix for left-only, right-only, and dual-
+arm intent classification. Each row reports percentages over the corresponding
+ground-truth class.
+provides a qualitative visualization of the predicted task-
+progress signal during a real-world Steamer Delivery episode.
+Left-only
+Right-only
+Dual-arm
+Active-arm class
+0
+20
+40
+60
+80
+100
+Per-class accuracy (%)
+85.4
+83.3
+96.1
+82.8
+68.5
+89.2
+80.1
+78.7
+96.7
+74.7
+64.9
+92.5
+Multi, w/ progress
+Multi, w/o progress
+Fixed, w/ progress
+Fixed, w/o progress
+Fig. 6.
+Per-class routing accuracy under instruction-diversity and task-
+progress ablations. Multi samples semantically equivalent instructions during
+training, whereas Fixed uses one instruction per task; w/o Progress removes
+the task-progress module.
+
+
+Fig. 7. Qualitative visualization of task-progress prediction during real-world
+Steamer Delivery.
+Left-only
+Right-only
+Dual-arm
+0
+5
+10
+15
+20
+Successful trials (out of 20)
+16
+10
+10
+18
+18
+16
+20
+18
+19
+Single-Tower
+Dual-Mask
+Dual-Tower
+Fig. 8. Number of successful Desktop Organization trials under left-only,
+right-only, and dual-arm execution. Each DAE variant is evaluated over 20
+trials per execution mode and is trained on bimanual demonstrations without
+corresponding single-arm demonstrations.
+E. Cross-Arm Skill Transfer and Composition
+We evaluate arm-wise skill reuse in three settings. First,
+all three DAE variants are trained on bimanual demonstra-
+tions of Collaborative Tea and Desktop Organization, without
+corresponding single-arm demonstrations, and evaluated on
+Desktop Organization under left-only, right-only, and dual-arm
+execution. As shown in Fig. 8, the two decoupled variants
+record higher observed success rates than Single-Tower in all
+three modes over 20 trials per variant and mode. Dual-Tower
+reaches 100%, 90%, and 95%, respectively, compared with
+80%, 50%, and 50% for Single-Tower. Under this protocol, the
+results are consistent with arm-specific pathways supporting
+reuse of behaviors learned from bimanual demonstrations.
+Second, we train one Dual-Tower model on right-arm
+Steamer Grasping and left-arm Bottle Grasping. Fig. 9 shows
+the model executing the two learned behaviors in parallel
+during bimanual Picking & Placing, without bimanual demon-
+strations of the target task or additional fine-tuning. This is
+a qualitative instance of composing separately demonstrated
+arm-specific behaviors, rather than evidence of acquiring a new
+skill or tightly coupled coordination.
+Finally, in three exploratory Collaborative Tea runs, we
+swap the training assignment of right-arm teapot grasping
+and left-arm cup grasping. Dual-Tower executes the reversed
+roles without reversed-role demonstrations or fine-tuning, but
+with lower qualitative precision; this limited observation is not
+treated as evidence of robust cross-arm transfer.
+F. Deployment Case Study
+We also evaluate TAO-DA within an autonomous-restaurant
+deployment that integrates three robot types and coordinates
+six robots across more than 20 service tasks; representative
+tasks are shown in Fig. 10. The complete system records
+Left arm 
+ϯ1
+ϯ2
+ϯ3
+ϯ4
+ϯ5
+ϯ6
+Dual arm 
+Right arm
+Bottle 
+Picking & Placing
+Steamer
+Grasping
+Training
+  
+ 
+Data
+Inference
+Fig. 9. Qualitative single-to-dual-arm composition from separate arm-specific demonstrations. The two learned skills are executed in parallel without target-task
+bimanual demonstrations or additional fine-tuning.
+
+
+ǘ1
+ǘ2
+ǘ3
+ǘ4
+ǘ5
+ǘ6
+Steamer 
+Delivery
+Tea 
+Pouring
+Fruit 
+Grasping
+Fig. 10. Representative tasks in the autonomous restaurant deployment.
+92.08% end-to-end success over 101 full-process trials. Be-
+cause this metric includes perception, manipulation, schedul-
+ing, and system execution, it characterizes the integrated
+deployment and is not attributed solely to TAO-DA. The task-
+progress signal supports both DAIR’s hold mechanism and
+deployment-level task transitions.
+G. Scope and Limitations
+Our conclusions are limited to the reported tasks and proto-
+cols. The architectural comparison is not parameter matched
+because Dual-Tower duplicates the arm-level components.
+DAIR is evaluated primarily through routing accuracy, and its
+downstream effect is illustrated qualitatively rather than iso-
+lated by task-success ablations. The disturbance study perturbs
+inactive-arm proprioception and does not cover all physical
+or visual disturbances. Routing uses the shared unmasked
+multimodal representation, whereas inactive wrist-view tokens
+are excluded from the VLM input used for action conditioning.
+Task progress is supervised by normalized trajectory time
+rather than semantic completion, and the composition and role-
+reversal studies remain qualitative.
+V. CONCLUSION
+We presented TAO-DA, which combines shared task-level
+multimodal reasoning with arm-specific action generation. Un-
+der the reported controlled disturbances, Dual-Tower reduces
+the observed sensitivity of active-arm execution to inactive-
+arm state perturbations, while DAIR provides explicit active-
+arm-set selection. The routing, skill-reuse, and deployment
+results characterize the framework within the evaluated proto-
+cols; broader validation will require parameter-matched com-
+parisons, physical and visual disturbances, and quantitative
+transfer studies.
+REFERENCES
+[1] Yueen Ma, Zixing Song, Yuzheng Zhuang, Jianye Hao, and Irwin King,
+“A survey on vision-language-action models for embodied ai,” arXiv
+preprint arXiv:2405.14093, 2024.
+[2] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin
+Balakrishna, Suraj Nair, Rafael Rafailov, Ethan Foster, Grace Lam,
+Pannag Sanketi, et al., “Openvla: An open-source vision-language-action
+model,” arXiv preprint arXiv:2406.09246, 2024.
+[3] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi,
+Chelsea Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian
+Ichter, et al., “π0: A visionlanguage-action flow model for general robot
+control, 2024a,” URL https://arxiv. org/abs/2410.24164, 2024.
+[4] Johan Bjorck, Fernando Casta˜neda, Nikita Cherniadev, Xingye Da,
+Runyu Ding, Linxi Fan, Yu Fang, Dieter Fox, Fengyuan Hu, Spencer
+Huang, et al.,
+“Gr00t n1: An open foundation model for generalist
+humanoid robots,” arXiv preprint arXiv:2503.14734, 2025.
+[5] Cheng Chi, Zhenjia Xu, Siyuan Feng, Eric Cousineau, Yilun Du,
+Benjamin Burchfiel, Russ Tedrake, and Shuran Song, “Diffusion policy:
+Visuomotor policy learning via action diffusion,”
+The International
+Journal of Robotics Research, vol. 44, no. 10-11, pp. 1684–1704, 2025.
+[6] Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar,
+Joseph Dabis, Chelsea Finn, Keerthana Gopalakrishnan, Karol Hausman,
+Alex Herzog, Jasmine Hsu, et al., “Rt-1: Robotics transformer for real-
+world control at scale,” arXiv preprint arXiv:2212.06817, 2022.
+[7] Brianna Zitkovich, Tianhe Yu, Sichun Xu, Peng Xu, Ted Xiao, Fei Xia,
+Jialin Wu, Paul Wohlhart, Stefan Welker, Ayzaan Wahid, et al., “Rt-
+2: Vision-language-action models transfer web knowledge to robotic
+control,” in Conference on Robot Learning. PMLR, 2023, pp. 2165–
+2183.
+[8] Guanxing Lu, Tengbo Yu, Haoyuan Deng, Season Si Chen, Yansong
+Tang, and Ziwei Wang, “Anybimanual: Transferring unimanual policy
+for general bimanual manipulation,” in Proceedings of the IEEE/CVF
+International Conference on Computer Vision, 2025, pp. 13662–13672.
+[9] Ruihan Yang, Qinxi Yu, Yecheng Wu, Rui Yan, Borui Li, An-Chieh
+Cheng, Xueyan Zou, Yunhao Fang, Xuxin Cheng, Ri-Zhao Qiu, et al.,
+“Egovla: Learning vision-language-action models from egocentric hu-
+man videos,” arXiv preprint arXiv:2507.12440, 2025.
+[10] Huayi Zhou and Kui Jia, “Vlbiman: Vision-language anchored one-shot
+demonstration enables generalizable bimanual robotic manipulation,”
+arXiv preprint arXiv:2509.21723, 2025.
+[11] Hokyun Im, Euijin Jeong, Jianlong Fu, Andrey Kolobov, and Young-
+woon Lee,
+“Twinvla: Data-efficient bimanual manipulation with
+twin single-arm vision-language-action models,”
+arXiv preprint
+arXiv:2511.05275, 2025.
+[12] Qingyu Fan, Zhaoxiang Li, Jinrui Hu, Yi Lu, Wang Chen, Qiu Shen,
+Xiao-xiao Long, Yinghao Cai, Tao Lu, Shuo Wang, and Xun Cao,
+“PEAfowl: Perception-Enhanced Multi-View Vision-Language-Action
+for Bimanual Manipulation,” IEEE Robotics and Automation Letters,
+vol. 11, no. 10, pp. 11841–11848, Oct. 2026.
+[13] Yoon-Ji Choi, Young-Chae Son, and Soo-Chul Lim, “See selectively,
+act adaptively: Dual-level structural decomposition for bimanual robot
+manipulation,” arXiv preprint arXiv:2606.13279, 2026.
+[14] Yandong Wang, Jiaqian Yu, Xiongfeng Peng, Lu Xu, Yamin Mao,
+Weiming Li, Jaewook Yoo, Dongwook Lee, Daehyun Ji, Mingbo Zhao,
+and Chao Zhang,
+“Co-VLA: Coordination-aware structured action
+modeling for dual-arm vision-language-action systems,” arXiv preprint
+arXiv:2606.20285, 2026.
+[15] Dongzhou Cheng, Ziang Li, Yixiao Zhou, Haojuan Li, Jinghao Zhang,
+Lei Lei, Minjing Dong, Jie Gui, and Jiaqi Wang,
+“Robust biman-
+ual vision-language-action models via embarrassingly simple modality
+masking,” arXiv preprint arXiv:2608.22419, 2026.
+[16] Xuanran Zhai, Zekai Huang, Longyan Wu, Qianyou Zhao, Qiaojun Yu,
+Jieji Ren, Ce Hao, and Harold Soh, “SkillVLA: Tackling Combinatorial
+Diversity in Dual-Arm Manipulation via Skill Reuse,” 2026.
+[17] Zaibin Zhang, Junlan Xiao, Zhongbo Zhang, Yifan Wang, Li Kang,
+Yiran Qin, Changxing Xia, Heng Zhou, Talas Fu, Enshen Zhou, Ruimao
+Zhang, Zhenfei Yin, Huchuan Lu, and Lijun Wang, “MA-VLA: Multi-
+arm vision-language-action model for collaboration and compositional
+generalization,” arXiv preprint arXiv:2608.25864, 2026.
+[18] Xiaohua Zhai, Basil Mustafa, Alexander Kolesnikov, and Lucas Beyer,
+“Sigmoid Loss for Language Image Pre-Training,” 2023.
+[19] Qi Zhang, Shaopeng Zhai, Shengzhe Zhang, Litao Liu, TianyiZhang,
+Fuxian Huang, Zhang HaoranECNU, Ming Zhou, and Jiangmiao Pang,
+“VLAC: A generalist action-critic model via pair-wise progress under-
+standing,” 2026.
+[20] Chenyang Ma, Yue Yang, Radu Corcodel, Siddarth Jain, Andrew
+Wu, Chiori Hori, and Diego Romeres,
+“FurnitureVLA: Learning
+long-horizon bimanual furniture assembly with vision-language-action
+model,” arXiv preprint arXiv:2607.01212, 2026.
+[21] Yongsheng Zhao, Lei Zhao, Baoping Cheng, Gongxin Yao, Xuanzhang
+Wen, and Han Gao, “VLA-RAIL: A Real-Time Asynchronous Inference
+Linker for VLA Models and Robots,” 2025.

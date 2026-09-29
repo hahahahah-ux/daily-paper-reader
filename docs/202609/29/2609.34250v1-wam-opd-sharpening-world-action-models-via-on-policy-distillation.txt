@@ -1,0 +1,1168 @@
+WAM-OPD: SHARPENING WORLD ACTION MODELS
+VIA ON-POLICY DISTILLATION
+Panjun Liu, Xiaohan Lei, Shiqi Zhang, Yikun Wang,
+Yongxin Zhang, Mingyi Hu, Shida Sun, Jiateng Shou,
+Wengang Zhou, Jiajun Deng∗, Zhiwei Xiong
+University of Science and Technology of China
+panjun_liu@mail.ustc.edu.cn, dengjj@ustc.edu.cn
+ABSTRACT
+Pretrained world action models (WAMs) provide generalist capabilities across di-
+verse robotic manipulation tasks, yet improving target-task performance to an ex-
+pert level without degrading pretrained skills remains challenging. To this end,
+we explore on-policy distillation (OPD) for WAMs and introduce a new frame-
+work, namely WAM-OPD. WAM-OPD inherits the advantage of OPD methods
+that transfer task-specific teacher knowledge under the student’s own induced dis-
+tribution, rather than directly fitting the student to a narrow task-specific data dis-
+tribution. However, in closed-loop manipulation, the observation histories change
+as the student policy evolves, requiring fresh environment rollouts to remain on-
+policy. Directly applying OPD to WAMs entails repeated data collection, which is
+costly even in simulation and often impractical on real robots. To avoid repeated
+environment rollouts during distillation, we introduce prefix-weighted trajectory
+replay (PWTR). PWTR uses a fixed trajectory pool composed primarily of initial-
+student rollouts, supplemented with task-specific teacher rollouts to broaden tra-
+jectory coverage. For each trajectory replayed from this pool, PWTR conditions
+the current policy on successive stored histories to generate fresh denoising paths,
+along which the task-specific teacher provides supervision. Although these de-
+noising paths are refreshed as the policy evolves, the replayed environment tra-
+jectories remain fixed. PWTR therefore reweights per-decision distillation losses
+using proxy importance weights derived from path scores accumulated over the
+trajectory prefix preceding each decision to mitigate the resulting shift in the his-
+tory distribution. Simulated and real-world experiments demonstrate task adap-
+tation without additional environment interaction during distillation. Across both
+settings, WAM-OPD improves target-task performance while retaining near-initial
+performance on tasks excluded from adaptation.
+1
+INTRODUCTION
+Pretrained world action models (WAMs) provide a promising foundation for generalist robotic ma-
+nipulation by capturing broad, reusable behaviors (Ye et al., 2026; Yuan et al., 2026; Li et al., 2026b;
+2025; Zhu et al., 2025; Kim et al., 2026; AgiBot Research Team et al., 2026). Practical deploy-
+ment, however, often demands higher reliability on frequently executed tasks, since even occasional
+failures can lead to recurring workflow interruptions and human intervention. This motivates post-
+training WAMs to achieve expert-level performance on selected tasks while retaining their broader
+capabilities. Balancing these objectives remains challenging with existing approaches. Supervised
+fine-tuning (SFT) offers a straightforward and computationally efficient route to task specialization
+using demonstrations (Kim et al., 2025). Reinforcement learning (RL) provides an alternative by
+directly optimizing task rewards through environmental interaction, enabling substantial improve-
+ments in task performance (Li et al., 2026a). However, task-specific adaptation can degrade pre-
+trained capabilities under both SFT (Kirkpatrick et al., 2017; Luo et al., 2023; Li et al., 2026a; Zhong
+et al., 2026) and RL (Wolczyk et al., 2024). Online RL additionally requires repeated environment
+rollouts (Li et al., 2026a; Qian et al., 2026), which incur substantial execution and reset costs and
+∗Corresponding author.
+1
+arXiv:2609.34250v1  [cs.RO]  28 Sep 2026
+
+
+Adapted policy
+𝜋𝜃0
+𝜋𝑆𝐹𝑇
+Initial policy
+Fine-tune
+Prior tasks Target tasks
+Prior-skill degradation
+Environment
+Step 1
+Current policy
+Current student
+Frozen teacher π T
+Noise
+Step 2
+Step t−1
+…
+…
+Step t
+Action denoising
+Sparse reward
+𝒟
+Fixed trajectory pool
+Stored history
+Observations
+Interaction
+Dense velocity supervision
+WAM-OPD: No environment interaction during distillation
+Online RL: Repeated environment interaction
+SFT: Task adaptation can reduce prior skills
+𝜋𝜃
+𝜋𝜃
+Figure 1: Task adaptation strategies for pretrained WAMs. Left: SFT specializes pretrained
+WAMs for target tasks but risks forgetting pretrained skills. Middle: Online RL couples policy
+optimization with repeated environment interaction, while sparse rewards can further reduce sample
+efficiency. Right: WAM-OPD uses PWTR to replay observation histories from a fixed trajectory
+pool. A frozen teacher provides dense velocity supervision along fresh student denoising paths,
+enabling adaptation without additional environment interaction during distillation.
+must accommodate safety constraints on real robots. Sparse rewards can further increase interaction
+burden by reducing sample efficiency (Andrychowicz et al., 2017; Tan et al., 2025; Li et al., 2026a).
+These limitations motivate post-training strategies that jointly address target-task proficiency, skill
+retention, and interaction efficiency. Figure 1 contrasts these task adaptation strategies.
+Recent advances in on-policy distillation (OPD) for large language models (Shenfeld et al., 2026)
+and visual generation (Li et al., 2026c; Fang et al., 2026) have shown promise in integrating task-
+specific expertise while mitigating forgetting. Motivated by these results, we present an early explo-
+ration of OPD for WAM adaptation and introduce WAM-OPD. Particularly, on-policy distillation in
+WAMs involves two levels of sampling: the student’s denoising paths and the observation histories
+used as conditioning inputs. For a given history, the current student generates fresh denoising paths,
+while a frozen task-specific teacher provides velocity targets at sampled intermediate states. Gen-
+erating such denoising paths and obtaining teacher supervision require only model inference. The
+observation histories, however, are induced by closed-loop execution of the student’s policy, and the
+distribution evolves as the policy updates. Direct online OPD thus requires repeated environment
+rollouts to collect histories under the updated policy, making it costly even in simulation and often
+impractical on real robots.
+To avoid repeated environment rollouts during distillation, we introduce prefix-weighted trajectory
+replay (PWTR). PWTR uses a fixed trajectory pool composed primarily of initial-student rollouts,
+supplemented with task-specific teacher rollouts to broaden trajectory coverage. The initial-student
+rollouts cover histories typical of the policy at the start of distillation, while teacher rollouts broaden
+coverage of histories the student may encounter later as it acquires task-specific expertise. For
+each trajectory replayed from this pool, PWTR conditions the current policy on successive stored
+histories to generate fresh denoising paths, along which the task-specific teacher provides dense
+supervision. Although these denoising paths are refreshed as the policy evolves, the replayed tra-
+jectories remain fixed. PWTR therefore reweights per-decision distillation losses to mitigate the
+resulting distribution shift. PWTR accumulates denoising-path scores under a student snapshot and
+the fixed initial-student and task-specific teacher references over preceding sampled decision points.
+These cumulative scores yield proxy importance weights inspired by a change of measure (Precup
+et al., 2000), placing greater emphasis on histories more compatible with the student snapshot rela-
+tive to the fixed references. Together with fresh denoising paths generated by the current policy, this
+reweighting provides an approximation to the online OPD objective without further environment
+interaction during distillation.
+Experiments in simulation (Chen et al., 2025b) and on real robots demonstrate that WAM-OPD
+enables task adaptation without additional environment interaction during distillation. Across both
+settings, WAM-OPD improves target-task performance over the pretrained base model while retain-
+ing near-initial performance on tasks excluded from adaptation. Our contributions are threefold:
+• To the best of our knowledge, we are the first to explore OPD for pretrained WAMs and
+introduce WAM-OPD, which transfers task-specific teacher knowledge through dense su-
+pervision along denoising paths generated by the current student policy.
+2
+
+
+• We propose PWTR, combining a fixed trajectory pool with prefix-based proxy weighting
+to mitigate history distribution shift without environment interaction during distillation.
+• Simulated and real-world experiments show that WAM-OPD improves target-task perfor-
+mance over the pretrained base model while retaining near-initial performance on tasks
+excluded from adaptation.
+2
+RELATED WORK
+2.1
+WORLD ACTION MODELS AND TASK ADAPTATION
+Pretrained WAMs integrate predictive visual modeling with action generation, providing reusable
+priors for generalist robotic manipulation (Ye et al., 2026; Li et al., 2026b; Kim et al., 2026). Their
+post-training objectives range from improving control to accelerating inference. WAM-RL jointly
+improves world and action models through online video fine-tuning and reinforcement learning with
+reconstruction-based rewards (Qian et al., 2026). Flash-WAM uses consistency distillation to reduce
+the denoising steps required for video and action generation (Akbari et al., 2026). Our work focuses
+on teacher-guided task adaptation through on-policy distillation, improving target-task performance
+while retaining pretrained skills.
+2.2
+ON-POLICY DISTILLATION
+OPD provides teacher supervision on samples generated by the current student. ImitKD and GKD
+apply this principle to autoregressive generation to reduce the mismatch between training and infer-
+ence (Lin et al., 2020; Agarwal et al., 2024). Flow-OPD and DiffusionOPD extend it to continuous
+generation, transferring task-specific expertise through teacher feedback along student-generated
+denoising paths (Fang et al., 2026; Li et al., 2026c). In closed-loop manipulation, however, the stu-
+dent determines the observations that condition subsequent predictions. DAgger addresses learner-
+induced distribution shift through repeated rollouts and expert annotation (Ross et al., 2011). VLA-
+OPD provides dense teacher guidance on student-visited robot states, while retaining online environ-
+ment rollouts during training (Zhong et al., 2026). Thus, richer supervision alone does not remove
+the cost of acquiring observation histories consistent with the evolving policy. Our work applies
+OPD to pretrained WAMs through PWTR, which combines a fixed trajectory pool with proxy prefix
+weighting to enable adaptation without additional environment interaction during distillation.
+2.3
+EFFICIENT DISTILLATION AND DATA REUSE
+Data reuse reduces different costs depending on what is retained. Lightning OPD caches responses
+from an SFT-initialized student and their teacher log-probabilities, eliminating the need for a live
+teacher server during distillation (Wu et al., 2026). ReOPD removes tool-environment interaction
+by replaying teacher histories for language-agent distillation, with greater supervision weight on
+earlier steps (Liao et al., 2026). For robotic adaptation, WAM-OPD uses PWTR with a fixed tra-
+jectory pool composed primarily of initial-student rollouts, supplemented with task-specific teacher
+rollouts. Conditioned on stored observation histories, the current student generates fresh denois-
+ing paths along which frozen teachers provide dense supervision. Motivated by off-policy impor-
+tance sampling and V-trace (Precup et al., 2000; Espeholt et al., 2018), PWTR derives proxy prefix
+weights from accumulated denoising-path scores under a student snapshot and fixed references.
+These weights are refreshed as the student evolves, adjusting the contribution of replayed histories
+while keeping the trajectory pool fixed.
+3
+METHOD
+WAM-OPD combines prefix-weighted trajectory replay (PWTR) with prefix-weighted on-policy
+distillation to adapt pretrained WAMs, as illustrated in Figure 2. It constructs a fixed pool D primar-
+ily from rollouts of the initial student πθ0, supplemented with rollouts from task-specific teachers
+π(j)
+T . At each update, it samples a trajectory from D and processes its sampled decision points in
+temporal order. At sampled decision point i, it accumulates scores of stored denoising paths under
+a student snapshot and the fixed references over preceding sampled points in the same trajectory
+to obtain prefix scores Φν(i). These scores determine the proxy weight wi to mitigate history dis-
+tribution mismatch. Conditioned on the stored history hi, the current student πθ generates a fresh
+denoising path. At a detached low-noise state ¯xs, WAM-OPD uses velocity targets v(j)
+T
+from the
+frozen teacher to supervise the student field vθ and weights the loss by wi. It averages these losses
+3
+
+
+Prefix-Weighted On-Policy Distillation
+Initial student
+Task teachers
+Closed-loop robot rollouts
+Student rollouts
+Teacher rollouts
+𝒟
+Fixed trajectory pool
+𝑢< 𝑡
+0
+1
+⋯
+t−1
+t
+ℎ
+𝒙𝟎
+(𝒖)
+Student
+Initial
+Teacher
+𝜑ഥ𝜃(𝑢)
+Stored History
+⋯
+𝜋𝑇
+(𝑗)
+Frozen task teacher
+Local supervision
+𝒗𝜽
+𝒗𝑻
+(𝒋)
+𝒗𝜽−𝒗𝑻
+𝒋
+𝟐
+𝟐
+ഥ𝒙𝒔
+Low-noise Query
+Noise
+𝑥1 ~ 𝒩(0, 𝐼)
+Action
+𝒂𝒕
+Current Student 
+Denoising Path
+መℒ𝑊𝐴𝑀−𝑂𝑃𝐷𝜃= 1
+|ℬ| ෍
+𝑖∈ℬ
+𝑠𝑔𝑤𝑖
+𝒗𝜽−𝒗𝑻
+𝒋
+𝜋θ0
+𝜋𝑇
+(𝑗)
+𝒙𝑲
+(𝒖) = 𝒂𝒖
+𝜑𝜃0(𝑢)
+𝜑𝑇
+(𝑗)(𝑢)
+ℎ𝑡= (𝑜0, 𝑎0, … , 𝑜𝑡)
+Condition
+Stored trajectory prefix
+Score stored denoising paths
+Refresh
+Fixed
+Fixed
+Φഥ𝜃(𝑡)
+Φ𝜃0(𝑡)
+𝜑𝑇
+(𝑗)(𝑡)
+෍
+𝒖<𝒕
+෍
+𝒖<𝒕
+෍
+𝒖<𝒕
+𝑤𝑡=
+𝑒𝛷ሜ𝜃𝑡
+𝜂𝑒𝛷𝜃0 𝑡+ 1−𝜂𝑒𝛷𝑇
+𝑗
+𝑡
+𝜆
+Accumulate over sampled decision points
+Update 
+Student 
+Once
+Trajectory Collection
+History Weight Estimation
+Prefix-Weighted Trajectory Replay
+Figure 2: Overview of WAM-OPD. Left: Prefix-weighted trajectory replay (PWTR). A fixed
+pool D contains primarily initial-student rollouts, supplemented by task-specific teacher rollouts.
+Stored denoising paths are scored by a student snapshot and the fixed initial-student and teacher ref-
+erences. The cumulative prefix compatibility scores Φ¯θ(i), Φθ0(i), and Φ(j)
+T (i) yield proxy weights
+wi. Right: On-policy distillation. Given a stored history hi, the current student generates a fresh
+denoising path. A frozen teacher supervises the student’s velocity at a detached low-noise query
+state ¯xs on this path. Prefix-weighted losses are averaged over the sampled decision points of one
+trajectory, with gradients accumulated for one student update. Here sg denotes stop-gradient and B
+indexes the trajectory’s sampled decision points.
+and accumulates gradients over the sampled decision points before updating the student, without
+further environment interaction.
+We first formulate the online OPD objective for WAMs in Section 3.1. We then introduce PWTR,
+including the fixed trajectory pool and prefix weight construction, in Section 3.2, followed by prefix-
+weighted on-policy distillation in Section 3.3.
+3.1
+ON-POLICY DISTILLATION OBJECTIVE FOR WAMS
+Diffusion-based OPD.
+In a flow-based formulation of diffusion-based OPD (Li et al., 2026c; Fang
+et al., 2026), denoising paths are obtained by integrating the current student’s velocity field vθ
+from noise to data, while the frozen teacher’s velocity field vT provides supervision at intermediate
+states. For a conditioning input c drawn from a fixed distribution p(c), let qθ(xs | c, s) denote
+the distribution of student-generated states at denoising time s. A corresponding velocity-matching
+objective is
+LOPD(θ) = Ec∼p(c)Es∼psExs∼qθ(·|c,s)
+hvθ(xs, s | c) −vT (xs, s | c)
+2
+2
+i
+.
+(1)
+Here, s = 1 and s = 0 correspond to noise and data, respectively, and ps specifies the query-time
+distribution. The on-policy component lies in sampling intermediate states from qθ, which evolves
+with the student, while the conditioning distribution p(c) remains fixed. Conditioning inputs can
+therefore be reused throughout distillation, with fresh student-generated denoising paths and teacher
+supervision obtained through model inference alone.
+OPD in closed-loop WAMs.
+Closed-loop WAMs introduce policy dependence into the condi-
+tioning distribution itself. At each replanning decision t, the student generates an action chunk at
+conditioned on the history ht. Here, ht denotes the interaction history available at decision t; the
+policy uses the conditioning inputs extracted from this history. Executing part of this chunk changes
+the environment and produces subsequent observations. Let dθ denote the distribution of histories
+encountered across replanning decisions during closed-loop execution of the current student policy.
+Because the student’s preceding actions influence subsequent observations and thus the policy in-
+puts, dθ evolves with the policy. Replacing the fixed conditioning distribution in Eq. (1) with dθ
+yields the online WAM OPD objective
+LWAM
+OPD (θ) = Eh∼dθEs∼psExs∼qθ(·|h,s)
+hvθ(xs, s | h) −vT (xs, s | h)
+2
+2
+i
+.
+(2)
+Here, vθ and vT denote the student and frozen teacher action velocity fields, respectively. Unlike
+Eq. (1), the outer expectation follows dθ, the distribution of histories induced by closed-loop execu-
+4
+
+
+tion of the current student. On-policy sampling therefore involves both histories drawn from dθ and
+denoising states drawn from qθ(· | h, s). Given a stored history, the current student can regenerate
+fresh denoising states through model inference, but the history itself need not follow the current dθ.
+Obtaining fresh histories from dθ requires closed-loop execution, so directly realizing online OPD
+entails repeated environment rollouts (Zhong et al., 2026), which are costly in simulation and often
+impractical on real robots. To approximate this objective using a fixed trajectory pool without further
+environment interaction during distillation, WAM-OPD uses PWTR, described in Section 3.2.
+3.2
+PREFIX-WEIGHTED TRAJECTORY REPLAY
+Fixed trajectory pool.
+As illustrated in Figure 2, WAM-OPD constructs a fixed trajectory pool
+D = DS ∪DT before distillation. The pool consists primarily of initial-student trajectories DS, col-
+lected by executing πθ0 across all target tasks, supplemented with teacher trajectories DT collected
+by executing each frozen teacher π(j)
+T
+on its assigned task. Initial-student rollouts provide histories
+encountered before adaptation, including unsuccessful executions, while teacher rollouts broaden
+coverage with histories from task-specific policies. The pool remains fixed throughout distillation.
+At each replanning decision t, the collecting policy generates an action chunk at of horizon H and
+executes its first ℓt ≤H actions before receiving the next observation. Each stored record contains
+the history ht, from which the collecting policy’s conditioning inputs are extracted, together with
+the sampled action chunk at, the executed length ℓt, and the complete denoising path that produced
+at. Each trajectory also carries task and source labels: the task identifies the supervising teacher,
+and the source distinguishes initial-student from teacher rollouts. The executed length ℓt determines
+which action coordinates are included in path scoring.
+Stored denoising paths are used to estimate prefix weights. We use equally spaced temporal sub-
+sampling with n = 16, preserving the order of the sampled decision points within each trajectory.
+The path score at a sampled decision point contributes only to the weights of later sampled points in
+the same trajectory. Stored action chunks are not used as regression targets.
+Reweighting replayed histories.
+PWTR reweights the distillation loss to account for the changing
+history distribution as the student evolves. During training, it selects the initial-student or teacher
+source with probabilities η and 1 −η, respectively, and samples a trajectory from that source. At the
+population level, this sampling scheme defines the reference mixture pmix = ηdθ0+(1−η)dT , where
+dθ0 and dT are the initial-student and task-specific teacher history distributions under a common
+temporal sampling convention. When pmix covers the support of dθ, weighting by dθ(h)/pmix(h)
+recovers the online expectation over histories (Precup et al., 2000; Sutton & Barto, 2018).
+PWTR constructs proxy weights for replayed histories through their associated trajectory prefixes.
+Under the assumptions in Appendix A, shared initialization and environment-transition factors can-
+cel in the full-prefix density ratio at a fixed original decision index, leaving a ratio determined by
+preceding action probabilities. This structure motivates weighting each history using the actions that
+precede it. Since the flow sampler does not directly provide these probabilities, PWTR scores stored
+denoising paths by their compatibility with each policy’s velocity field and accumulates these scores
+over preceding sampled decision points to construct the weights.
+Denoising path scoring.
+For a stored denoising path at replanning decision u, let {xsm}K
+m=0
+denote its states at noise levels s0 > · · · > sK, with ∆m = sm+1 −sm < 0. PWTR evaluates the
+path under a scoring policy ν, corresponding to the student snapshot, initial student, or task-specific
+teacher:
+φν(u) = −
+K−1
+X
+m=0
+1
+2σ2mdu
+Pu
+
+xsm+1 −xsm −∆mvν(xsm, sm | hu)
+2
+2 .
+(3)
+The residual compares each recorded denoising increment with the increment predicted by policy ν
+at the same stored state and history hu. The projection Pu selects the du coordinates corresponding
+to the ℓu executed actions, restricting scoring to the portion of the chunk applied to the environment.
+Division by du normalizes for the number of scored coordinates, while σm = max{σmin, κ√−∆m}
+provides an auxiliary scoring scale, with σmin > 0 and κ > 0. Higher scores indicate closer
+agreement between the policy’s velocity field and the stored path. The resulting φν(u) serves as a
+path-compatibility proxy for prefix weighting, rather than an exact action log-likelihood.
+5
+
+
+Prefix weight construction.
+Let tτ,k denote the original decision index of the k-th sampled de-
+cision point in trajectory τ. For i = (τ, k), we define the prefix score as Φν(i) = P
+r<k φν(tτ,r),
+where the sum is zero for the first sampled point. The current point is excluded because its history
+is available before its action is generated. Following the mixture structure of the full-prefix den-
+sity ratio, PWTR compares a student snapshot ¯θ with the initial-student and task-specific teacher
+references, as illustrated in Figure 2:
+Si = λ
+h
+Φ¯θ(i) −log
+
+ηeΦθ0(i) + (1 −η)eΦ(j)
+T (i)i
+.
+(4)
+Here, λ ≥0 controls the reweighting strength, and exp(Si) defines an unnormalized proxy weight.
+Larger weights favor replayed records whose preceding denoising paths are more compatible with
+the student snapshot relative to the fixed references. Both fixed references score every stored path to
+form the mixture denominator.
+Within each collection condition, PWTR normalizes exp(Si) to unit mean under the empirical train-
+ing measure, clips the normalized weights at threshold C, and renormalizes them under the same
+measure to obtain wi (Appendix, Eq. (10)). This measure follows the trajectory-sampling probabil-
+ities and the averaging of per-decision losses within each trajectory. Clipping limits the influence
+of extreme scores, while renormalization maintains unit mean within each condition. Setting λ = 0
+yields wi = 1, recovering unweighted mixed-source distillation.
+The fixed-reference scores are computed once for all stored paths and cached. Every R student
+updates, PWTR refreshes the snapshot ¯θ, evaluates its velocity field at the stored denoising states,
+and recomputes the prefix weights. The weights remain fixed between refreshes.
+3.3
+PREFIX-WEIGHTED ON-POLICY DISTILLATION
+Local velocity supervision.
+Each sampled trajectory is processed in temporal order. Let B = Bτ
+index the sampled decision points of trajectory τ. Each record i provides the stored history hi, a
+task index ji, and a cached prefix weight wi, where hi = htτ,k is the interaction history available at
+that decision. Conditioned on hi, the current student generates a fresh denoising path from Gaussian
+noise. At a low-noise query time si ∼ps, the sampled state is detached as ¯xi = sg(xsi), where
+sg denotes stop-gradient. As illustrated in Figure 2, the student and frozen task-specific teacher are
+evaluated at the same detached state ¯xi. The teacher’s action velocity provides a local supervision
+target for the student along this freshly generated denoising path.
+Trajectory-level student update.
+We average the prefix-weighted velocity-matching losses over
+the sampled decision points of each trajectory:
+bLWAM-OPD(θ) = 1
+|B|
+X
+i∈B
+sg(wi) ·
+vθ(¯xi, si | hi) −v(ji)
+T
+(¯xi, si | hi)
+
+2
+2 .
+(5)
+Query states, prefix weights, and teacher targets are treated as constants, so gradients propagate
+only through the current student’s velocity predictions. We accumulate gradients over these points
+before a single student update. The loss supervises only the action velocity field; the video branch
+receives no direct distillation loss. This objective combines teacher supervision on fresh current-
+student denoising paths with proxy prefix weights that mitigate the history distribution mismatch,
+enabling distillation from the fixed trajectory pool without further environment interaction.
+4
+EXPERIMENTS
+We evaluate whether WAM-OPD can improve target-task performance while retaining pretrained
+skills, analyze the trajectory-pool and weighting choices in PWTR, and examine its applicability
+to real-world manipulation. All WAM-OPD distillation updates use a fixed trajectory pool without
+additional environment interaction.
+4.1
+EXPERIMENTAL SETUP
+Tasks and evaluation.
+On RoboTwin 2.0 (Chen et al., 2025b), we jointly adapt a single student
+on Move Stapler Pad and Open Microwave, abbreviated as Stapler and Microwave. We evaluate
+skill retention on six tasks excluded from adaptation: Switch, Mug, Laptop, Pillbottle, Dual Bottles,
+6
+
+
+Table 1: Success rates on RoboTwin. Both teachers supervise WAM-OPD; underlining marks teach-
+ing tasks. Parentheses show changes in group averages from the initial student. Bold denotes column
+maxima excluding Online OPD, which uses additional environment rollouts during distillation.
+Method
+Target tasks
+Retention tasks
+Average
+Stapler Microwave Switch Mug Laptop Pillbottle Dual Bottles Handover
+Target
+Retention
+Initial student
+67.5
+45.5
+68.5 68.5 99.0
+99.0
+98.0
+90.0
+56.50
+87.17
+Stapler teacher
+89.5
+33.5
+52.5 66.0 87.5
+97.0
+95.0
+56.5
+61.50
+75.75
+Microwave teacher
+31.0
+60.5
+62.0 26.0 98.5
+92.5
+97.5
+2.5
+45.75
+63.17
+πRL
+0.5
+96.0
+25.0 22.0 17.5
+22.0
+89.0
+1.0
+48.25 (−8.25) 29.42 (−57.75)
+STEAM
+76.0
+39.0
+61.5 42.5 97.5
+95.5
+91.5
+67.5
+57.50 (+1.00) 76.00 (−11.17)
+WAM-OPD (Ours) 80.5
+59.0
+71.5 68.0 98.5
+98.0
+95.0
+90.5
+69.75 (+13.25) 86.92 (−0.25)
+Online OPD
+81.5
+59.0
+68.0 68.5 97.0
+98.0
+98.5
+88.0
+70.25 (+13.75) 86.33 (−0.83)
+and Handover. The same adapted student checkpoint is evaluated on both target and retention tasks.
+Evaluation uses 100 independent scenes per task and setting, with two runs per scene, yielding 200
+trials per task and setting. All methods share the evaluation scenes, instructions, and inference-noise
+seeds. Target and retention averages assign equal weight to their two and six constituent tasks,
+respectively. Additional evaluation and interaction-cost details are provided in Appendix C.
+Compared policies.
+We compare WAM-OPD with the initial student, two task-specific SFT teach-
+ers, πRL (Chen et al., 2025a), and STEAM (Liu et al., 2026) under the same evaluation protocol.
+The Stapler and Microwave teachers are independently fine-tuned from the same pretrained check-
+point, evaluated on all eight tasks, and jointly supervise one WAM-OPD student. Controlled variants
+are analyzed in Section 4.3.
+Fixed-pool distillation protocol.
+For each target task, we collect 40 initial-student trajectories:
+8 under demo_clean and 32 under demo_randomized. Adding 20 teacher rollouts for each
+target task yields a fixed pool of 120 trajectories. These teacher rollouts are distinct from the demon-
+strations used for teacher SFT. During distillation, the current student generates fresh denoising
+paths conditioned on stored histories, with supervision from the corresponding task teacher and pre-
+fix weights from PWTR (Section 3.2). The pool remains fixed, and distillation requires no additional
+environment interaction.
+Implementation details.
+The student and teachers use Fast-WAM (Yuan et al., 2026), initialized
+from its RoboTwin checkpoint. We optimize all student MoT parameters using AdamW at a learning
+rate of 10−6 for 96 updates. We use equally spaced temporal subsampling with n = 16 and average
+the loss over the sampled decision points of one trajectory per update. The loss matches student and
+teacher action velocities at low-noise states, with no direct video supervision. All evaluated policies
+use 10 denoising steps to generate 32-step action chunks, executing up to 24 steps before replanning.
+Pool composition, backbone details, and additional hyperparameters appear in Appendix D; prefix-
+weight normalization and clipping are detailed in Appendix A.
+4.2
+TARGET-TASK ADAPTATION AND SKILL RETENTION
+Table 1 reports target-task adaptation and skill retention for the same student policy. WAM-OPD
+increases mean target-task success from 56.50% to 69.75%, while maintaining 86.92% mean success
+on the six retention tasks compared with the initial student’s 87.17%. This corresponds to a 13.25-
+percentage-point target-task gain and a 0.25-point decrease in mean retention performance.
+Target-task adaptation.
+WAM-OPD improves success from 67.5% to 80.5% on Stapler and from
+45.5% to 59.0% on Microwave, yielding gains of 13.0 and 13.5 percentage points. WAM-OPD
+achieves the highest mean target-task success rate among the evaluated SFT and RL baselines, with
+performance comparable to online OPD (69.75% vs. 70.25%), without additional environment in-
+teraction during distillation. The SFT specialists exhibit cross-task degradation: the Stapler teacher
+7
+
+
+Table 2: Ablation study of PWTR. Success rates are reported over 200 cases per task; M-Shuffle
+permutes weights among decision points at the same position k in the sampled sequence.
+Task
+Student Pool
+Teacher Pool
+Mixed Pool
+w/o prefix w/ prefix w/o prefix w/ prefix w/o prefix M-Shuffle w/ prefix (Ours)
+Stapler
+75.0
+77.5
+74.0
+72.0
+77.0
+74.0
+80.5
+Microwave
+57.0
+58.0
+54.0
+55.5
+57.5
+57.0
+59.0
+Avg.
+66.00
+67.75
+64.00
+63.75
+67.25
+65.50
+69.75
+Figure 3: History weight dynamics during distillation. Mean history weights at sampled decision
+points are shown separately for initial-student and teacher rollouts in the mixed trajectory pool. The
+dashed line indicates uniform weighting.
+obtains 33.5% on Microwave, while the Microwave teacher obtains 31.0% on Stapler. WAM-OPD
+instead improves both target tasks within one student, combining guidance from the two specialists.
+Pretrained skill retention.
+The target-task gains are accompanied by near-initial performance on
+the six evaluated retention tasks. Both SFT teachers underperform the initial student on all six
+tasks, with mean success rates of 75.75% and 63.17%, compared with 86.92% for WAM-OPD. For
+example, Handover success falls from 90.0% to 56.5% for the Stapler teacher and 2.5% for the
+Microwave teacher, whereas WAM-OPD achieves 90.5%. Together, the target and retention results
+show that the complete WAM-OPD method improves the adapted skills while retaining near-initial
+performance on tasks excluded from adaptation.
+4.3
+ANALYSIS OF PREFIX-WEIGHTED TRAJECTORY REPLAY
+Trajectory-pool composition.
+The Student Pool contains trajectories from the initial student, the
+Teacher Pool contains task-specific teacher rollouts, and the Mixed Pool combines both sources.
+With prefix weights set to one, the Mixed Pool achieves 67.25% mean success, compared with
+66.00% for the Student Pool and 64.00% for the Teacher Pool, as shown in Table 2. The Mixed Pool
+yields the highest success on both tasks with prefix weighting. These comparisons favor the mixed-
+pool configuration, in which initial-student trajectories are supplemented with teacher trajectories.
+Effect of prefix weighting.
+For each pool, w/o prefix assigns unit weight to the distillation loss at
+each sampled decision point, while w/ prefix applies PWTR weights. As shown in Table 2, weighting
+increases mean success from 66.00% to 67.75% in the Student Pool and from 67.25% to 69.75% in
+the Mixed Pool, yielding gains of 1.75 and 2.50 percentage points, respectively. In the Teacher Pool,
+mean success changes from 64.00% to 63.75%, showing no average gain. Thus, prefix weighting
+benefits both pools containing initial-student rollouts, with the largest gain in the Mixed Pool. The
+Teacher Pool result may reflect limited coverage of student-visited histories: reweighting adjusts the
+contribution of stored histories but cannot expand their coverage. Figure 3 also shows how mean
+history weights evolve for initial-student and teacher rollouts during Mixed Pool distillation.
+History–weight correspondence.
+Within the Mixed Pool, M-Shuffle randomly permutes PWTR
+weights among decision points at the same position k in the sampled sequence. This preserves the
+weight values at each sampled position while disrupting the correspondence between individual his-
+tories and their weights. Full PWTR achieves 69.75% mean success versus 65.50% for M-Shuffle,
+a gain of 4.25 percentage points. This result supports the importance of history–weight correspon-
+dence. Together, these ablations favor a mixed trajectory pool with history-specific prefix weighting.
+8
+
+
+Block 
+pick place
+Corn 
+pick place
+Button
+Pressings
+(a) Execution sequences of three real-world tasks.
+(b) Real-world success-rate comparison.
+Figure 4:
+Real-world evaluation on Corn, Block, and Button. Left: Experimental scenes for the
+three manipulation tasks. Right: Success rates of the base student, the corresponding task-specific
+teachers, and WAM-OPD. WAM-OPD adapts a single student using all three teachers and a fixed
+trajectory pool, without additional robot rollouts during distillation.
+4.4
+REAL-WORLD EVALUATION
+Platform and tasks.
+The platform comprises two UR5e arms, a head camera providing a global
+view, and one wrist camera per arm providing local views. We evaluate Pick-and-Place Corn, Pick-
+and-Place Block, and Press Button, abbreviated as Corn, Block, and Button. The first two tasks
+involve approaching, grasping, transporting, and placing objects, while Button assesses end-effector
+alignment and contact. The student is initialized from the Fast-WAM RoboTwin checkpoint and
+pretrained on real-robot data to obtain a base student adapted to the robot’s observation and action
+interfaces. Task-specific teachers are initialized from this shared checkpoint, fine-tuned on their
+respective single-task datasets, and frozen during distillation.
+Fixed-pool distillation.
+For each task, trajectories are collected once using the base student and
+combined with teacher-provided trajectories to form a fixed pool. WAM-OPD uses supervision from
+all three task-specific teachers to adapt a single student. As in simulation, fresh student denoising
+paths and teacher targets are generated using stored histories, with no additional robot rollouts during
+distillation. The real-robot observation and action interfaces are detailed in Appendix D.
+Evaluation protocol.
+Evaluation layouts are independent of those used for training-data collec-
+tion. Each method is evaluated on 50 paired layouts per task, with methods tested on the same
+layouts in interleaved order. A pick-and-place trial succeeds if the object reaches the designated
+region and remains stable after release; a button-press trial succeeds if the button is activated. We
+report task success rates for the base student, the corresponding task-specific teachers, and the single
+student adapted by WAM-OPD.
+Results.
+Figure 4 presents the task scenes and success-rate comparisons. In this three-task eval-
+uation, WAM-OPD improves upon the base student, supporting target-task adaptation on the real
+robot within a single policy. These gains are achieved using the fixed trajectory pool throughout
+distillation, without additional robot interaction during that stage.
+5
+CONCLUSION
+We presented WAM-OPD, an on-policy distillation framework for adapting pretrained world ac-
+tion models. Experiments in simulation and on real robots show that WAM-OPD improves target-
+task performance over the pretrained base model while retaining near-initial performance on tasks
+excluded from adaptation.
+Through prefix-weighted trajectory replay (PWTR), these gains are
+achieved using a fixed trajectory pool without additional environment interaction during distilla-
+tion. These findings support OPD as a promising approach to task specialization with pretrained
+skill retention. Future work could improve trajectory coverage and proxy prefix-weight estimation
+to further strengthen adaptation.
+9
+
+
+REFERENCES
+Rishabh Agarwal, Nino Vieillard, Yongchao Zhou, Piotr Stanczyk, Sabela Ramos, Matthieu Geist,
+and Olivier Bachem. On-policy distillation of language models: Learning from self-generated
+mistakes. In International Conference on Learning Representations, 2024.
+AgiBot Research Team, Renhang Liu, Wenzhi Zhao, Zhuo Yang, Liliang Chen, Pengfei Zhou,
+Shengcong Chen, Guanghui Ren, Youlun Peng, Rongjun Jin, et al. GE-Act 2.0: Pretraining
+and scaling a world-action model for robotic manipulation. arXiv preprint arXiv:2609.05588,
+2026.
+Arman Akbari, Ci Zhang, Arash Akbari, Lin Zhao, Yixiao Chen, Weiwei Chen, Xuan Zhang, Geng
+Yuan, and Yanzhi Wang. Flash-WAM: Modality-aware distillation for world action models. arXiv
+preprint arXiv:2606.05254, 2026. URL https://arxiv.org/abs/2606.05254.
+Marcin Andrychowicz, Filip Wolski, Alex Ray, Jonas Schneider, Rachel Fong, Peter Welinder, Bob
+McGrew, Josh Tobin, Pieter Abbeel, and Wojciech Zaremba. Hindsight experience replay. In
+Advances in Neural Information Processing Systems, 2017.
+Kang Chen, Zhihao Liu, Tonghe Zhang, Zhen Guo, Si Xu, Hao Lin, Hongzhi Zang, Xiang Li,
+Quanlu Zhang, Zhaofei Yu, Guoliang Fan, Tiejun Huang, Yu Wang, and Chao Yu. πRL: Online
+RL fine-tuning for flow-based vision-language-action models. arXiv preprint arXiv:2510.25889,
+2025a. URL https://arxiv.org/abs/2510.25889.
+Tianxing Chen, Zanxin Chen, Baijun Chen, Zijian Cai, Yibin Liu, Zixuan Li, Qiwei Liang, Xianliang
+Lin, Yiheng Ge, Zhenyu Gu, Weiliang Deng, Yubin Guo, Tian Nian, Xuanbing Xie, Qiangyu
+Chen, Kailun Su, Tianling Xu, Guodong Liu, Mengkang Hu, Huan-ang Gao, Kaixuan Wang,
+Zhixuan Liang, Yusen Qin, Xiaokang Yang, Ping Luo, and Yao Mu. RoboTwin 2.0: A scalable
+data generator and benchmark with strong domain randomization for robust bimanual robotic
+manipulation. arXiv preprint arXiv:2506.18088, 2025b.
+Lasse Espeholt, Hubert Soyer, Remi Munos, Karen Simonyan, Vlad Mnih, Tom Ward, Yotam
+Doron, Vlad Firoiu, Tim Harley, Iain Dunning, Shane Legg, and Koray Kavukcuoglu. IMPALA:
+Scalable distributed deep-RL with importance weighted actor-learner architectures. In Interna-
+tional Conference on Machine Learning, pp. 1407–1416, 2018.
+Zhen Fang, Wenxuan Huang, Yu Zeng, Yiming Zhao, Shuang Chen, Kaituo Feng, Yunlong Lin, Lin
+Chen, Zehui Chen, Shaosheng Cao, and Feng Zhao. Flow-OPD: On-policy distillation for flow
+matching models. arXiv preprint arXiv:2605.08063, 2026.
+Moo Jin Kim, Chelsea Finn, and Percy Liang. Fine-tuning vision-language-action models: Opti-
+mizing speed and success. In Robotics: Science and Systems, 2025.
+Moo Jin Kim, Yihuai Gao, Tsung-Yi Lin, Yen-Chen Lin, Yunhao Ge, Grace Lam, Percy Liang, Shu-
+ran Song, Ming-Yu Liu, Chelsea Finn, and Jinwei Gu. Cosmos policy: Fine-tuning video models
+for visuomotor control and planning. In International Conference on Learning Representations,
+2026.
+James Kirkpatrick, Razvan Pascanu, Neil Rabinowitz, Joel Veness, Guillaume Desjardins, Andrei A.
+Rusu, Kieran Milan, John Quan, Tiago Ramalho, Agnieszka Grabska-Barwinska, Demis Hass-
+abis, Claudia Clopath, Dharshan Kumaran, and Raia Hadsell. Overcoming catastrophic forgetting
+in neural networks. Proceedings of the National Academy of Sciences, 114(13):3521–3526, 2017.
+Haozhan Li, Yuxin Zuo, Jiale Yu, Yuhao Zhang, Zhaohui Yang, Kaiyan Zhang, Xuekai Zhu, Yuchen
+Zhang, Tianxing Chen, Ganqu Cui, et al. SimpleVLA-RL: Scaling VLA training via reinforce-
+ment learning. In International Conference on Learning Representations, 2026a.
+Lin Li, Qihang Zhang, Yiming Luo, Shuai Yang, Ruilin Wang, Fei Han, Mingrui Yu, Zelin Gao, Nan
+Xue, Xing Zhu, Yujun Shen, and Yinghao Xu. Causal world modeling for robot control. arXiv
+preprint arXiv:2601.21998, 2026b.
+Quanhao Li, Junqiu Yu, Kaixun Jiang, Yujie Wei, Zhen Xing, Pandeng Li, Ruihang Chu, Shiwei
+Zhang, Yu Liu, and Zuxuan Wu. DiffusionOPD: A unified perspective of on-policy distillation in
+diffusion models. arXiv preprint arXiv:2605.15055, 2026c.
+10
+
+
+Shuang Li, Yihuai Gao, Dorsa Sadigh, and Shuran Song. Unified video action model. In Robotics:
+Science and Systems, 2025.
+Baohao Liao, Hanze Dong, Christof Monz, Xinxing Xu, Li Dong, and Furu Wei. Multi-turn on-
+policy distillation with prefix replay. arXiv preprint arXiv:2607.04763, 2026. URL https:
+//arxiv.org/abs/2607.04763.
+Alexander Lin, Jeremy Wohlwend, Howard Chen, and Tao Lei. Autoregressive knowledge distil-
+lation through imitation learning. In Proceedings of the 2020 Conference on Empirical Meth-
+ods in Natural Language Processing, pp. 6121–6133. Association for Computational Linguis-
+tics, 2020. doi: 10.18653/v1/2020.emnlp-main.494. URL https://aclanthology.org/
+2020.emnlp-main.494/.
+Zhihao Liu, Qiuyi Gu, Yitao Wang, Dongming Qiao, Yixian Zhang, Shuaihang Chen, Liangzhi
+Shi, Tianxing Zhou, Zefang Huang, Kang Chen, Zhen Guo, Quanlu Zhang, Jincheng Yu, Xi-
+aodan Liang, Guoliang Fan, Yu Wang, Feng Gao, Xinlei Chen, and Chao Yu. STEAM: Self-
+supervised temporal ensemble advantage modeling for real-world robot learning. arXiv preprint
+arXiv:2606.29834, 2026. URL https://arxiv.org/abs/2606.29834.
+Yun Luo, Zhen Yang, Fandong Meng, Yafu Li, Jie Zhou, and Yue Zhang. An empirical study
+of catastrophic forgetting in large language models during continual fine-tuning. arXiv preprint
+arXiv:2308.08747, 2023.
+Doina Precup, Richard S. Sutton, and Satinder Singh. Eligibility traces for off-policy policy evalu-
+ation. In International Conference on Machine Learning, 2000.
+Zezhong Qian, Xiaowei Chi, Yu Qi, Haozhan Li, Zhi Yang Chen, and Shanghang Zhang. WAM-
+RL: World-action model reinforcement learning with reconstruction rewards and online video
+SFT. arXiv preprint arXiv:2606.17906, 2026.
+Stéphane Ross, Geoffrey Gordon, and J. Andrew Bagnell. A reduction of imitation learning and
+structured prediction to no-regret online learning. In International Conference on Artificial Intel-
+ligence and Statistics, 2011.
+Idan Shenfeld, Mehul Damani, Jonas Hübotter, and Pulkit Agrawal. Self-distillation enables con-
+tinual learning. arXiv preprint arXiv:2601.19897, 2026.
+Richard S. Sutton and Andrew G. Barto. Reinforcement Learning: An Introduction. MIT Press, 2
+edition, 2018.
+Shuhan Tan, Kairan Dou, Yue Zhao, and Philipp Krähenbühl. Interactive post-training for vision-
+language-action models. arXiv preprint arXiv:2505.17016, 2025.
+Maciej Wolczyk, Bartłomiej Cupiał, Mateusz Ostaszewski, Michał Bortkiewicz, Michał Zaj ˛ac, Raz-
+van Pascanu, Łukasz Kuci´nski, and Piotr Miło´s. Fine-tuning reinforcement learning models is
+secretly a forgetting mitigation problem. In Proceedings of the 41st International Conference on
+Machine Learning, volume 235 of Proceedings of Machine Learning Research, pp. 53039–53078.
+PMLR, 2024. URL https://proceedings.mlr.press/v235/wolczyk24a.html.
+Yecheng Wu, Song Han, and Hai Cai. Lightning OPD: Efficient post-training for large reasoning
+models with offline on-policy distillation. arXiv preprint arXiv:2604.13010, 2026.
+Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, Shenyuan Gao, Sihyun Yu, George Kurian, Suneel
+Indupuru, You Liang Tan, Chuning Zhu, Jiannan Xiang, et al. World action models are zero-shot
+policies. arXiv preprint arXiv:2602.15922, 2026.
+Tianyuan Yuan, Zibin Dong, Yicheng Liu, and Hang Zhao. Fast-WAM: Do world action models
+need test-time future imagination? arXiv preprint arXiv:2603.16666, 2026.
+Zhide Zhong, Haodong Yan, Junfeng Li, Junjie He, Tianran Zhang, and Haoang Li. VLA-OPD:
+Bridging offline SFT and online RL for vision-language-action models via on-policy distillation.
+arXiv preprint arXiv:2603.26666, 2026.
+Chuning Zhu, Raymond Yu, Siyuan Feng, Benjamin Burchfiel, Paarth Shah, and Abhishek Gupta.
+Unified world models: Coupling video and action diffusion for pretraining on large robotic
+datasets. In Robotics: Science and Systems, 2025.
+11
+
+
+A
+HISTORY-PREFIX REWEIGHTING
+A.1
+IDEAL HISTORY RATIOS
+We consider complete interaction histories conditional on a task and collection condition g. Histories
+are indexed by original environment replanning decisions, with a common absorbing continuation
+after termination used for this ideal fixed-index analysis. Let aexec
+u
+denote the action prefix executed
+between decisions u and u+1. For a stochastic policy ν with executed-action density πexec
+ν
+, a shared
+initial distribution p0, and a shared environment kernel P, the history density at decision t is
+dν,t(ht) = p0(o0)
+Y
+u<t
+πexec
+ν
+(aexec
+u
+| hu)P(ou+1 | hu, aexec
+u
+).
+(6)
+The task instruction is included in the conditioning, which is otherwise suppressed in the notation.
+The product includes every preceding decision. Different initial-state distributions or environment
+dynamics would introduce additional factors into the density ratio.
+The collection source is selected once per trajectory. Writing ηg for the initial-student source prob-
+ability conditional on g, the behavior history distribution is a mixture of complete prefix densities:
+pmix,t(ht) = ηgdθ0,t(ht) + (1 −ηg)d(j)
+T,t(ht).
+(7)
+When conditioning preserves the source proportions, ηg = η. Define
+Aν(t) =
+X
+u<t
+log πexec
+ν
+(aexec
+u
+| hu).
+Cancellation of the shared initial-state and environment-transition factors gives
+ρt(ht) =
+dθ,t(ht)
+pmix,t(ht) =
+exp Aθ(t)
+ηg exp Aθ0(t) + (1 −ηg) exp A(j)
+T (t)
+.
+(8)
+The denominator is a mixture of prefix products, rather than a product of per-decision mixtures. If
+dθ,t is absolutely continuous with respect to pmix,t, then for any f integrable under dθ,t,
+Eht∼dθ,t[f(ht)] = Eht∼pmix,t[ρt(ht)f(ht)].
+(9)
+For fixed student parameters, f may be the distillation loss averaged over fresh student denoising
+queries conditional on ht. Only decisions preceding t enter the ratio because ht is available before
+the current action is generated. At t = 0, the empty prefix has ratio one under the shared initial
+distribution.
+A.2
+PREFIX COMPATIBILITY SCORES
+Equation (3) defines a path-compatibility score φν(u) from stored denoising transitions. This score
+is not assumed to be an exact executed-action log likelihood. Let tτ,k denote the original decision
+index of the k-th sampled decision point in trajectory τ. For i = (τ, k), the prefix score is
+Φν(i) =
+X
+r<k
+φν(tτ,r).
+These prefix scores are used in Equation (4), with reference-mixture coefficient η. Only preceding
+sampled decision points contribute, and the sum is zero for the first sampled point. Both fixed
+references evaluate every sampled point regardless of its collection source.
+A.3
+SAMPLING MEASURE, NORMALIZATION, AND STABLE COMPUTATION
+We use equally spaced temporal subsampling with n = 16 and average the loss over the sampled
+decision points of each trajectory. Let Bτ index these points and let q(τ) denote the trajectory-
+sampling probability, including source selection. The induced sampling probability of i = (τ, k)
+is
+p(i) = q(τ)
+|Bτ| .
+12
+
+
+Let Ig index the sampled decision points belonging to collection condition g. For conditions with
+positive probability, define
+p(g) =
+X
+i∈Ig
+p(i),
+pi|g = p(i)
+p(g).
+All normalization uses this sampling measure, including its source-selection probabilities. With
+zi = exp Si, normalization, clipping, and renormalization give
+µg =
+X
+i′∈Ig
+pi′|gzi′,
+ri = zi/µg,
+ewi = min{ri, C},
+wi =
+ewi
+P
+i′∈Ig pi′|g ewi′ ,
+i ∈Ig.
+(10)
+Here C > 0 and λ ≥0. The final weights satisfy
+X
+i∈Ig
+pi|gwi = 1.
+The cap applies before the second normalization, so the final wi need not be bounded by C. Setting
+λ = 0 gives wi = 1 for all sampled decision points. Student-only and teacher-only references
+correspond to η = 1 and η = 0, respectively.
+Conditional on the cached weights, define the reweighted empirical distribution
+pw(i | g) = pi|gwi.
+Equation (10) ensures that pw(· | g) is a probability distribution. Let ℓθ(i) denote the per-decision
+regression loss averaged over fresh student queries conditional on the stored history. The expected
+replay loss can then be written as
+Eτ∼q
+"
+1
+|Bτ|
+X
+i∈Bτ
+wiℓθ(i)
+#
+=
+X
+g
+p(g) Ei∼pw(·|g)[ℓθ(i)].
+Thus Equation (5) defines regression under a reweighted empirical distribution over sampled de-
+cision points while preserving the sampling probabilities of the collection conditions. Because the
+sampled indices depend on the available trajectory length and the cumulative scores omit unsampled
+decisions, Equation (8) does not directly give the density ratio for this replay measure.
+For numerical stability, the reference-mixture term is evaluated with log-sum-exp:
+log
+ ηeΦθ0 + (1 −η)eΦT 
+= LSE(log η + Φθ0, log(1 −η) + ΦT ) ,
+(11)
+where Φ abbreviates the corresponding prefix score Φν(i). At a single-source endpoint, only the
+corresponding term is retained. Before exponentiation within condition g, subtract maxi∈Ig Si; this
+common factor cancels in Equation (10). Fixed-reference scores are cached once, while snapshot
+scores and weights are refreshed every R updates.
+A.4
+SCOPE OF THE DISTILLATION UPDATE
+At update a, let θa denote the student parameters used to generate fresh queries, and let p(a)
+w denote
+the empirical distribution induced by the cached weights. Holding the query-generating policy and
+cached weights fixed, define the supervised replay surrogate
+Ra(ϑ) =
+X
+g
+p(g) Ei∼p(a)
+w (·|g)E
+s∼ps
+x∼qθa(·|hi,s)
+vϑ(x, s | hi) −v(ji)
+T
+(x, s | hi)
+
+2
+2
+
+.
+With the query-generating student and cached weights fixed at update a, the detached loss in Equa-
+tion (5) yields a stochastic gradient of Ra evaluated at ϑ = θa. Gradients propagate only through
+the student velocity prediction. The ideal history-ratio identity motivates the prefix-score structure,
+while the implemented weights define the empirical replay objective in Section A.3. These weights
+serve as compatibility-based replay proxies and are not assumed to be exact online importance ratios.
+The resulting update combines fresh student-generated denoising queries with reweighted stored
+histories, without additional environment interaction during distillation.
+13
+
+
+B
+DISTILLATION PROCEDURE
+The trajectory-based objective in Equation (5) gives the following distillation procedure, alternating
+between history-weight refreshes and student updates.
+1. Collect the pool. Initialize the student and task-specific teachers as described in Sec-
+tion 4.1. Collect trajectories with the initial student and each task teacher, retaining ordered
+histories, denoising paths, executed action lengths, and task and collection-condition labels.
+2. Cache reference scores. Freeze the teachers and initial-student reference. Evaluate both
+references on every stored path using Equation (3) and cache the prefix scores accumulated
+over preceding sampled decision points.
+3. Refresh history weights. At initialization and every R updates, copy the student to the
+scoring snapshot.
+Recompute its prefix scores and obtain history weights from Equa-
+tions (4) and (10).
+4. Generate teacher queries. Sample a trajectory from the fixed pool. At each sampled
+decision point, use its stored history to generate a fresh denoising path with the current
+student, select a low-noise state, and query the corresponding task teacher at the same state
+and noise level.
+5. Update the student. Detach query states, teacher targets, and history weights. Average
+the weighted action-velocity losses over the sampled decision points of the trajectory and
+update the student. Repeat until the optimization budget is reached.
+All denoising queries and weight refreshes use stored histories. Newly sampled actions are not
+executed in the environment, and stored behavior actions are used for path scoring rather than as
+regression targets.
+Loss reduction.
+For an action-velocity output with Da scalar coordinates, the mean squared er-
+ror is ∥vθ −vT ∥2
+2/Da. With the action-loss coefficient of 10, the optimized loss is therefore
+(10/Da) bLWAM-OPD. The executed-coordinate projection Pu is used only in the path score, not
+in this action-field regression.
+C
+EVALUATION PROTOCOL AND INTERACTION COST
+Simulation.
+For task j, success rate is 100N succ
+j
+/Nj, where N succ
+j
+and Nj denote successful
+and total trials under the evaluation setting in Section 4.1. Target and retention averages assign
+equal weight to their two and six constituent tasks, respectively. Improvements are measured in
+percentage points before rounding. All compared policies share evaluation scenes, task instructions,
+and inference-noise seeds. Ablation results are computed over 200 cases per task.
+Real-world evaluation.
+Each method is evaluated on 50 paired layouts per task, disjoint from the
+training layouts. Methods are tested on the same layouts in interleaved order. A pick-and-place trial
+succeeds when the object reaches the designated region and remains stable after release; a button-
+press trial succeeds when the button is activated. Time limits, target regions, and stability criteria
+are fixed across methods.
+Interaction cost.
+Environment interaction comprises teacher-data collection, fixed-pool collec-
+tion, and closed-loop evaluation. Distillation itself requires no additional environment interaction:
+both student queries and teacher supervision are computed from stored histories. This accounting
+separates the one-time collection cost from the interaction-free optimization stage; teacher inference
+and history-weight refreshes still incur computation.
+D
+ADDITIONAL EXPERIMENTAL DETAILS
+D.1
+SIMULATION TEACHERS AND TRAJECTORY POOL
+The Stapler and Microwave teachers are obtained after 32,000 and 16,000 SFT steps, respectively.
+The Microwave demonstration dataset contains 2,492 episodes, comprising 492 clean and 2,000 ran-
+14
+
+
+domized demonstrations, with a 1% validation split. Teacher-training demonstrations are separate
+from the rollout pool used for distillation.
+Table 3 gives the fixed-pool composition.
+Table 3: Composition of the fixed simulation trajectory pool.
+Task
+Source
+Clean
+Randomized
+Decision records
+Stapler
+Initial student
+8
+32
+443
+Stapler
+Teacher
+4
+16
+166
+Microwave
+Initial student
+8
+32
+1,802
+Microwave
+Teacher
+4
+16
+780
+Total
+24
+96
+3,191
+D.2
+DISTILLATION HYPERPARAMETERS
+Table 4 summarizes the optimization, path-scoring, and prefix-weighting hyperparameters. Student
+queries use the current model parameters. Reference scores are cached, and the student snapshot and
+history weights are refreshed at updates 0, 24, 48, and 72. Path residuals are computed in FP32 with
+FP64 reductions. The clipping threshold applies before the second normalization in Equation (10);
+Table 4: Hyperparameters for simulation distillation.
+Parameter
+Value
+Trainable parameters
+All student MoT parameters
+Optimizer
+AdamW
+Learning rate
+10−6
+Adam coefficients (β1, β2)
+(0.9, 0.95)
+Weight decay
+0
+Maximum gradient norm
+1.0
+Training precision
+BF16
+Optimization steps
+96
+Temporal subsampling
+Equally spaced, n = 16
+Action / video loss coefficients
+10 / 0
+Reweighting strength λ
+0.1
+Scoring scale κ
+0.025
+Minimum scoring scale σmin
+10−4
+Clipping threshold C
+2
+Weight refresh interval R
+24
+Denoising steps
+10
+Prediction / execution horizon
+32 / up to 24
+the final normalized weights may exceed C.
+Baselines.
+The task-specific SFT teachers, πRL (Chen et al., 2025a), and STEAM (Liu et al.,
+2026) share the Fast-WAM initialization used in the simulation experiments. All policies use the
+inference horizon and denoising schedule in Table 4.
+D.3
+REAL-ROBOT OBSERVATION AND ACTION INTERFACE
+The platform consists of two UR5e arms and three RGB cameras. The head camera captures the
+workspace, while the two wrist cameras provide local views of the grippers and manipulated objects.
+The action vector has 14 dimensions: six target joint positions and one gripper command for the left
+arm, followed by the corresponding seven values for the right arm. Actions specify absolute joint
+targets, with gripper values scaled by 1/1000. Proprioception contains measured joint positions and
+gripper states in the same order. Shared dataset statistics are used to normalize observations and
+actions across tasks.
+15
+
+
+E
+LIMITATIONS
+WAM-OPD’s performance depends on the coverage of the fixed trajectory pool and the accuracy
+of the history-weight approximation. Broader coverage of task-relevant histories and more accurate
+history weighting are directions for future work.
+16

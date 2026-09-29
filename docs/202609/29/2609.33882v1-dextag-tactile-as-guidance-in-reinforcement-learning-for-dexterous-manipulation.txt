@@ -1,0 +1,1072 @@
+DexTaG: Tactile-as-Guidance in Reinforcement Learning for
+Dexterous Manipulation
+https://dextag.github.io/
+Han Yang1, Yian Wang1, Yunlong Song2, Zhenjia Xu2, and Chuang Gan1
+Fig. 1.
+We present DexTaG, a tactile-guided RL framework for dexterous manipulation that uses contact measurements from a data-collection glove.
+From data collection to policy training, the pipeline enables non-trivial tool-use tasks involving in-hand reorientation.
+Abstract— Glove-based motion capture is emerging as a
+scalable approach to collecting dexterous-hand demonstration
+data. However, due to the kinematic gap between the human
+and robot hand, the recorded human motions cannot be
+executed directly on the robot, especially for contact-rich tool-
+use tasks involving in-hand reorientation. Prior work bridges
+this gap in simulation through reinforcement learning (RL)
+or trajectory optimization, but the human contact pattern is
+hard to preserve under such formulations, often producing
+unnatural manipulation and unstable functional grasps. These
+methods also train a separate policy or solve a separate
+optimization for each reference trajectory, which is inefficient.
+To solve these problems, we propose DexTaG, a tactile-guided
+RL framework for dexterous manipulation. During training,
+tactile signals captured by the glove guide policy search toward
+the measured human contact pattern, reducing reliance on
+precise reference geometry for contact supervision. To improve
+efficiency, we train a single generalizable retargeter jointly on
+all training trajectories of the same object. The retargeter is
+further distilled into a tactile-free student controller conditioned
+on the target object trajectory for real-world deployment. On
+marker-pen and hammer manipulation tasks, DexTaG learns
+natural, contact-rich behaviors that baselines with distance-
+based contact heuristics fail to learn, generalizes to held-out
+trajectories of the same object and task, and outperforms single-
+trajectory baselines on OakInk2.
+I. INTRODUCTION
+Data remains a central bottleneck of robot manipula-
+tion, particularly for high-dimensional, contact-rich dexter-
+ous hands. Teleoperation [1]–[5] is limited by the human–
+robot kinematic gap and the lack of direct contact-force feed-
+back, making tasks such as picking up a flat-lying tool and
+reorienting it in-hand difficult to demonstrate. Exoskeleton-
+style rigs [6]–[9] restore some force feedback, but constrain
+1University of Massachusetts Amherst.
+2Genesis AI.
+the collector’s workspace and finger dexterity and require
+hardware tailored to each robot.
+Glove-based motion capture is emerging as a more scal-
+able alternative. Wearing an EMF (electromagnetic-field)
+motion capture glove, the demonstrator manipulates objects
+directly with essentially bare-hand dexterity, while the glove
+records the hand pose. However, the human motions cannot
+be replayed on the robot due to the kinematic gap between
+the human and robot hand. Prior work bridges this gap in
+simulation by training a reinforcement learning (RL) pol-
+icy [10]–[13] or solving a trajectory optimization [14]–[16]
+that tracks the recorded hand–object trajectory on the robot.
+These methods have two drawbacks. First, hand–object
+pose references contain errors from vision-based object-
+pose estimation, which can make motion tracking conflict
+with contact acquisition. In our collected demonstrations,
+reference fingertips can remain separated from the object
+during pickup, particularly for thin objects such as a hammer
+handle. Tracking both hand and object poses can there-
+fore discourage the adjustments needed to establish contact.
+Distance-based contact heuristics [13], [16] inherit the same
+imperfect reference geometry, whereas glove tactile signals
+directly capture the measured human contact pattern. Second,
+these methods fit a separate policy or optimization for each
+reference trajectory, which is computationally expensive as
+demonstration datasets grow.
+To solve these problems, we propose DexTaG, an RL
+framework for Dexterous manipulation using Tactile signals
+from the data-collection glove as Guidance. Our pipeline has
+three features. (i) Tactile-as-Guidance. During training, tac-
+tile signals captured by the glove guide policy search toward
+the measured human contact pattern, reducing reliance on
+arXiv:2609.33882v1  [cs.RO]  27 Sep 2026
+
+
+precise reference geometry for contact supervision. We in-
+corporate the measured full-hand tactile readouts into the RL
+reward to guide contact acquisition and grasp configuration,
+rather than relying on contact inferred from reference geom-
+etry. (ii) Efficient generalizable retargeting. Rather than
+training a separate policy for each reference trajectory, we
+train a single generalizable retargeter jointly on all training
+trajectories of the same object. A long-horizon window of
+future reference frames helps the policy generalize to held-
+out references within the same task without per-trajectory
+retraining. (iii) Distillation for deployment. The retargeter
+is distilled into a tactile-free student controller conditioned
+on a target object trajectory and using visual–proprioceptive
+feedback, making it deployable in the real world without
+tactile hardware on the robot.
+We evaluate DexTaG on two tool-use tasks—marker-pen
+and hammer—both of which require non-trivial pickup of a
+flat-lying tool and in-hand reorientation toward a functional
+grasp. Ablations on the tactile-guidance rewards show that
+they enable grasp acquisition from noisy pose references
+where training without these rewards fails, while also encour-
+aging more human-like manipulation and contact patterns.
+Real-world experiments further demonstrate execution with
+the distilled tactile-free controller. In simulation, increasing
+the number of training references generally improves track-
+ing performance on both training and held-out trajectories for
+the retargeter and controller. On scaling comparisons against
+ManipTrans on OakInk2, our pipeline maintains performance
+as the number of reference trajectories increases, while the
+baseline variants degrade.
+Our contributions are:
+1) Tactile-as-Guidance, a reward formulation that uses
+measured glove tactile readouts to guide contact acqui-
+sition and human-like grasp formation alongside hand–
+object motion tracking.
+2) An efficient RL pipeline for dexterous manipulation
+that trains a single generalizable retargeter across train-
+ing trajectories of the same object, supports held-out
+references within the same task, and distills the retar-
+geter into a real-world-deployable tactile-free student
+controller.
+3) Empirical evidence of efficiency and generalization:
+across two contact-rich tool-use tasks and an OakInk2
+scaling comparison, DexTaG maintains performance as
+trajectories are added, generalizes to held-out refer-
+ences, and outperforms per-trajectory baselines.
+II. RELATED WORK
+Tracking
+Reference
+Hand–Object
+Trajectories. Many
+dexterous manipulation methods fit a separate policy or
+optimization to each reference trajectory [13]–[20]. Recent
+work explores generalizable tracking: DexTrack [21] com-
+bines per-trajectory RL demonstration mining with shared-
+controller training; HOT [22] distills skill- or object-specific
+trackers learned from synthetic references; and DexSynRe-
+fine [23] uses a generative prior fitted to a small demonstra-
+tion set. Motion-capture datasets provide reference trajec-
+tories [24], [25]. We train a single tactile-guided retargeter
+directly across glove-captured references of the same object,
+without per-trajectory policy optimization, and evaluate gen-
+eralization to held-out references within the same task.
+Demonstration
+Data
+for
+Dexterous
+Manipulation.
+Demonstrations can be collected through vision- or glove-
+based teleoperation [26]–[31] and direct-manipulation ex-
+oskeletons [6]–[9], [32], with trade-offs in embodiment
+mismatch, force feedback, and operator dexterity. Glove-
+based motion capture instead records direct human manipu-
+lation for VLA pretraining [33], [34] or downstream policy
+learning [23]. Other approaches synthesize references using
+rules [22], simulation-based optimization [20], or demonstra-
+tion augmentation [35], [36]. We use glove-captured motion
+and measured contact signals to supervise robot learning.
+Tactile Sensing in Manipulation. Prior work uses tactile
+feedback as a policy input on grippers [37], [38] and
+dexterous hands [39], [40], develops tactile simulation for
+transfer [41], [42], and integrates tactile sensors into demon-
+stration hardware [7], [30]. Other methods use tactile targets
+to pretrain visual–tactile representations for control [39],
+[43], [44]. Closely related, PTLD [45] uses robot tactile data
+to train a contact-state estimator from proprioception. We in-
+stead use recorded human tactile signals as direct RL reward
+guidance for contact acquisition and grasp configuration.
+This supervision differs from online robot tactile feedback:
+the retargeter observes simulated tactile signals, while the
+distilled student requires no tactile sensing at deployment.
+III. METHOD
+DexTaG consists of three stages (Fig. 2). (i) Tactile
+demonstration collection and preprocessing (Sec. III-
+A): the demonstrator manipulates objects directly while
+wearing a tactile glove, producing hand–object trajectories
+paired with tactile maps. (ii) Tactile-guided RL retargeting
+(Sec. III-B): measured contact signals guide policy search
+through the RL reward, helping the robot acquire grasps
+and reproduce human contact patterns alongside motion
+tracking. Rather than training a separate policy for each
+reference trajectory, we train a single generalizable retargeter
+πrtgt jointly on all training trajectories of the same object.
+The trained policy generalizes to held-out references within
+the same task, allowing newly collected demonstrations to
+be retargeted directly without per-trajectory retraining. (iii)
+Distillation for deployment (Sec. III-C): πrtgt is distilled
+into a tactile-free student controller πctrl whose reference
+input contains only a target object trajectory. Using visual–
+proprioceptive feedback, the student is deployable in the real
+world. Its object-trajectory-only interface also permits targets
+to be specified through rule-based procedures.
+A. Tactile Demonstration Collection and Preprocessing
+Data acquisition. Our data-collection setup, shown in Fig. 3,
+lets the demonstrator manipulate objects directly while wear-
+ing a WUJI tactile glove. A pressure-sensor array covering
+the fingers and palm provides a 24×32 tactile map (Fig. 4),
+
+
+Fig. 2.
+Overview of DexTaG. The pipeline consists of three stages: (i) collecting hand–object demonstrations with tactile gloves, (ii) using measured
+tactile references to guide RL retargeting, and (iii) distilling the retargeter into a tactile-free controller for real-world deployment.
+while five EMF modules record fingertip poses relative to
+the wrist. A Meta Quest controller mounted on the back of
+the glove tracks its global motion, and a calibrated overhead
+RealSense camera records RGB-D observations for object-
+pose estimation.
+Fig. 3.
+Data collection hardware:
+a pair of WUJI tactile gloves and
+an overhead camera for object pose
+estimation.
+Fig. 4.
+Raw 24 × 32 tactile map
+readout from the glove during ma-
+nipulation.
+Tactile background calibration. The glove can produce
+nonzero tactile readings even without object contact, due to
+sensor offsets and self-contact as the fingers curl. To estimate
+this background, the demonstrator holds several representa-
+tive hand poses encountered during manipulation, such as
+a half-closed fist, without an object in hand. We record a
+tactile map for each pose and take the pixelwise maximum
+across these maps to obtain a single fixed background map.
+The same background map is subtracted from every frame
+of the recorded tactile data to suppress non-object-contact
+responses before the signals are used for contact guidance.
+Hand–object
+reference
+construction. We obtain target
+robot hand joint angles through kinematic retargeting of
+the recorded fingertip poses and recover the wrist pose
+using a fixed controller-to-wrist transformation. Object poses
+are estimated from the calibrated RGB-D recordings using
+FoundationPose [46] and a reconstructed object mesh. The
+resulting reference trajectories contain synchronized robot
+hand joint angles, wrist poses, object poses, and background-
+corrected tactile maps.
+We collect 100 demonstrations for marker-pen manipula-
+tion and 140 for hammer manipulation. Each demonstration
+includes approaching and picking up the tool, reorienting it
+in-hand toward a functional grasp, performing a functional
+motion, and placing it back. Figure 5 shows example trajec-
+tories and their corresponding tactile readouts.
+Fig. 5.
+Example collected trajectories with per-timestep tactile maps for
+marker-pen (top) and hammer (bottom) manipulation.
+B. Tactile-Guided RL Retargeting
+We formulate retargeting as tracking reference hand–
+object motion while using measured tactile signals to
+guide contact acquisition and grasp configuration. Let τ =
+(ξ0, . . . , ξT ) denote a motion reference, where ξt contains
+the target hand joint state, wrist and fingertip poses, and
+object motion at timestep t. Each frame is paired with a
+reference tactile map tref
+t , kept separate from the motion
+reference. We first describe how tactile signals guide policy
+search, then the shared-policy training setup.
+1) Tactile-as-Guidance Rewards: The glove’s tactile read-
+outs provide measured contact information that is difficult to
+infer reliably from noisy hand–object pose references. We
+use these signals to shape policy search alongside motion
+tracking through two rewards: fingertip proximity encourages
+contact acquisition, while tactile-map similarity guides the
+spatial contact pattern across the hand.
+Simulated tactile correspondence. We implement an SDF-
+based full-hand tactile sensor in Genesis [47], with approx-
+imately 700 sample points on the robot hand’s palm-facing
+surfaces. At each point, simulated normal-force magnitude
+is estimated from object penetration depth using a stiffness
+of 2000 N/m. We manually specify correspondences between
+
+
+robot-hand regions and regions of the glove’s 24×32 layout,
+then assign sample points to pixels within these regions. Each
+pixel reports the mean force magnitude of its assigned points.
+This establishes a spatial correspondence. Let tsim
+t , tref
+t
+∈RP
+denote the flattened simulated and reference tactile maps,
+with P = 768.
+Tactile-gated fingertip proximity. This term supervises
+which fingertips should be in contact, directly from the
+reference tactile readout. It encourages contact for fingertips
+that the reference marks as touching the object, leaving the
+remaining fingers unconstrained, and provides a dense learn-
+ing signal that is especially important early in training, before
+the policy has discovered the contact pattern. Formally, for
+each fingertip i ∈{1, . . . , 5}, let Pi ⊂{1, . . . , P} be its
+assigned pixel set under the glove layout and di the signed
+distance from the fingertip to the object surface. We define a
+per-finger contact gate and the proximity reward as follows:
+gi = 1
+
+max
+p∈Pi tref
+t,p > 0
+
+,
+rprox
+t
+=
+5
+X
+i=1
+gi · exp(−kprox max(di, 0)) .
+(1)
+Tactile-map similarity. Beyond enforcing which fingertips
+contact the object, this term guides the contact pattern on
+the palm and finger pads as well as the fingertips. Since the
+simulated and reference maps come from different sensing
+processes, their magnitudes are not directly comparable.
+To reduce this scale difference, we normalize each map
+independently by its own peak and apply gamma correction.
+For either input map x, the transformation is
+N(x)p =
+s
+clip
+
+xp
+max(1, maxq xq), 0, 1
+
+.
+(2)
+The denominator floor prevents division by zero and exces-
+sive amplification of weak signals. The square root (γ = 0.5)
+compresses dynamic range, increasing the relative contribu-
+tion of weaker contacts. The transformed maps lie in [0, 1]
+and are denoted by btsim
+t
+= N(tsim
+t ) and btref
+t
+= N(tref
+t ).
+We then apply a 3 × 3 Gaussian smoothing kernel Gσ
+with σ = 1.0 to both maps to tolerate small spatial offsets
+between human and robot contact regions. The discrepancy
+between the processed maps is converted into an exponen-
+tially decaying similarity reward:
+Etac
+t
+= L1
+
+Gσ ⋆btsim
+t , Gσ ⋆btref
+t
+
+,
+rtac
+t
+= exp
+ −ktacEtac
+t
+
+.
+(3)
+Here, ⋆denotes convolution and L1 is the L1 loss. We
+set the reward decay parameters to kprox = 50 and ktac =
+4.0. Together, normalization, gamma correction, and spatial
+smoothing let the reward compare contact patterns across the
+two sensing domains without requiring agreement in absolute
+force magnitudes.
+2) Generalizable Retargeter Training: Policy observa-
+tions and optimization. The retargeter actor observes the
+motion reference, current simulated robot–object state pt,
+current simulated tactile map, and a future-reference window:
+ot =
+ ξt, pt, tsim
+t , ξt:t+K
+
+.
+(4)
+The critic additionally receives the reference tactile map and
+the past 8 steps of proprioception–action history; neither is
+an actor input. Recorded human tactile therefore provides
+reward supervision and privileged critic information, while
+the actor observes the robot’s current simulated tactile re-
+sponse. The actor outputs 27-dimensional arm–hand joint-
+position commands tracked by PD controllers. We train
+with PPO [48], combining the two tactile rewards with
+wrist, fingertip, hand-joint, and object tracking rewards, plus
+stability and contact penalties.
+Training across demonstrations. Rather than training a
+separate policy for each reference trajectory, we train a
+single generalizable retargeter πrtgt jointly on all training
+trajectories of the same object, with the aim of generalizing
+to held-out references within the same task. The motiva-
+tion is that demonstrations of the same object and task
+share manipulation substructure, such as lift motions and an
+eventual functional grasp, while differing in their approach,
+pickup, and in-hand reorientation paths. A shared policy can
+therefore reuse these common behaviors across references
+rather than learning an isolated solution for each trajectory.
+To support this transfer, the actor observes a future-reference
+window of length K = 32, subsampled at stride 2 to
+give 16 frames and encoded by a temporal convolutional
+network. This temporal context reveals the direction and
+timing of upcoming motion, allowing the policy to anticipate
+subsequent manipulation stages rather than react only to the
+current reference frame. Trajectory-level SE(2) and scale
+augmentations further expose the policy to variations in
+placement, orientation, and scale.
+C. Distillation for a Deployable Controller
+We distill πrtgt into a tactile-free student controller πctrl via
+behavior cloning with DAgger [49]. A key design choice is
+that the student’s reference input contains only a target object
+trajectory—no reference hand pose. The goal is to follow
+both training and unseen target object trajectories within the
+same object and task setting. This choice reflects what is
+practical to specify at deployment: object trajectories can be
+captured from video or directly synthesized by simple rule-
+based procedures (e.g., a parametric writing path for a marker
+pen), whereas dense reference hand-and-finger trajectories
+are difficult to acquire outside a tactile-glove collection rig.
+The student observes arm–hand joint angles, a window
+of future target object poses, a wrist-camera point cloud
+encoded by PointNet [50], and a short proprioception–action
+history. The point cloud replaces the teacher’s privileged
+object pose. The same trajectory-level SE(2) and scale aug-
+mentations are applied during distillation to support tracking
+across variations in the target trajectory.
+Tactile-free deployment is deliberate: the WUJI hand
+used in our experiments has no tactile sensors, and dis-
+tillation avoids requiring real tactile observations to match
+
+
+Fig. 6.
+Qualitative Comparison. First row: the reference glove tactile map vs. the simulated tactile map at each timestep. Second and third rows: policy
+rollouts of DexTaG and Geom-gated, respectively, on marker-pen and hammer manipulation.
+the simulated sensor model. Human tactile signals thus
+guide behavior learning without imposing a tactile-sensing
+requirement on the deployed robot. The controller remains
+closed-loop through visual and proprioceptive feedback, but
+does not provide direct tactile feedback for detecting slip or
+unexpected contact.
+IV. EXPERIMENTAL RESULTS
+Experimental Setup. We evaluate DexTaG with a 20-DoF
+WUJI right hand on a 7-DoF xArm: marker-pen and hammer
+tasks in simulation and the real world, and OakInk2 [24]
+for baseline comparison. Our simulation metric, Trajectory
+Completion, is the fraction of a reference tracked before
+termination. For our retargeter, Euclidean fingertip errors
+are limited to approximately (57, 64, 71, 86, 86) mm, from
+thumb to little finger. Object-position/orientation limits are
+approximately 58 mm/43.7◦, ignoring marker-pen axial ro-
+tation. Any exceeded limit or nonzero arm-link contact
+force terminates the episode. The table-force limit decreases
+linearly through 500/100/50 N at 0/10,000/20,000 train-
+ing steps, then stays fixed. Sanity limits are 100 m/s for
+wrist/object linear speed and 200 rad/s for wrist/object an-
+gular speed or mean absolute hand-joint velocity. We design
+our experiments to answer the following questions:
+A. How do tactile rewards compare with no tactile rewards
+or geometry-derived contact gates?
+B. How does training-set size affect retargeter and con-
+troller performance on training and held-out references?
+C. How does our multi-trajectory fitting on OakInk2 com-
+pare with ManipTrans?
+D. Can the tactile-free controller execute the learned be-
+haviors on real hardware?
+A. Tactile Reward Ablation
+Setup. We compare four alternatives with the same model,
+actor observations, and training schedule. Prox-only re-
+tains tactile-gated fingertip proximity, while Sim-only retains
+tactile-map similarity. Geom-gated uses the same fingertip-
+proximity reward as Prox-only, but replaces the measured
+TABLE I
+TACTILE REWARD ABLATION. TRAJECTORY COMPLETION (%) AND
+AVERAGE PER-STEP TRACKING REWARDS: MEAN ± STANDARD
+DEVIATION OVER FIVE TRAINING SEEDS.
+Method
+Comp.
+Obj.
+Hand
+Marker pen
+Ours
+87.5±4.0
+1.127±0.033
+1.856±0.182
+Prox-only
+64.5±6.1
+1.106±0.064
+1.823±0.086
+Sim-only
+61.5±13.8
+1.100±0.097
+1.771±0.136
+Geom-gated
+48.6±24.0
+1.161±0.138
+1.983±0.315
+w/o tactile
+24.7±2.9
+1.299±0.020
+2.304±0.012
+Hammer
+Ours
+76.8±27.7
+1.158±0.052
+2.048±0.098
+Prox-only
+62.2±31.3
+1.139±0.087
+2.038±0.184
+Sim-only
+29.6±3.6
+1.217±0.024
+2.214±0.065
+Geom-gated
+29.9±5.5
+1.229±0.015
+2.195±0.059
+w/o tactile
+27.6±0.1
+1.237±0.007
+2.233±0.007
+tactile gate with a binary contact label obtained by thresh-
+olding the fingertip–object distance in the motion-capture ref-
+erence at 20 mm (following ManipTrans [13]). Finally, w/o
+tactile removes both tactile-guidance rewards. All variants
+retain simulated tactile observations; Geom-gated and w/o
+tactile also omit the reference tactile map from the critic.
+For each variant and task, we train πrtgt with five random
+seeds and report mean ± standard deviation of Trajectory
+Completion and average per-step tracking rewards. Obj. com-
+bines object-position and rotation rewards; Hand combines
+wrist-position, wrist-rotation, and hand-joint rewards.
+Results. Table I shows complementary benefits from the
+two tactile rewards. Proximity-only increases mean com-
+pletion over removing both rewards from 24.7% to 64.5%
+on marker pen and from 27.6% to 62.2% on hammer.
+Adding tactile-map similarity further increases completion to
+87.5% and 76.8%, respectively, supporting the combination
+of proximity-based contact acquisition and spatial contact-
+pattern guidance. However, hammer grasp acquisition re-
+mains seed-sensitive: one of the five full-method runs fails
+to learn pickup and achieves only approximately 27% com-
+pletion, contributing to the large standard deviation.
+Measured contact gates also outperform geometry-derived
+gates on average: Prox-only achieves 64.5% versus 48.6% on
+marker pen and 62.2% versus 29.9% on hammer. Since the
+proximity-reward form is unchanged, this supports measured
+
+
+TABLE II
+GRASP-NATURALNESS USER
+STUDY ON MARKER-PEN
+ROLLOUTS.
+Method
+Votes Preference (%)
+DexTaG
+92
+55.8
+w/o tactile
+40
+24.2
+Geom-gated
+33
+20.0
+TABLE III
+GENERALIZABLE RETARGETER πRTGT. TRAJECTORY
+COMPLETION (%) ON TRAIN / EVAL REFERENCES: MEAN ±
+STANDARD DEVIATION OVER FIVE RANDOM SPLITS PER
+RATIO.
+Train:Eval
+Marker Pen
+Hammer
+1:9
+55.1±20.9 / 43.8±13.1 55.6±15.8 / 36.1±13.8
+5:5
+75.7±4.9 / 69.9±6.3
+73.7±4.9 / 68.8±3.9
+9:1
+73.3±5.0 / 75.4±5.0
+80.1±5.2 / 78.8±3.7
+TABLE IV
+GENERALIZABLE CONTROLLER πCTRL.
+TRAJECTORY COMPLETION (%) ON TRAIN /
+EVAL REFERENCES AFTER DISTILLATION,
+USING ONE SPLIT PER RATIO.
+Train:Eval Marker Pen
+Hammer
+Avg.
+1:9
+57.9 / 27.1 53.8 / 27.5 55.9 / 27.3
+5:5
+70.5 / 52.6 70.6 / 60.8 70.5 / 56.7
+9:1
+68.1 / 55.6 80.0 / 75.2 74.1 / 65.4
+contact supervision over geometry-derived labels on the
+collected references. Fig. 6 shows representative rollouts:
+Geom-gated picks up the marker pen but forms an unnatural
+grasp, and fails to pick up the hammer. Average tracking
+rewards must be interpreted cautiously: policies that fail early
+can score higher by tracking only the easier approach phase.
+Grasp naturalness. We further conduct a user study to
+assess grasp naturalness beyond tracking rewards. We focus
+on marker pen because successful pickups yield diverse
+grasp configurations, whereas hammer variants mainly differ
+in grasp acquisition. Eleven respondents compared marker-
+pen rollouts of DexTaG, w/o tactile, and Geom-gated. We
+randomly selected 15 reference trajectories on which all
+methods reached the midpoint and showed palm-view mid-
+point renders in randomized, anonymized order. Respondents
+answered: “In each group, pick the most natural / most
+human-like grasp.” DexTaG received 55.8% of 165 votes
+(Table II), indicating a preference for its grasps naturalness.
+B. Retargeter and Controller Generalization
+Setup. For each of the marker pen and hammer tasks, we
+randomly split the trajectories into train/eval sets at ratios
+{1:9, 5:5, 9:1}, train one teacher πrtgt on the training trajec-
+tories, and distill it into a student controller πctrl. We report
+Trajectory Completion on both training and held-out eval
+trajectories of the same object and task. For the retargeter, we
+repeat training with five independent random train/eval splits
+per ratio and report mean ± standard deviation to capture
+variability in RL training and demonstration selection. Note
+that πrtgt is terminated on hand- or object-pose mismatch,
+while πctrl, which receives no reference hand pose, is termi-
+nated on object-pose mismatch only.
+Results. Tables III and IV report Trajectory Completion for
+the retargeter and controller. Two trends stand out. First,
+more training trajectories generally improve both training
+and held-out performance, despite requiring one policy to fit
+more diverse trajectories. Marker-pen training performance
+largely plateaus after the 5:5 split, with a slight decrease
+at 9:1, but its held-out performance continues to improve.
+Hammer benefits from additional references on both training
+and evaluation trajectories. The five-split retargeter results
+show lower variability in held-out performance as the train-
+ing set grows. Second, the train/eval gap narrows for both
+the retargeter and controller. Together with improved held-
+out performance, this suggests that additional demonstrations
+help the policy learn behaviors that transfer across refer-
+ences, rather than simply fit individual training trajectories.
+This generalization is retained after distillation: the tactile-
+free controller follows held-out collected object trajectories,
+without reference hand poses or per-trajectory retraining.
+C. Scaling Multi-Trajectory Fitting on OakInk2
+Setup. We compare DexTaG to ManipTrans [13] on cup (93
+trajectories), spoon (98), and stick (13), the three OakInk2
+objects with the most recorded trajectories. For each object
+and each n ∈{1, 5, 10, all}, we partition the trajectories
+into groups of size n and train one policy per group. Each
+policy is evaluated only on its training group, and we
+report mean Trajectory Completion over trajectories, testing
+multi-trajectory fitting capability. We select ManipTrans as
+an established OakInk2 baseline with a released dataset-
+processing pipeline and native support for varying the num-
+ber of references per policy. The n=1 setting recovers its
+standard per-trajectory setup. We test its default Inspire hand
+and a re-tuned WUJI variant. We also attempted to train
+HOT [22] directly on OakInk2, retaining its default hand
+configuration and replacing its training data with OakInk2
+trajectories. This adaptation did not consistently learn suc-
+cessful tracking, so we do not include it as a quantitative
+baseline. DexTaG uses the same retargeter training pipeline,
+with the reference tactile input and tactile-guided rewards
+removed since OakInk2 provides no glove signal.
+Across all training-group sizes, we train each DexTaG
+policy for 24 hours (614 M environment steps) and each
+ManipTrans policy for 8 hours (380 M environment steps),
+on L40S hardware. These fixed method-specific budgets were
+selected based on observed learning plateaus and are not
+compute-matched.
+Results. Table V reports completion on all three objects,
+the per-object relative change ∆from n=1 to n=all, and
+the trajectory-weighted average across objects. Two trends
+stand out. First, DexTaG’s average completion is essentially
+flat across n, whereas both ManipTrans variants degrade
+sharply. This supports our pipeline’s ability to fit many
+reference trajectories with one policy, whereas the tested
+ManipTrans variants lose performance as the training group
+grows. One exception for our method is cup, which steadily
+declines as n increases, because in a few of its trajectories
+the object immediately drops at the initial hand pose—a case
+where a dedicated single-trajectory policy can more easily
+specialize to a quick grasp than one shared policy. Second,
+DexTaG achieves the highest average completion at every
+n, including n=1, showing that the retargeting pipeline is
+effective on these additional hand–object tracking tasks. Our
+
+
+TABLE V
+SCALING ON OAKINK2. TRAJECTORY COMPLETION (%) WITH n
+REFERENCES PER POLICY. AVG. IS TRAJECTORY-WEIGHTED; ∆IS THE
+RELATIVE CHANGE FROM n=1 TO n=ALL.
+Method
+Object
+n=1
+n=5
+n=10
+n=all
+∆
+ManipTrans
+(Inspire)
+cup
+64.5
+60.3
+56.8
+42.2
+−34.6%
+spoon
+51.9
+46.2
+41.7
+44.4
+−14.5%
+stick
+21.1
+11.9
+2.0
+1.8
+−91.5%
+avg.
+55.7
+50.4
+46.1
+40.7
+−26.9%
+ManipTrans
+(WUJI)
+cup
+67.8
+65.6
+58.4
+25.1
+−63.0%
+spoon
+55.2
+51.0
+47.6
+40.4
+−26.8%
+stick
+17.2
+7.1
+2.8
+3.1
+−82.0%
+avg.
+58.5
+54.9
+49.7
+30.0
+−48.7%
+DexTaG
+(Ours, WUJI)
+cup
+80.7
+78.3
+76.0
+70.1
+−13.1%
+spoon
+58.1
+63.3
+61.7
+67.1
++15.5%
+stick
+43.3
+43.7
+39.6
+46.7
++7.9%
+avg.
+67.5
+68.9
+66.8
+67.2
+−0.4%
+TABLE VI
+REAL-WORLD RESULTS. STAGE SUCCESS FOR 30 REFERENCES
+PER OBJECT, REPORTED AS BEST OF UP TO THREE ATTEMPTS AND
+PER-ATTEMPT RATES INCLUDING RETRIES.
+Object
+Pickup
+Grasp pose
+Place
+Best of up to three
+Hammer
+22/30 (73.3%)
+17/30 (56.7%)
+15/30 (50.0%)
+Marker pen
+21/30 (70.0%)
+13/30 (43.3%)
+10/30 (33.3%)
+Per attempt
+Hammer
+31/83 (37.3%)
+19/83 (22.9%)
+15/83 (18.1%)
+Marker pen
+28/86 (32.6%)
+14/86 (16.3%)
+10/86 (11.6%)
+policy achieves these results with a smaller model (1.9 M
+parameters vs. ManipTrans’s 2.3 M).
+Although DexTaG uses a larger per-policy budget, sharing
+policies reduces aggregate training time relative to per-
+trajectory fitting. Across the 204 OakInk2 trajectories, train-
+ing one DexTaG policy per object requires approximately
+3 × 24 = 72 aggregate policy-training hours, compared with
+204 × 8 = 1,632 hours for per-trajectory ManipTrans.
+D. Tactile-Free Real-World Deployment
+Setup. We evaluate the distilled student controller πctrl on
+the physical xArm7–WUJI setup with a wrist-mounted depth
+camera. For each object, a single student is distilled from
+the retargeter trained on all collected reference trajectories,
+with no task-specific tuning at deployment. The controller
+follows target object trajectories using visual–proprioceptive
+feedback without tactile sensing. We evaluate 30 references
+per object sampled from the training set, testing real-world
+execution rather than held-out-reference generalization.
+Protocol. We score three sequential stages: Pickup, lifting
+the tool off the table; Grasp pose, reorienting it in-hand into
+the reference functional grasp; and Place, completing the
+full reference trajectory and returning the tool to the table.
+Our primary result uses a best-of-up-to-three protocol: each
+reference is attempted up to three times and scored by the
+furthest stage reached across these attempts.
+This protocol is motivated by initial object placement.
+The target trajectory specifies an initial object pose that is
+exact in simulation, but manually reproducing it on the real
+table introduces small offsets that can cause pickup failure.
+Allowing a small number of attempts accommodates vari-
+ability in manual initialization while keeping the controller
+unchanged. Best-of-three therefore measures execution with
+limited retries, not single-attempt reliability. For complete-
+ness, we also report stage success over individual recorded
+attempts, including retries, alongside the main results.
+Results. Table VI shows that 76.5% (hammer) and 76.3%
+(marker pen) of failed attempts end before pickup. Once
+the functional grasp is reached, 78.9% and 71.4% complete
+the trajectory, respectively. Grasp acquisition is therefore
+the main bottleneck; initial-placement offsets are a plausible
+contributing factor.
+Beyond the quantitative evaluation on collected references,
+the project website shows qualitative examples of the student
+following rule-generated marker-pen trajectories to write
+letters in simulation and the real world. These examples
+illustrate execution on synthesized targets.
+V. CONCLUSION
+We present DexTaG, a tactile-guided RL framework that
+uses glove tactile signals to guide contact acquisition and
+human-like grasp formation. A single generalizable retargeter
+learns from trajectories of the same object and is distilled into
+a tactile-free controller. Experiments demonstrate the benefits
+of tactile guidance, held-out generalization, and real-world
+execution.
+REFERENCES
+[1] Y. Qin, W. Yang, B. Huang, K. Van Wyk, H. Su, X. Wang, Y.-W. Chao,
+and D. Fox, “Anyteleop: A general vision-based dexterous robot arm-
+hand teleoperation system,” arXiv preprint arXiv:2307.04577, 2023.
+[2] C. Wang, H. Shi, W. Wang, R. Zhang, L. Fei-Fei, and C. K. Liu,
+“Dexcap: Scalable and portable mocap data collection system for
+dexterous manipulation,” arXiv preprint arXiv:2403.07788, 2024.
+[3] A. Handa, K. Van Wyk, W. Yang, J. Liang, Y.-W. Chao, Q. Wan,
+S. Birchfield, N. Ratliff, and D. Fox, “Dexpilot: Vision-based tele-
+operation of dexterous robotic hand-arm system,” in 2020 IEEE
+International Conference on Robotics and Automation (ICRA). IEEE,
+2020, pp. 9164–9170.
+[4] H. Zhang, S. Hu, Z. Yuan, and H. Xu, “Doglove: Dexterous manipula-
+tion with a low-cost open-source haptic force feedback glove,” arXiv
+preprint arXiv:2502.07730, 2025.
+[5] Y. Gao, H. Ma, and P. Zheng, “Glovity: Learning dexterous contact-
+rich manipulation via spatial wrench feedback teleoperation system,”
+arXiv preprint arXiv:2510.09229, 2025.
+[6] M. Xu, H. Zhang, Y. Hou, Z. Xu, L. Fan, M. Veloso, and S. Song,
+“Dexumi: Using human hand as the universal manipulation inter-
+face for dexterous manipulation,” in Conference on Robot Learning.
+PMLR, 2025, pp. 437–459.
+[7] H.-S. Fang, B. Romero, Y. Xie, A. Hu, B.-R. Huang, J. Alvarez,
+M. Kim, G. Margolis, K. Anbarasu, M. Tomizuka, et al., “Dexop: A
+device for robotic transfer of dexterous human manipulation,” arXiv
+preprint arXiv:2509.04441, 2025.
+[8] M. Zhu, A. Zhu, J. V. S. Ramos, B. J. Kim, Y. Shi, Y. Wu, R. Hou,
+Q. Wang, E. Song, T. Fan, et al., “Whed: A wearable hand exoskeleton
+for natural, high-quality demonstration collection,” arXiv preprint
+arXiv:2602.17908, 2026.
+[9] A. Zhu, M. Zhu, B. J. Kim, J. V. S. Ramos, Y. Shi, Y. Wu,
+R. Dhar, F. Yang, R. Hou, H. Fang, et al., “Dexexo: A wearability-
+first dexterous exoskeleton for operator-agnostic demonstration and
+learning,” arXiv preprint arXiv:2603.17323, 2026.
+
+
+[10] S. Christen, M. Kocabas, E. Aksan, J. Hwangbo, J. Song, and
+O. Hilliges, “D-grasp: Physically plausible dynamic grasp synthesis for
+hand-object interactions,” in Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, 2022, pp. 20 577–20 586.
+[11] Y. Wang, J. Lin, A. Zeng, Z. Luo, J. Zhang, and L. Zhang, “Physhoi:
+Physics-based imitation of dynamic human-object interaction,” arXiv
+preprint arXiv:2312.04393, 2023.
+[12] H. Zhang, S. Christen, Z. Fan, L. Zheng, J. Hwangbo, J. Song, and
+O. Hilliges, “Artigrasp: Physically plausible synthesis of bi-manual
+dexterous grasping and articulation,” in 2024 International Conference
+on 3D Vision (3DV).
+IEEE, 2024, pp. 235–246.
+[13] K. Li, P. Li, T. Liu, Y. Li, and S. Huang, “Maniptrans: Efficient
+dexterous bimanual manipulation transfer via residual learning,” in
+Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, 2025, pp. 6991–7003.
+[14] X. Liu, K. Lyu, J. Zhang, T. Du, and L. Yi, “Parameterized quasi-
+physical simulators for dexterous manipulations transfer,” in European
+Conference on Computer Vision.
+Springer, 2024, pp. 164–182.
+[15] A. S. Lakshmipathy, J. K. Hodgins, and N. S. Pollard, “Kinematic
+motion retargeting for contact-rich anthropomorphic manipulations,”
+ACM Transactions on Graphics, 2024.
+[16] C. Pan, C. Wang, H. Qi, Z. Liu, H. Bharadhwaj, A. Sharma, T. Wu,
+G. Shi, J. Malik, and F. Hogan, “Spider: Scalable physics-informed
+dexterous retargeting,” arXiv preprint arXiv:2511.09484, 2025.
+[17] Z. Mandi, Y. Hou, D. Fox, Y. Narang, A. Mandlekar, and S. Song,
+“Dexmachina: Functional retargeting for bimanual dexterous manipu-
+lation,” arXiv preprint arXiv:2505.24853, 2025.
+[18] R. B. Li, D. Kim, X. Liu, K. Suzuki, D. Bhatt, N. Raicevic, X. Lin,
+K. M. B. Lee, N. Atanasov, and T. Nguyen, “Physgraph: Physically-
+grounded graph-transformer policies for bimanual dexterous hand-
+tool-object manipulation,” arXiv preprint arXiv:2603.01436, 2026.
+[19] D. Reda, J. Won, Y. Ye, M. Van De Panne, and A. Winkler, “Physics-
+based motion retargeting from sparse inputs,” Proceedings of the ACM
+on Computer Graphics and Interactive Techniques, vol. 6, no. 3, pp.
+1–19, 2023.
+[20] L. Yang, H. T. Suh, T. Zhao, B. P. Græsdal, T. Kelestemur,
+J. Wang, T. Pang, and R. Tedrake, “Physics-driven data generation for
+contact-rich manipulation via trajectory optimization,” arXiv preprint
+arXiv:2502.20382, 2025.
+[21] X. Liu, J. Adalibieke, Q. Han, Y. Qin, and L. Yi, “Dextrack: Towards
+generalizable neural tracking control for dexterous manipulation from
+human references,” arXiv preprint arXiv:2502.09614, 2025.
+[22] Y. Wang, R. Yu, H. W. Tsui, X. Lin, H. Zhang, Q. Zhao, K. Fan, M. Li,
+J. Song, J. Wang, et al., “Learning generalizable hand-object tracking
+from synthetic demonstrations,” arXiv preprint arXiv:2512.19583,
+2025.
+[23] H. Lee, H. Jung, S.-H. Heo, and S. Yang, “Dexsynrefine: Synthesizing
+and refining human-object interaction motion for physically feasible
+dexterous robot actions,” arXiv preprint arXiv:2605.05925, 2026.
+[24] X. Zhan, L. Yang, Y. Zhao, K. Mao, H. Xu, Z. Lin, K. Li, and C. Lu,
+“Oakink2: A dataset of bimanual hands-object manipulation in com-
+plex task completion,” in Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, 2024, pp. 445–456.
+[25] O. Taheri, N. Ghorbani, M. J. Black, and D. Tzionas, “Grab: A dataset
+of whole-body human grasping of objects,” in European conference
+on computer vision.
+Springer, 2020, pp. 581–600.
+[26] S. Yang, M. Liu, Y. Qin, R. Ding, J. Li, X. Cheng, R. Yang, S. Yi,
+and X. Wang, “Ace: A cross-platform visual-exoskeletons system for
+low-cost dexterous teleoperation,” arXiv preprint arXiv:2408.11805,
+2024.
+[27] R. Ding, Y. Qin, J. Zhu, C. Jia, S. Yang, R. Yang, X. Qi, and X. Wang,
+“Bunny-visionpro: Real-time bimanual dexterous teleoperation for
+imitation learning,” in 2025 IEEE/RSJ International Conference on
+Intelligent Robots and Systems (IROS).
+IEEE, 2025, pp. 12 248–
+12 255.
+[28] T. Tang, X. Ji, W. Xing, C. Hao, W. Xu, L. Shao, C. Lu, Q. Yu,
+J. Pang, and K. Zhang, “Towards human-like manipulation through rl-
+augmented teleoperation and mixture-of-dexterous-experts vla,” arXiv
+preprint arXiv:2603.08122, 2026.
+[29] Y. Cui, Y. Zhang, L. Tao, Y. Li, X. Yi, and Z. Li, “End-to-end dexterous
+arm-hand vla policies via shared autonomy: Vr teleoperation aug-
+mented by autonomous hand vla policy for efficient data collection,”
+arXiv preprint arXiv:2511.00139, 2025.
+[30] J. Du, J. Ren, Q. Yu, N. Zhang, Y. Deng, X. Wei, Y. Liu, G. Gu, and
+X. Zhu, “Mile: A mechanically isomorphic exoskeleton data collection
+system with fingertip visuotactile sensing for dexterous manipulation,”
+arXiv preprint arXiv:2512.00324, 2025.
+[31] F. Jia, X. Niu, S. Yang, Q. Ben, T. Huang, J. Wang, J. Pang, et al., “Feel
+robot feels: Tactile feedback array glove for dexterous manipulation,”
+arXiv preprint arXiv:2603.28542, 2026.
+[32] Z. Si, J. E. Chen, M. E. Karagozler, A. Bronars, J. Hutchinson,
+T. Lampe, N. Gileadi, T. Howell, S. Saliceti, L. Barczyk, et al., “Ex-
+ostart: Efficient learning for dexterous manipulation with sensorized
+exoskeleton demonstrations,” arXiv preprint arXiv:2506.11775, 2025.
+[33] R. Zheng, D. Niu, Y. Xie, J. Wang, M. Xu, Y. Jiang, F. Casta˜neda,
+F. Hu, Y. L. Tan, L. Fu, et al., “Egoscale: Scaling dexterous
+manipulation with diverse egocentric human data,” arXiv preprint
+arXiv:2602.16710, 2026.
+[34] R.-Z. Qiu, S. Yang, X. Cheng, C. Chawla, J. Li, T. He, G. Yan, D. J.
+Yoon, R. Hoque, L. Paulsen, et al., “Humanoid policy˜ human policy,”
+arXiv preprint arXiv:2503.13441, 2025.
+[35] Y. Bai, F. Chen, H. Sun, Y. Tong, E. Li, and Z. Zhang, “Far-dex:
+Few-shot data augmentation and adaptive residual policy refinement
+for dexterous manipulation,” arXiv preprint arXiv:2603.10451, 2026.
+[36] Z. Jiang, Y. Xie, K. Lin, Z. Xu, W. Wan, A. Mandlekar, L. J.
+Fan, and Y. Zhu, “Dexmimicgen: Automated data generation for
+bimanual dexterous manipulation via imitation learning,” in 2025 IEEE
+International Conference on Robotics and Automation (ICRA). IEEE,
+2025, pp. 16 923–16 930.
+[37] I. Akinola, J. Xu, J. Carius, D. Fox, and Y. Narang, “Tacsl: A library
+for visuotactile sensor simulation and learning,” IEEE Transactions on
+Robotics, 2025.
+[38] B.
+Huang,
+J.
+Xu,
+I.
+Akinola,
+W.
+Yang,
+B.
+Sundaralingam,
+R. O’Flaherty, D. Fox, X. Wang, A. Mousavian, Y.-W. Chao, et al.,
+“Vt-refine: Learning bimanual assembly with visuo-tactile feedback
+via simulation fine-tuning,” arXiv preprint arXiv:2510.14930, 2025.
+[39] Q. Ye, Q. Liu, S. Wang, J. Chen, Y. Cui, K. Jin, H. Chen, X. Cai, G. Li,
+and J. Chen, “Visual-tactile pretraining and online multitask learning
+for humanlike manipulation dexterity,” Science Robotics, vol. 11, no.
+110, p. eady2869, 2026.
+[40] T. Lin, Y. Zhang, Q. Li, H. Qi, B. Yi, S. Levine, and J. Malik,
+“Learning visuotactile skills with two multifingered hands,” in 2025
+IEEE International Conference on Robotics and Automation (ICRA).
+IEEE, 2025, pp. 5637–5643.
+[41] L. Su, Z. Peng, R. Ren, S. Mao, J. Du, K. Zhang, and X. Zhu,
+“Tacmap: Bridging the tactile sim-to-real gap via geometry-consistent
+penetration depth map,” arXiv preprint arXiv:2602.21625, 2026.
+[42] Z. Zhao, H. Dong, Z. He, Y. Li, X. Yi, and Z. Li, “Closing the
+reality gap: Zero-shot sim-to-real deployment for dexterous force-
+based grasping and manipulation,” arXiv preprint arXiv:2601.02778,
+2026.
+[43] Q. Liu, Y. Cui, Z. Sun, G. Li, J. Chen, and Q. Ye, “Vtdexmanip:
+A dataset and benchmark for visual-tactile pretraining and dexterous
+manipulation
+with
+reinforcement
+learning,”
+in
+The
+Thirteenth
+International
+Conference
+on
+Learning
+Representations,
+2025.
+[Online]. Available: https://openreview.net/forum?id=jf7C7EGw21
+[44] Z. Sun, Z. Shi, J. Chen, Q. Liu, Y. Cui, J. Chen, and Q. Ye, “Vtao-
+bimanip: Masked visual-tactile-action pre-training with object under-
+standing for bimanual dexterous manipulation,” in 2025 IEEE/RSJ
+International Conference on Intelligent Robots and Systems (IROS).
+IEEE, 2025, pp. 3201–3208.
+[45] R. Chen, M. Mukadam, M. Kaess, T. Wu, F. R. Hogan, J. Malik, and
+A. Sharma, “Ptld: Sim-to-real privileged tactile latent distillation for
+dexterous manipulation,” arXiv preprint arXiv:2603.04531, 2026.
+[46] B. Wen, W. Yang, J. Kautz, and S. Birchfield, “FoundationPose:
+Unified 6d pose estimation and tracking of novel objects,” in CVPR,
+2024.
+[47] G. Authors, “Genesis: A generative and universal physics engine
+for robotics and beyond,” December 2024. [Online]. Available:
+https://github.com/Genesis-Embodied-AI/Genesis
+[48] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov,
+“Proximal
+policy
+optimization
+algorithms,”
+arXiv
+preprint
+arXiv:1707.06347, 2017.
+[49] S. Ross, G. Gordon, and D. Bagnell, “A reduction of imitation learning
+and structured prediction to no-regret online learning,” in Proceedings
+of the fourteenth international conference on artificial intelligence and
+statistics.
+JMLR Workshop and Conference Proceedings, 2011, pp.
+627–635.
+[50] C. R. Qi, H. Su, K. Mo, and L. J. Guibas, “Pointnet: Deep learning
+on point sets for 3d classification and segmentation,” in Proceedings
+
+
+of the IEEE conference on computer vision and pattern recognition,
+2017, pp. 652–660.

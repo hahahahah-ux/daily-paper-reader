@@ -1,0 +1,954 @@
+Grasp2Twist: Learning Bimanual Dexterous Jar Opening by
+Reinforcement Learning
+Mo Xu1, Yunfu Deng1, Jianuo Wang2, Josiah Hanna1,†, Bilge Mutlu1,†
+Abstract— This paper presents Grasp2Twist, a bimanual dex-
+terous manipulation system that learns to grasp and twist open
+jar lids using reinforcement learning. Learning this task raises
+three challenges: learning a unified policy for a multi-stage task,
+sustaining lid twisting, and sim-to-real transfer. To address the
+first challenge, we introduce a continuous enclosure measure
+to guide grasp formation and a binary enclosure indicator to
+guide the grasp-to-twist transition for unified policy learning.
+We derive both from the geometric relationship between the
+object center and the convex hull formed by the hand’s palm
+and fingertips. Kinematic constraints limit how far the hand can
+rotate the lid with fixed contacts, so sustained twisting requires
+finger contact reconfiguration. We use a three-stage curriculum
+to facilitate exploration of these contact changes and also
+improve robustness for sim-to-real transfer. With our approach,
+the learned policy demonstrates finger gaiting, reconfiguring
+hand-object contacts to sustain lid rotation. It transfers zero-
+shot to the physical system and achieves an 88% task success
+rate across six household containers, including peanut-butter,
+vitamin, and instant-coffee jars. Ablations further validate the
+roles of the geometric enclosure in grasp formation and the
+curriculum in contact-reconfiguration exploration.
+I. INTRODUCTION
+Bimanual dexterous manipulation enables robots to use
+two multi-fingered hands in complementary roles, stabilizing
+an object with one hand while manipulating it with the other.
+However, coordinating both arms and hands is challenging
+due to the high dimensionality of the control problem and
+the disturbances transmitted between the hands through the
+shared object. Jar opening is one task that exemplifies the
+need for coordination: one hand grasps and holds the jar body
+while the other grasps and twists the lid until the threads
+disengage. Learning this task with a single policy requires
+coordinating grasp acquisition with subsequent lid twisting
+and jar stabilization. In this paper, we study the challenges
+of bimanual dexterous manipulation using the task of jar
+opening.
+Bimanual dexterous jar opening is a contact-rich task.
+Twisting with fixed finger contacts eventually exhausts the
+hand’s available motion range [1], limiting further lid ro-
+tation. Sustained lid twisting therefore requires reconfigur-
+ing these contacts. Transferring these contact-reconfiguration
+behaviors from simulation to hardware is also challenging
+because discrepancies in actuation and contact dynamics can
+disrupt the contact changes and destabilize the grasps.
+1University of Wisconsin–Madison, Madison, WI, USA.
+2Independent Researcher.
+†Josiah Hanna and Bilge Mutlu are equal senior authors.
+This work has been submitted to the IEEE for possible publication.
+Copyright may be transferred without notice, after which this version may
+no longer be accessible.
+Fig. 1.
+Real-world and simulated bimanual dexterous jar opening with two
+robot arms and dexterous hands.
+Recent learning-based approaches to dexterous manipula-
+tion include both imitation learning (IL) and reinforcement
+learning (RL). IL methods learn dexterous and bimanual
+manipulation from human demonstrations [2]–[4]. However,
+collecting dexterous demonstrations is costly, and trans-
+ferring human demonstrations to robotic hands introduces
+an embodiment gap due to differences in hand kinematics
+and morphology [5], [6]. Current RL methods learn dexter-
+ous manipulation through large-scale interaction in simula-
+tion [7]. RL has also been used for lid twisting task with
+two dexterous hands [8]. However, prior work considered a
+restricted setting where both robot arms were fixed and the
+object was placed directly on the fingers. By contrast, in our
+task setup shown in Fig. 1, the robot arms move the dexterous
+hands toward the jar, and the hands establish separate grasps
+on the body and lid before twisting begins.
+We introduce Grasp2Twist, which learns a single policy
+through RL to jointly control both arms and hands from
+grasp acquisition through sustained lid twisting. The policy
+coordinates grasping and twisting. Prior rewards based on
+fingertip proximity or finger contact [8], [9] encourage grasp
+acquisition but do not explicitly account for the overall
+spatial arrangement of the palm and fingertips around the
+object. Therefore, based on the spatial relationship between
+the object center and the convex hull formed by the hand,
+arXiv:2609.32064v1  [cs.RO]  25 Sep 2026
+
+
+we introduce a continuous enclosure measure to guide this
+spatial arrangement, and a binary enclosure indicator to guide
+the grasp-to-twist transition. We use curriculum learning with
+three stages. In the first two stages, we adjust rewards and
+termination conditions as learning progresses, first learning
+grasp acquisition and the transition to twisting, and then
+facilitating exploration of contact reconfiguration. In the final
+stage we progressively increase domain randomization to
+adapt the learned policy to real-world actuation and contact
+dynamics.
+The learned policy transfers zero-shot to the physical robot
+and demonstrates finger gaiting through repeated cycles of
+twisting, release, repositioning, and recontact on a set of
+diverse real-world jars. Ablation studies show that the en-
+closure measure and indicator improve grasp formation and
+that the curriculum makes contact-reconfiguration discovery
+more reliable.
+Our main contributions are threefold:
+• A real-world bimanual dexterous jar-opening system
+with a unified policy operating from grasp acquisition
+until the lid threads disengage.
+• A continuous enclosure measure and a binary enclosure
+indicator that guide grasp formation and the grasp-to-
+twist transition, respectively, within a unified policy.
+• A three-stage curriculum that supports unified grasp-to-
+twist learning, contact-reconfiguration exploration, and
+robustness adaptation for sim-to-real deployment.
+II. RELATED WORK
+Bimanual Dexterous Manipulation. Bimanual dexterity
+increases control dimensionality and introduces inter-hand
+coordination, particularly when both hands manipulate a
+shared object [10]. IL methods learn manipulation policies
+from demonstrations collected through teleoperation, motion
+capture, and human video [2]–[4], [11], [12]. RL methods
+learn manipulation policies through interaction with simu-
+lated environments and have demonstrated single-hand reori-
+entation [7], [13], [14], tactile-based in-hand rotation [15],
+and bimanual lid twisting [8].
+Dexterous Grasp. Classical grasp analysis assesses grasp
+quality from contact geometry through force-closure and
+wrench-space criteria [16], while differentiable force clo-
+sure enables both grasp synthesis and grasp-quality eval-
+uation [17]–[19]. Geometric caging characterizes whether
+finger configurations prevent object escape [20]. Learning-
+based approaches to dexterous grasping use contact-based
+rewards to encourage coordinated finger contact [9] and
+geometric interaction representations to capture finger–object
+spatial relations [21]. Task-oriented grasping additionally
+considers whether a grasp supports subsequent manipulation
+rather than immediate stability alone [22]. Our method uses
+a continuous enclosure measure to guide grasp formation
+and a binary enclosure indicator to define the transition to
+downstream manipulation.
+Curriculum Learning in Robot Learning. Curriculum
+learning facilitates policy optimization by structuring training
+from easier to more difficult conditions [23]. In reinforce-
+ment learning for robotics, curriculum strategies include
+progressively expanding initial state distributions [24], in-
+creasing environmental difficulty such as increasing terrain
+complexity [25], broadening dynamics randomization for
+sim-to-real transfer [26], and introducing physical difficulty
+to facilitate dexterous manipulation [27]. Our curriculum
+combines task progression and robustness adaptation.
+III. TASK AND SYSTEM OVERVIEW
+This section formulates the bimanual jar-opening task and
+describes the real-world system and simulation environment.
+It then discusses the challenges in policy learning and sim-
+to-real transfer that motivate the proposed method in this
+paper.
+A. Task Formulation
+Starting from pre-grasp configurations, the two arms move
+their mounted hands toward the jar and establish separate
+grasps on the jar body and lid. The body-side hand, referred
+to as the holding hand, stabilizes the jar body, while the lid-
+side hand, referred to as the twisting hand, rotates the lid
+in the opening direction. Success in the jar-opening task is
+defined as complete lid thread disengagement from the jar
+body while the jar body remains held by the holding hand.
+The task is formulated as a partially observable Markov
+decision process (POMDP). At each policy step t, the policy
+πθ receives proprioceptive observations opropri,t and extero-
+ceptive observations oextero,t, and outputs normalized actions
+at in a high-dimensional action space A := [−1,1]38 for the
+actuated joints from both arms and hands. The actions are
+smoothed using an EMA coefficient of 0.5, rescaled using
+the policy timestep and predefined velocity and action scales
+to obtain joint position increments ∆qt+1, and converted into
+joint position targets through leaky integration:
+qtarget,t+1 = α qtarget,t +(1−α)qt +∆qt+1
+(1)
+where qt denotes the current joint positions, qtarget,t denotes
+the joint position targets at step t, and α ∈[0,1] is the leaky-
+integration factor that interpolates between qtarget,t and qt.
+B. Real-World System
+Hardware. As illustrated in Fig. 2, the hardware platform
+consists of two Franka Emika Panda arms mounted on
+opposite sides of a shared tabletop workspace. Each arm is
+equipped with a TESOLLO DG-3F-B three-fingered hand.
+The trained policy updates joint position targets at 20Hz,
+while the low-level arm and hand controllers track these
+targets at 1000Hz and 200Hz, respectively. The end-effector
+poses are computed from forward kinematics at 100Hz.
+At each policy step, the latest joint states, joint position
+targets, and end-effector poses are collected together. The
+most recent eight steps of these quantities constitute the
+proprioceptive observations opropri,t used by the policy.
+Perception. A depth-based perception pipeline provides
+object-centric observations for real-world deployment. An
+Azure Kinect camera captures RGB-D observations, from
+
+
+Fig. 2.
+Overview of the real-world system. The vision node estimates jar-body and lid poses and dimensions from segmented depth images. The policy
+node combines these estimates with joint states, joint position targets, and end-effector poses to generate actions. The driver node tracks the resulting joint
+position targets and returns joint states for policy observations and forward kinematics.
+which SAM3 with TensorRT segments the jar body and
+lid [28]. The masked depth observations are processed by a
+ResNet-10-based regressor with spatial softmax to estimate
+the poses and dimensions of the jar body and lid [29], [30].
+These estimates constitute the exteroceptive observations
+oextero,t used by the policy.
+C. Simulation Environment
+The simulation environment reconstructs the bimanual
+robot platform using URDF and MJCF models in mjlab [31]
+and MuJoCo [32]. Each jar is modeled using two coaxial
+cylinders corresponding to the jar body and lid [8]. The lid
+is connected to the jar body by a revolute joint. The threads
+are not explicitly modeled in simulation. Joint damping is
+used to approximate the rotational resistance. The simulation
+randomizes jar geometry and physical properties. The state
+estimator in Sec. III-B is trained on masked depth images
+rendered in simulation, using randomized jar geometries and
+poses as supervision.
+D. Challenges
+Learning bimanual dexterous jar opening raises three
+challenges:
+unified
+grasp-to-twist
+learning,
+contact-
+reconfiguration exploration, and sim-to-real transfer.
+1) Unified Grasp-to-twist Learning: The system uses a
+single policy for grasp acquisition and lid twisting without
+an explicit task-phase input. Grasp acquisition may end
+in a wide range of hand and object configurations [33],
+especially in high-dimensional dexterous manipulation. The
+policy therefore needs to learn an appropriate transition from
+grasping to twisting within the unified policy.
+2) Contact-Reconfiguration Exploration: Maintaining a
+fixed finger-contact configuration eventually exhausts the
+feasible motion range of the twisting hand under kine-
+matic constraints, making contact reconfiguration necessary
+for sustained lid twisting. Such reconfiguration can involve
+releasing one or more fingers, repositioning them, and re-
+establishing contact before twisting continues. Learning these
+contact changes poses a difficult exploration problem for
+RL [14]. In our task, breaking contacts that support grasp
+acquisition can temporarily reduce the reward in RL, while
+the benefit of reconfiguring contact appears only after new
+contacts are established and twisting resumes.
+3) Sim-to-Real Transfer: Transferring the unified policy
+to the physical system requires preserving effective contact
+reconfiguration and bimanual stability despite discrepancies
+in actuation and contact dynamics. Contact reconfiguration
+emerges during learning, and the current learning objective
+cannot guarantee sufficient separation between the fingers
+and the lid when releasing contacts. On hardware, tracking
+errors and contact-model mismatch may leave insufficient
+clearance for the fingers to break contacts and reposition.
+Additionally, interactions between the twisting fingers and
+the lid generate disturbances that propagate through the
+shared jar to the holding hand. Compared with simulation,
+these disturbances can induce larger jar motion in the real
+world and destabilize the holding grasp.
+IV. METHOD
+The policy is trained using PPO with an asymmetric actor–
+critic architecture through RSL-RL [34]–[36]. The actor
+and critic are three-layer MLPs with hidden dimensions
+[512,256,128]. Training uses 4096 parallel environments
+with 128 environment steps per PPO iteration. The actor
+receives noisy opropri,t and oextero,t, while the critic accesses
+noise-free observations with additional privileged states dur-
+ing training.
+A. Geometric Hand–Object Enclosure Representation
+The geometric hand–object enclosure representation de-
+scribes the geometric enclosure state in which the object
+center lies within the convex hull formed by the hand,
+with a binary indicator and a continuous measure. The
+
+
+Equipotential Plane
+Reward Increasing
+Ienclose = 1
+Palm
+Ienclose = 0
+Ienclose = 0
+Palm
+Palm
+(a)
+Object
+Finger Tips
+e1
+e2
+e3
+c1e1
+c2e2
+c3e3
+(b)
+(c)
+Fig. 3.
+Geometric hand–object enclosure representation. (a) The palm position ppalm and three fingertip positions ptip,i define a tetrahedral convex hull;
+the displacement from the palm ppalm to the object center pobj is decomposed along the three palm-to-fingertip edge vectors ei. (b) The binary enclosure
+indicator Ienclose identifies whether the object center lies inside the tetrahedron convex hull. (c) The geometric enclosure reward derived from the enclosure
+measure menclose.
+indicator determines whether the grasp satisfies the enclosure
+condition, while the measure quantifies the progress toward
+this condition.
+1) Convex
+Hull
+Enclosure
+Indicator:
+Each
+three-
+fingered hand is represented by the tetrahedral convex hull
+defined by the palm position ppalm and the three fingertip
+positions ptip,i, i ∈{1,2,3}, as illustrated in Fig. 3(a). Let
+ei = ptip,i −ppalm denote the three palm-to-fingertip edge
+vectors. The displacement from the palm to the object center
+pobj is decomposed along those three edge vectors ei as
+pobj −ppalm =
+3
+∑
+i=1
+ciei.
+(2)
+The coefficients ci specify the position of the object center
+with respect to this geometric basis.
+The object center lies inside the tetrahedral convex hull
+if ci ≥0 for all i and ∑3
+i=1 ci ≤1. Accordingly, the binary
+enclosure indicator is defined as
+Ienclose = I
+"
+∀i ∈{1,2,3}, ci ≥0,
+3
+∑
+i=1
+ci ≤1
+#
+,
+(3)
+where I[·] denotes the indicator function. Fig. 3(b) illustrates
+the enclosed and non-enclosed cases.
+Rather than explicitly evaluating contact wrenches [16],
+the proposed indicator provides a geometric proxy for
+whether the hand surrounds the object and serves as one
+transition condition from grasp acquisition to lid twisting.
+We use Ihold
+enclose and Itwist
+enclose to indicate whether the holding
+hand encloses the jar body and the twisting hand encloses
+the lid, respectively.
+2) Enclosure Measure: When ci ≥0 for all i, the coeffi-
+cient sum defines a continuous enclosure measure,
+menclose =
+3
+∑
+i=1
+ci.
+(4)
+Geometrically, the measure is the ratio of the palm’s dis-
+tances to two parallel planes: one through the object center
+and the other through the three fingertips. The set menclose = 1
+corresponds to the fingertip face, 0 ≤menclose < 1 to points
+inside the tetrahedron, and menclose > 1 to points beyond the
+fingertip face.
+During grasp acquisition, decreasing menclose from values
+above one to below one therefore guides the object center
+across the fingertip face and into the enclosure region.
+B. Reward Design
+The reward is designed around grasp acquisition and lid
+twisting. The enclosure measure and finger contact rewards
+guide grasp acquisition, while lid angular velocity rewards
+twisting progress. The geometric enclosure indicator gates
+the twisting reward to encode the grasp-to-twist transition.
+1) Grasp Acquisition: We adapt the finger contact reward
+from prior work [8] to our task using a clipped exponential
+decay function:
+rcont = exp
+ 
+−clip
+  ¯d, dmin, dmax
+
+−dmin
+σ
+!
+,
+(5)
+where ¯d is the mean distance from fingertips to their nearest
+surface sample points, dmin and dmax are clipping thresholds,
+and σ is the decay length.
+However, the surface proximity does not explicitly encour-
+age the fingers to form a spatial arrangement around the
+object. As illustrated in Fig. 3(c), we introduce a geometric
+enclosure reward derived from Eq. (4):
+renclose = I{ci≥0} ·exp
+
+−clip(menclose, m0, mmax)−m0
+τ
+
+,
+(6)
+where m0 defines the reward plateau threshold and lower
+clipping bound, mmax is the upper clipping bound, and τ
+controls the decay scale.
+2) Lid Twisting: Twisting progress is measured by the
+lid angular velocity ωlid, with the opening direction defined
+as positive. We obtain the clipped and normalized angular
+velocity ˜ωlid as
+˜ωlid = clip(ωlid,−ωtol,ωmax)
+ωmax
+,
+(7)
+where −ωtol = −0.05π rad/s limits the penalty for transient
+backward rotation during finger exploration, and ωmax =
+0.5π rad/s caps the rewarded opening velocity.
+To preserve the grasp-to-twist ordering, the twisting re-
+ward is activated only when the holding hand encloses the
+jar body, the twisting hand encloses the lid, and the contact
+
+
+count Ncontact between the fingers on twisting hand and the
+lid is at least two:
+rtask = Ihold
+enclose ·Itwist
+enclose ·I{Ncontact≥2} · ˜ωlid.
+(8)
+The overall reward combines the task, enclosure, finger
+contact, and regularization terms:
+Rtotal = Rtask +Renclose +Rcont +Rreg,
+(9)
+where superscripts hold and twist denote the holding hand
+interacting with the jar body and the twisting hand inter-
+acting with the lid, respectively, Rtask = 12rtask, Renclose =
+2rhold
+enclose + rtwist
+enclose, and Rcont = rhold
+cont + 0.625rtwist
+cont ; Rreg sums
+the weighted regularization terms.
+C. Curriculum Learning
+Training follows a three-stage curriculum for foundational
+skill acquisition, contact-reconfiguration exploration, and
+sim-to-real adaptation.
+1) Foundational Skill Acquisition: Curriculum Stage 1
+learns grasp acquisition, the grasp-to-twist transition, and
+initial lid twisting. It relaxes actuator effort, motion reg-
+ularization, and termination conditions to facilitate initial
+exploration. Most sim-to-real randomization is deferred to
+Stage 3.
+2) Contact-reconfiguration Exploration: Stage 2 begins
+at iteration 2500 and facilitates contact-reconfiguration ex-
+ploration by widening the saturation threshold dmin of rtwist
+cont
+from 0.005m to 0.025m, reducing the reward loss associated
+with temporary finger–object separation. We also increase
+motion regularization for the arms and the holding hand
+and tighten constraints on jar motion. Regularization on the
+twisting fingers remains low, concentrating exploration on
+changes in their contacts while preserving stability of the
+rest of the bimanual system.
+3) Sim-to-Real Adaptation: Stage 3 begins at iteration
+5000 and adapts the policy for sim-to-real transfer. After the
+contact reconfiguration has been learned, we progressively
+broaden randomization over actuator effort, controller gains,
+gravity compensation, joint and contact dynamics, and obser-
+vation noises, while increasing regularization and tightening
+termination conditions. This gradual transition avoids sudden
+shifts in the training settings. The final randomization ranges
+are summarized in Table I.
+V. EXPERIMENTS
+This section evaluates the proposed system through real-
+world deployment and ablation studies. The real-world ex-
+periments assess the task performance across diverse jar
+properties. The ablation studies evaluate the contributions of
+the geometric enclosure representation (Sec. IV-A) and the
+curriculum learning (Sec. IV-C).
+A. Real-World Evaluation
+We evaluate the learned policy on the physical system us-
+ing both in-distribution and geometrically out-of-distribution
+objects.
+TABLE I
+FINAL DOMAIN RANDOMIZATION RANGES.
+Parameter
+Mode
+Final range
+Jar-body mass (kg)
+Value
+[0.05, 0.30]
+Jar friction
+Value
+[0.20, 2.50]
+Lid-joint damping
+Value
+[0.10, 0.50]
+Jar body radius (m)
+Value
+[0.03, 0.05]
+Jar body height (m)
+Value
+[0.10, 0.20]
+Lid radius (m)
+Value
+[0.02, 0.06]
+Lid height (m)
+Value
+[0.02, 0.04]
+Action noise
+Add.
+±0.10
+Action delay (steps)
+Value
+[0, 2]
+Finger actuator effort
+Value
+[0.82, 1.02]
+Arm/finger PD gains (Kp,Kd)
+Scale
+[0.75, 1.10]
+Arm joint friction loss
+Value
+[0.05, 0.50]
+Finger joint friction loss
+Value
+[0.05, 0.15]
+Gravity compensation
+Scale
+[0.90, 1.00]
+Joint position noise
+Add.
+±0.0025 / ±0.020
+FK position noise (m)
+Add.
+±0.001 / ±0.015
+Object position noise (m)
+Add.
+±0.010 / ±0.025
+Jar geometry noise (normalized)
+Add.
+±0.005 / ±0.200
+Observation noise ranges are reported as uniform noise / additive bias.
+Fig. 4.
+Real-world test instances. The leftmost object is the ID 3D-printed
+jar. The remaining objects are OOD-Geom household containers, referred to
+as Blue Peanut, Yellow Mayo, Pink Glass, Green Vitamin, Brown Peanut,
+and Instant Coffee.
+1) Experimental Setup and Protocol: The experiments
+are conducted on the physical system described in Sec. III-
+B. All real-world experiments use a single policy trained
+with random seed 42. The same checkpoint is evaluated on
+one 3D-printed jar and six off-the-shelf household containers
+shown in Fig. 4. The 3D-printed jar matches the cylindrical
+object model used in simulation and constitutes the in-
+distribution (ID) test set. The household containers differ in
+shape from the simplified cylindrical model and constitute
+the geometrically out-of-distribution (OOD-Geom) test set.
+Each instance is evaluated over ten trials, with its initial
+position randomized within a 0.2m×0.2m tabletop region.
+The robot starts each trial from the same predefined pre-grasp
+configuration.
+The ID evaluation measures sustained twisting on a 3D-
+printed jar. The lid remains mechanically engaged throughout
+each 30s trial, allowing continuous rotation without termi-
+nation by thread disengagement. We record the cumulative
+lid rotation and the number of finger-gait events over the
+evaluation horizon. A finger-gait event is counted when a
+
+
+Learned policy
+Open-loop
+...
+(a) Pre-grasp
+(b) Grasp
+(c) Twist
+(d) Release
+(f) Re-twist
+(g) Lid removal
+(e) Re-contact
+Fig. 5.
+Real-world execution sequence from pre-grasp to lid removal. After grasp acquisition, the holding hand stabilizes the jar body while the
+twisting hand rotates the lid. Individual fingers asynchronously twist, release, reposition, and re-establish contact. Twisting continues until complete thread
+disengagement, after which the lid is removed open loop.
+TABLE II
+REAL-WORLD EVALUATION ON OOD-GEOM HOUSEHOLD CONTAINERS
+Metric
+Blue Peanut
+Yellow Mayo
+Pink Glass
+Green Vitamin
+Brown Peanut
+Instant Coffee
+Approx. Rotation to Disengagement
+2π
+4π
+π
+1.5π
+4π
+π
+Jar-Opening Success (Replay)
+1/10
+2/10
+0/10
+3/10
+6/10
+6/10
+Jar-Opening Success (Ours)
+8/10
+9/10
+6/10
+10/10
+10/10
+10/10
+Lid Angular Velocity (Ours, Mean ± Std)
+(0.19±0.01)π/s
+(0.26±0.02)π/s
+(0.06±0.01)π/s
+(0.22±0.02)π/s
+(0.19±0.05)π/s
+(0.21±0.01)π/s
+finger of the twisting hand releases the lid, repositions,
+and re-establishes contact, followed by continued opening
+rotation from the new contact configuration.
+The OOD-Geom evaluation measures jar-opening suc-
+cess on household containers. Before each trial, the lid
+is manually rotated in the closing direction under light
+manual force until no further rotation is observed; no locking
+mechanism or additional tightening force is applied.
+Each trial terminates upon complete thread disengagement,
+a grasp failure that prevents further twisting, or a time limit
+of 30s. A trial is considered successful when the lid can
+subsequently be removed from the jar body by the twisting
+hand without additional rotation or observable resistance,
+while the jar body remains held by the holding hand. The
+lid removal is performed open loop.
+For each instance, we report the jar-opening success rate
+and the mean lid angular velocity over successful trials.
+We additionally report the approximate lid rotation from
+the initial threaded state to thread disengagement, obtained
+by manually rotating the lid until it lifts free and rounding
+to the nearest π/2. This quantity characterizes the thread-
+engagement span and is not used as the success criterion.
+To assess the contribution of closed-loop policy feedback,
+we additionally evaluate a non-reactive replay baseline. The
+baseline replays on the physical system the joint target tra-
+jectories that were successful in simulation. Prior lid-twisting
+work [8] assumes fixed arms and object initialized on fingers,
+making its reported results not directly comparable to our
+evaluation. Our contact-reward-only baseline, only using the
+finger contact reward rcont adapted from that work, failed
+to acquire jar-body grasps in our simulation experiments
+(Sec. V-B.1), so we did not deploy it on the physical system.
+2) Results: Across ten trials on the ID 3D-printed jar,
+the policy achieves a mean cumulative lid rotation of
+(7.13±0.21)π rad and 45.5±2.66 finger-gait events over the
+30s evaluation horizon. These results demonstrate sustained
+twisting and repeated finger gaiting on the physical system
+for the ID geometry.
+Table II reports the results on the six OOD-Geom house-
+hold containers. The learned policy succeeds in 53/60 trials
+(88%), compared with 18/60 trials (30%) for the replay base-
+line. Both methods achieve lower success rates on relatively
+smaller containers—Blue Peanut, Yellow Mayo, and Pink
+Glass—with a substantially larger degradation under replay.
+The learned policy achieves per-instance success rates from
+6/10 to 10/10 across all six objects.
+Fig. 5 illustrates the physical execution of the learned
+policy, from grasp acquisition, through detailed behaviors
+during sustained lid twisting, to open-loop lid removal.
+Table III summarizes static estimation errors on seven
+instances, each evaluated with and without dexterous-hand
+occlusion, using manually measured values as ground truth.
+Occlusion generally increases the mean error in vertical
+position and object dimensions, while its effect on the overall
+3D position error varies between ID and OOD-Geom objects.
+Across all objects, we also observe a systematic positional
+bias of approximately 20.5mm.
+TABLE III
+STATIC STATE ESTIMATION ERRORS (MEAN ± STD).
+Error
+Unoccluded(mm)
+Occluded(mm)
+ID 3D position
+24.2±10.3
+22.9±6.4
+OOD-Geom 3D position
+26.9±10.7
+29.3±12.5
+ID vertical position
+1.9±0.9
+3.3±3.0
+OOD-Geom vertical position
+7.5±6.0
+14.6±11.9
+ID dimensions
+4.3±2.6
+5.5±3.4
+We inspect the unsuccessful policy trials using the
+recorded videos. Most failures occur on smaller containers.
+Observed failures include cases where the twisting hand
+approaches the lid at an incorrect position or fails to establish
+
+
+Ablation of the Geometric Enclosure Representation
+(a)
+(b)
+Ablation of the Curriculum for Contact Reconfiguration
+(c) Contact Reward Only
+(e)
+(f)
+(g)
+(d) Geometric Enclosure (Ours)
+(h)
+Fig. 6.
+Ablation studies of the geometric enclosure representation and the curriculum for contact reconfiguration. (a)–(b) DFC residuals ∥Gc∥2 of
+the holding hand and twisting hand during evaluation rollouts for the contact-reward-only baseline and full method with geometric enclosure; the lower
+subpanels show the corresponding number of hand–object contacts. (c)–(d) Representative grasps from the contact-reward-only baseline and the full method,
+respectively, showing the different spatial arrangements of the fingers around the object. (e) Lid rotation during training under two curriculum settings,
+Stage 1 only and Stages 1 and 2. (f) Lid rotation during evaluation rollouts for policies trained with Stage 1 only and with Stages 1 and 2. The dashed
+curve shows the single Stage-1-only seed that discovers contact reconfiguration, separated from the remaining four seeds. (g)–(h) Representative contact-
+reconfiguration behaviors observed in simulation: synchronous contact changes in twist-and-regrasp behavior and asynchronous contact changes in finger
+gaiting; percentages give each finger’s contact time fraction. Curves show the mean over seeds; shaded regions denote one standard deviation across seeds;
+each seed’s curve is itself averaged over 4096 parallel environments.
+a stable lid grasp. Segmentation degradation is visible in
+some trials, and state estimation errors may contribute to
+some of these grasp acquisition failures. We also observe
+the twisting hand perturbing the jar, followed by loss of the
+holding hand grasp. Similar grasp acquisition failures and
+grasp loss are observed in the replay trials.
+B. Ablation Study
+The ablation studies evaluate the geometric enclosure
+representation and the curriculum for contact reconfiguration
+introduced in Sec. IV. We conduct both ablation studies in
+simulation using 4096 parallel environments and five random
+seeds per training condition.
+1) Ablation of the Geometric Enclosure Representation:
+We evaluate the effect of the geometric enclosure represen-
+tation by comparing the full method with a contact-reward-
+only baseline. The contact-reward-only baseline retains the
+finger contact reward rcont adapted from prior lid-twisting
+work [8], but removes the geometric enclosure reward renclose
+and binary enclosure indicator Ienclose. All other training
+settings are kept unchanged.
+The resulting grasp configurations are assessed using the
+differentiable force-closure (DFC) residual, rDFC = ∥Gc∥2,
+where G is the grasp matrix and c contains the unit surface
+normals at the contact points
+[17]. Lower values indicate
+lower wrench imbalance under the DFC approximation.
+Figs. 6(a) and (b) report the rollout DFC residuals together
+with the corresponding numbers of hand–object contacts
+for the holding hand and twisting hand. Compared to the
+baseline, the proposed method achieves lower DFC residuals
+for both hands, indicating more balanced contact-normal
+wrenches.
+Figs. 6(c) and (d) illustrate that the baseline policy can
+satisfy local fingertip contact objectives by pressing against
+the object surface, whereas the proposed method produces
+enclosing grasps around the jar body and lid.
+2) Ablation of Curriculum for Contact Reconfiguration:
+We evaluate the effect of curriculum Stage 2, which is
+designed to facilitate exploration of contact reconfiguration,
+by comparing policies trained only under Stage 1 with
+policies trained under Stage 1 followed by Stage 2. The
+former retains the Stage 1 objective throughout training,
+while the latter transitions to the Stage 2 objective after
+2500 training iterations. Neither setting proceeds to Stage 3;
+both use the same total number of environment steps and
+otherwise identical training settings.
+Figs. 6(e) and (f) show lid rotation during training and
+evaluation rollouts, respectively. Among the policies trained
+only under Stage 1, one of five seeds discovers contact
+reconfiguration and continues twisting. Among the policies
+trained under Stage 1 followed by Stage 2, all five seeds
+discover contact reconfiguration and continue to accumulate
+lid rotation over the evaluation horizon.
+Figs.
+6(g)
+and
+(h)
+show
+representative
+contact-
+reconfiguration
+behaviors
+observed
+in
+simulation.
+The
+twist-and-regrasp behavior in Fig. 6(g) is observed under
+both training conditions. The asynchronous finger gaiting
+in Fig. 6(h) is observed only after training under Stage 1
+followed by Stage 2 among the evaluated seeds.
+
+
+VI. CONCLUSION
+Grasp2Twist combines a continuous enclosure measure, a
+binary enclosure indicator and a three-stage curriculum to
+learn a unified policy for bimanual dexterous jar opening.
+The policy transfers zero-shot to hardware, exhibits asyn-
+chronous finger gaiting, and achieves 88% success across
+six household containers. Ablations support the roles of
+enclosure measure and indicator in grasp formation and the
+curriculum in contact-reconfiguration exploration.
+Limitations include less reliable grasp acquisition on
+smaller containers, potentially affected by state estimation
+errors; simplified thread mechanics and lid disengagement
+in simulation; and the current measure and indicator being
+formulated for three-fingered hand. Future work will address
+these limitations and extend the approach to other hand
+morphologies, object geometries, and manipulation tasks.
+ACKNOWLEDGMENT
+ChatGPT was used to convert a real-world robot image
+into the stylized robot illustration shown in Fig. 3(a).
+REFERENCES
+[1] A. S. Morgan, K. Hang, B. Wen, K. Bekris, and A. M. Dollar,
+“Complex in-hand manipulation via compliance-enabled finger gaiting
+and multi-modal planning,” IEEE Robotics and Automation Letters,
+vol. 7, no. 2, pp. 4821–4828, 2022.
+[2] T. Z. Zhao, V. Kumar, S. Levine, and C. Finn, “Learning Fine-Grained
+Bimanual Manipulation with Low-Cost Hardware,” in Proceedings of
+Robotics: Science and Systems, Daegu, Republic of Korea, July 2023.
+[3] R. Ding, Y. Qin, J. Zhu, C. Jia, S. Yang, R. Yang, X. Qi, and X. Wang,
+“Bunny-visionpro: Real-time bimanual dexterous teleoperation for
+imitation learning,” in 2025 IEEE/RSJ International Conference on
+Intelligent Robots and Systems (IROS).
+IEEE, 2025, pp. 12 248–
+12 255.
+[4] K. Li, P. Li, T. Liu, Y. Li, and S. Huang, “Maniptrans: Efficient dex-
+terous bimanual manipulation transfer via residual learning,” in 2025
+IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR).
+IEEE, 2025, pp. 6991–7003.
+[5] T. G. W. Lum, O. Y. Lee, K. Liu, and J. Bohg, “Crossing the
+human-robot embodiment gap with sim-to-real rl using one human
+demonstration,” in Proceedings of the Conference on Robot Learning
+(CoRL), 2025, pp. 4418–4441.
+[6] Y. Chen, C. Wang, Y. Yang, and K. Liu, “Object-centric dexterous
+manipulation from human motion data,” in Proceedings of The 8th
+Conference on Robot Learning, 2025, pp. 3828–3846.
+[7] OpenAI, M. Andrychowicz, B. Baker, M. Chociej, R. J´ozefowicz,
+B. McGrew, J. Pachocki, A. Petron, M. Plappert, G. Powell, A. Ray,
+J. Schneider, S. Sidor, J. Tobin, P. Welinder, L. Weng, and W. Zaremba,
+“Learning dexterous in-hand manipulation,” The International Journal
+of Robotics Research, vol. 39, no. 1, pp. 3–20, 2020.
+[8] T. Lin, Z.-H. Yin, H. Qi, P. Abbeel, and J. Malik, “Twisting lids off
+with two hands,” in Proceedings of The 8th Conference on Robot
+Learning, 2025, pp. 5220–5235.
+[9] Y. Qin, B. Huang, Z.-H. Yin, H. Su, and X. Wang, “Dexpoint: Gener-
+alizable point cloud reinforcement learning for sim-to-real dexterous
+manipulation,” in Conference on Robot Learning.
+PMLR, 2023, pp.
+594–605.
+[10] F. Krebs and T. Asfour, “A bimanual manipulation taxonomy,” IEEE
+Robotics and Automation Letters, vol. 7, no. 4, pp. 11 031–11 038,
+2022.
+[11] Y. Qin, W. Yang, B. Huang, K. V. Wyk, H. Su, X. Wang, Y.-W. Chao,
+and D. Fox, “AnyTeleop: A General Vision-Based Dexterous Robot
+Arm-Hand Teleoperation System,” in Proceedings of Robotics: Science
+and Systems, Daegu, Republic of Korea, July 2023.
+[12] R. Zheng, D. Niu, Y. Xie, J. Wang, M. Xu, Y. Jiang, F. Casta˜neda,
+F. Hu, Y. L. Tan, L. Fu, et al., “Egoscale: Scaling dexterous
+manipulation with diverse egocentric human data,” arXiv preprint
+arXiv:2602.16710, 2026.
+[13] T. Chen, M. Tippur, S. Wu, V. Kumar, E. Adelson, and P. Agrawal,
+“Visual dexterity: In-hand reorientation of novel and complex object
+shapes,” Science Robotics, vol. 8, no. 84, p. eadc9244, 2023.
+[14] G. Khandate, S. Shang, E. T. Chang, T. L. Saidi, J. Adams, and M. Cio-
+carlie, “Sampling-based Exploration for Reinforcement Learning of
+Dexterous Manipulation,” in Proceedings of Robotics: Science and
+Systems, Daegu, Republic of Korea, July 2023.
+[15] Z.-H. Yin, B. Huang, Y. Qin, Q. Chen, and X. Wang, “Rotating without
+Seeing: Towards In-hand Dexterity through Touch,” in Proceedings of
+Robotics: Science and Systems, Daegu, Republic of Korea, July 2023.
+[16] C. Ferrari, J. Canny, et al., “Planning optimal grasps,” in Proceedings.,
+1992 IEEE International Conference on Robotics and Automation,
+1992., vol. 3.
+IEEE, 1992, pp. 2290–2295.
+[17] T. Liu, Z. Liu, Z. Jiao, Y. Zhu, and S.-C. Zhu, “Synthesizing diverse
+and physically stable grasps with arbitrary hand structures using
+differentiable force closure estimator,” IEEE Robotics and Automation
+Letters, vol. 7, no. 1, pp. 470–477, 2021.
+[18] P. Li, T. Liu, Y. Li, Y. Geng, Y. Zhu, Y. Yang, and S. Huang, “Gendex-
+grasp: Generalizable dexterous grasping,” in 2023 IEEE international
+conference on robotics and automation (ICRA).
+IEEE, 2023, pp.
+8068–8074.
+[19] G. Zhai, Y. Zheng, Z. Xu, X. Kong, Y. Liu, B. Busam, Y. Ren,
+N. Navab, and Z. Zhang, “Da2 dataset: Toward dexterity-aware dual-
+arm grasping,” IEEE Robotics and Automation Letters, vol. 7, no. 4,
+pp. 8941–8948, 2022.
+[20] S. Makita and Y. Maeda, “3d multifingered caging: Basic formula-
+tion and planning,” in 2008 IEEE/RSJ International Conference on
+Intelligent Robots and Systems.
+IEEE, 2008, pp. 2697–2702.
+[21] Q. She, R. Hu, J. Xu, M. Liu, K. Xu, and H. Huang, “Learning
+high-dof reaching-and-grasping via dynamic representation of gripper-
+object interaction,” ACM Trans. Graph., vol. 41, no. 4, July 2022.
+[Online]. Available: https://doi.org/10.1145/3528223.3530091
+[22] K. Fang, Y. Zhu, A. Garg, A. Kurenkov, V. Mehta, L. Fei-Fei,
+and S. Savarese, “Learning task-oriented grasping for tool manipu-
+lation from simulated self-supervision,” The International Journal of
+Robotics Research, vol. 39, no. 2-3, pp. 202–216, 2020.
+[23] Y. Bengio, J. Louradour, R. Collobert, and J. Weston, “Curriculum
+learning,” in Proceedings of the 26th annual international conference
+on machine learning, 2009, pp. 41–48.
+[24] C. Florensa, D. Held, M. Wulfmeier, M. Zhang, and P. Abbeel, “Re-
+verse curriculum generation for reinforcement learning,” in Conference
+on robot learning.
+PMLR, 2017, pp. 482–495.
+[25] N. Rudin, D. Hoeller, P. Reist, and M. Hutter, “Learning to walk
+in minutes using massively parallel deep reinforcement learning,” in
+Conference on robot learning.
+PMLR, 2022, pp. 91–100.
+[26] I. Akkaya, M. Andrychowicz, M. Chociej, M. Litwin, B. McGrew,
+A. Petron, A. Paino, M. Plappert, G. Powell, R. Ribas, et al., “Solving
+rubik’s cube with a robot hand,” arXiv preprint arXiv:1910.07113,
+2019.
+[27] T. Chen, J. Xu, and P. Agrawal, “A system for general in-hand object
+re-orientation,” in Conference on robot learning.
+PMLR, 2022, pp.
+297–307.
+[28] N. Carion, L. Gustafson, Y.-T. Hu, S. Debnath, R. Hu, D. Suris Coll-
+Vinent, C. Ryali, K. V. Alwala, H. Khedr, A. Huang, et al., “Sam
+3: Segment anything with concepts,” in International conference on
+learning representations, vol. 2026, 2026, pp. 138 846–138 923.
+[29] K. He, X. Zhang, S. Ren, and J. Sun, “Deep residual learning for image
+recognition,” in Proceedings of the IEEE conference on computer
+vision and pattern recognition, 2016, pp. 770–778.
+[30] S. Levine, C. Finn, T. Darrell, and P. Abbeel, “End-to-end training
+of deep visuomotor policies,” Journal of Machine Learning Research,
+vol. 17, no. 39, pp. 1–40, 2016.
+[31] K. Zakka, Q. Liao, B. Yi, L. L. Lay, K. Sreenath, and P. Abbeel,
+“mjlab: A lightweight framework for gpu-accelerated robot learning,”
+2026. [Online]. Available: https://arxiv.org/abs/2601.22074
+[32] E. Todorov, T. Erez, and Y. Tassa, “Mujoco: A physics engine for
+model-based control,” in 2012 IEEE/RSJ International Conference on
+Intelligent Robots and Systems.
+IEEE, 2012, pp. 5026–5033.
+[33] Y. Chen, C. Wang, L. Fei-Fei, and K. Liu, “Sequential dexterity:
+Chaining dexterous policies for long-horizon manipulation,” in Pro-
+ceedings of The 7th Conference on Robot Learning, 2023, pp. 3809–
+3829.
+[34] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov,
+“Proximal
+policy
+optimization
+algorithms,”
+arXiv
+preprint
+arXiv:1707.06347, 2017.
+
+
+[35] L. Pinto, M. Andrychowicz, P. Welinder, W. Zaremba, and P. Abbeel,
+“Asymmetric actor critic for image-based robot learning,” in Proceed-
+ings of Robotics: Science and Systems, Pittsburgh, Pennsylvania, June
+2018.
+[36] C. Schwarke, M. Mittal, N. Rudin, D. Hoeller, and M. Hutter,
+“Rsl-rl: A learning library for robotics research,” arXiv preprint
+arXiv:2509.10771, 2025.

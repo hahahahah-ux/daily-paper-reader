@@ -1,0 +1,1125 @@
+SLIP-VLA: Single-Step Latent Imagination for Policy Learning in
+Vision-Language-Action Models
+Tianfu Li1,∗, Haoxuan Xu2,∗, Wenbo Chen1,∗, Haitian Li3, Changchuan Yang4,
+Xinhu Zheng1, Jun Ma1, Yuan Liu2, Lujia Wang1, Haoang Li1
+Fig. 1.
+Overview of SLIP-VLA. (a) Prior future-aware VLAs provide sparse future goals, while World Action Models capture temporally dense futures
+through costly iterative denoising. SLIP-VLA instead obtains temporally dense future latents in a single forward pass and explicitly shapes them for
+perceptual and control sufficiency. (b) On LIBERO-Plus, SLIP-VLA achieves the highest success rate among the plotted methods while maintaining
+competitive inference latency of 181 ms. (c) Real-world experiments demonstrate successful task execution across in-distribution, visual out-of-distribution,
+and long-horizon bimanual manipulation settings.
+Abstract— Vision-Language-Action models are increasingly
+effective for robotic manipulation, yet most predict actions
+directly from current observations without explicitly model-
+ing future scene evolution. Recent methods introduce future
+prediction to improve action generation, but dense future
+modeling often requires expensive iterative denoising, while
+one-step alternatives can underperform their multi-step coun-
+terparts. To reconcile efficient future modeling with strong
+action performance, we present SLIP-VLA, a policy learning
+framework that equips VLA models with a Single-Step Latent
+Imagination for future-aware action prediction. SLIP-VLA
+obtains temporally dense future latent representations with
+a single denoising update, and we improve the perceptual
+sufficiency of these representations by aligning intermediate
+latents with future geometric and semantic features. We further
+improve their control sufficiency through action-conditioned
+latent world modeling and inverse dynamics modeling, explicitly
+coupling latent transitions with robot actions. Our SLIP-VLA
+achieves state-of-the-art performance across diverse simula-
+tion benchmarks and real-world manipulation tasks, while its
+single-step latent imagination takes only 12 ms. Our project
+page and demonstration videos are available at https://
+∗Tianfu Li, Haoxuan Xu, and Wenbo Chen contributed equally to this
+work.
+1The Hong Kong University of Science and Technology (Guangzhou).
+2The Hong Kong University of Science and Technology.
+3Nanyang Technological University.
+4Zhejiang University.
+haoxuanxu1024.github.io/SLIP_VLA/.
+I. INTRODUCTION
+Vision-Language-Action (VLA) models have made strong
+progress in robot manipulation, but most still predict actions
+directly from current observations [1], [2], [3]. However,
+action generation often requires anticipating how objects,
+contacts, and task states will evolve beyond the current
+observation. Recent VLA methods introduce predicted future
+images or motion as intermediate guidance, but their future
+reasoning is often based on slow autoregressive decoding and
+temporally sparse visual goals that capture selected future
+states rather than the full scene evolution [4], [5], [6], as il-
+lustrated in Fig. 1(a.1). World Action Models (WAMs) shown
+in Fig. 1(a.2) extend this idea to temporally dense visual
+dynamics, but typically require expensive iterative denoising
+[7], [8], [9]. Although one-step variants reduce this cost,
+they can underperform their multi-step counterparts [10].
+This trade-off raises a key question: how should a single-
+step latent be shaped to expose sufficient future information
+for action prediction?
+To support action generation, the future latent should en-
+code sufficient perceptual structure, including the depth, spa-
+tial layout, and geometric boundaries of the future scene [11],
+arXiv:2609.33575v1  [cs.RO]  27 Sep 2026
+
+
+[12], [13], [14]. Without these geometric cues, the policy
+may mislocalize contacts or target poses, leading to errors
+in grasping, alignment, and insertion. Moverover, geometry
+helps localize potential interaction regions but does not
+identify which objects, parts, or states are relevant to the
+task. Capturing this task-relevant semantics is challenging:
+generative objectives do not explicitly supervise it, and dif-
+fusion representations can lag behind strong self-supervised
+visual features [15], [16], [17]. Without such semantics, the
+policy may select the wrong target even when the future
+geometry is accurately represented [18], [19]. We refer to
+the joint requirements of these geometric and semantic cues
+as perceptual sufficiency.
+Beyond preserving perceptual information, effective future
+latents should also capture how robot actions drive scene
+evolution. A visually predictive latent may describe what the
+future scene looks like while discarding action-specific tran-
+sition information, leaving the policy to infer action effects
+from data [20], [21]. Specifically, given the current latent and
+executed actions, the next latent state should be predictable,
+requiring the representation to preserve action-conditioned
+forward dynamics [22], [23], [20]. Conversely, the transi-
+tion between consecutive latent states should retain enough
+information to recover the executed actions, preventing the
+representation from ignoring the actions that produced the
+change [21], [24]. We refer to these complementary forward
+and inverse requirements as control sufficiency.
+To this end, we introduce SLIP-VLA: Single-Step Latent
+Imagination for Policy Learning in Vision-Language-Action
+Models. SLIP-VLA first encodes the current visual obser-
+vations and language instruction with a Vision-Language
+Model (VLM). As shown in Fig. 1(a.3), a World DiT takes
+the VLM features and applies a single denoising update to
+produce temporally dense future latent representations, which
+condition the Action DiT. For perceptual sufficiency, we
+align selected latent representations with future geometric
+and semantic features from pretrained visual encoders. For
+control sufficiency, we regularize latent transitions with
+action-conditioned forward and inverse dynamics. The aux-
+iliary teachers and dynamics models are used only during
+training and are removed at inference. Across diverse simu-
+lation benchmarks and real-world manipulation tasks, SLIP-
+VLA achieves state-of-the-art performance while its single-
+step latent imagination requires only 12 ms at inference. The
+resulting success–latency trade-off and evaluation on real-
+world tasks are demonstrated in Fig. 1(b, c). Our contribu-
+tions are summarized as follows:
+• We introduce SLIP-VLA, a policy learning framework
+that equips VLA models with Single-Step Latent Imagi-
+nation for future-aware action prediction, reconciling ef-
+ficient future modeling with strong action performance;
+• We design perceptual sufficiency shaping by aligning
+intermediate representations with future geometric and
+semantic features, yielding future latents that better
+preserve task-relevant scene structure;
+• We design control sufficiency shaping through latent
+world modeling and inverse dynamics modeling, pre-
+serving action-dependent transitions and making the
+future latent more informative for robot control;
+• Our SLIP-VLA achieves SOTA performance across
+multiple simulation benchmarks and real-world tasks
+with the efficiency of single-step future imagination.
+II. RELATED WORK
+Future-Aware VLAs. Recent VLA research has introduced
+future prediction as intermediate guidance for action gen-
+eration [6]. One line of work predicts future images as
+visual subgoals or indicators of subtask completion before
+decoding actions [6], [25], [26], [27]. Another represents an-
+ticipated scene changes through explicit motion or compact
+world features that encode dynamic, spatial, and semantic
+information [5], [28], [29]. Although these methods provide
+useful foresight, their predictions typically describe selected
+future states or compressed cues rather than the temporally
+dense scene evolution over the action horizon. These methods
+motivate temporally dense future representations, which are
+further explored by WAMs.
+Efficient Future Imagination in WAMs. WAMs jointly
+model robot actions and temporally dense visual dynamics,
+but generating the future trajectory typically requires expen-
+sive iterative denoising [7], [8]. To reduce this cost, some
+methods condition action generation directly on intermediate
+predictive representations rather than completing the gener-
+ation process [9], [30], [31]. Others further compress future
+imagination to a single denoising step or remove it entirely
+at inference [10], [32]. These studies show that useful
+control information can emerge before future generation is
+complete. However, one-step variants can still underperform
+their multi-step counterparts [10]. This leaves open how an
+early predictive representation should be structured to remain
+useful for action prediction and control.
+Latent Representation Learning for Robot Control. The
+mentioned gap motivates a representation learning perspec-
+tive: effective latent representations for robot control must
+support both scene understanding and action-conditioned
+prediction. Representation alignment methods strengthen
+perceptual structure by aligning intermediate features with
+geometric or semantic representations from pretrained visual
+encoders [15], [16], [11], [33]. However, perceptual richness
+alone does not ensure that a latent captures how robot actions
+induce future state changes. Latent world models make
+this dependence explicit by predicting future representations
+from current states and robot actions [22], [23], [20]. In-
+verse dynamics model provides a complementary constraint
+by recovering robot actions from latent state transitions,
+thereby encouraging the representation to preserve action-
+relevant information [21], [24]. These studies highlight the
+importance of preserving both task-relevant scene structure
+and action-dependent transitions in latent representations.
+SLIP-VLA focuses on learning these properties under a
+single-step denoising update constraint, shaping the future
+representations for perceptual and control sufficiency.
+
+
+Fig. 2.
+Pipeline of SLIP-VLA. The VLM backbone first encodes the multimodal context, and the World DiT then performs a single denoising pass
+to produce temporally dense future latents. (a) For perceptual sufficiency shaping, selected intermediate representations are aligned with future VGGT-Ω
+geometric features and DINOv3 semantic features. (b) For control sufficiency shaping, deeper latent representations are regularized through forward and
+inverse latent dynamics to preserve action-dependent transitions. The shaped future representations are injected layer-wise into the Action DiT for action
+generation, while all auxiliary shaping modules are used only during training.
+III. METHODOLOGY
+As illustrated in Fig. 2, SLIP-VLA consists of a VLM, a
+World DiT, and an Action DiT. The VLM encodes the current
+visual observations and language instruction. Conditioned on
+the VLM features, the World DiT applies a single denoising
+update to produce future latent representations. Selected
+World DiT representations are projected into the Action DiT
+feature space and used to condition the corresponding layers
+through layer-wise cross-attention.
+We first describe the construction of the single-step la-
+tent imagination, including the current-anchored source, the
+future latent slots, and the layer-wise conditioning of the
+Action DiT in Sec. III-A. We then present perceptual suf-
+ficiency shaping through geometric and semantic alignment
+in Sec. III-B. Next, we introduce control sufficiency shaping
+through latent forward and inverse dynamics in Sec. III-C.
+Finally, we describe the joint training objective and inference
+procedure in Sec. III-D.
+A. Single-Step Latent Imagination
+To preserve the current scene structure while leaving suffi-
+cient flexibility for future changes within a single denoising
+pass, our SLIP-VLA anchors the imagination source on the
+current observation rather than pure Gaussian noise. We
+encode the current multi-view observation into a visual latent
+zcur, repeat it across K future slots, and construct the source
+latent as
+zsrc = (1 −η) Repeat(zcur, K) + ηeϵ,
+(1)
+where eϵ denotes Gaussian noise rescaled to the current latent
+scale and η controls the noise ratio. We use K = 4 action-
+aligned future slots distributed along the prediction horizon.
+With the current-anchored source zsrc, the World DiT
+requires only a single denoising pass to obtain temporally
+dense predictive representations over all K future slots.
+Instead of using only the final World DiT output, we retain
+hidden representations from a set of selected layers L. For
+each layer ℓ∈L, we denote the resulting future latent
+sequence as F(ℓ)
+1:K = {F(ℓ)
+k }K
+k=1, where each F(ℓ)
+k
+∈RN×Dw
+preserves the spatial tokens of the k-th future slot. These rep-
+resentations constitute our single-step latent imagination and
+are used directly for action generation without completing the
+denoising trajectory or decoding future RGB frames. Finally,
+the Action DiT queries the projected future representations
+through layer-wise cross-attention. During training, we shape
+these same single-step future representations for perceptual
+and control sufficiency, so that the representations supplied
+to the Action DiT preserve task-relevant scene structure and
+action-dependent transitions.
+B. Perceptual Sufficiency Shaping
+To make the single-step latent perceptually sufficient, we
+align intermediate World DiT representations with comple-
+mentary geometric and semantic features extracted from the
+future observations. We apply the two objectives at different
+World DiT layers, using geometric supervision at an earlier
+layer ℓg and semantic supervision at a deeper layer ℓs.
+1) Geometric Alignment: We use a frozen VGGT-Ωen-
+coder [14] to provide temporally contextualized geometric
+supervision. For each camera view v ∈V, the current
+observation and all K future frames are jointly encoded as a
+temporal window. Let o0:K,v denote this window, where o0,v
+is the current frame and o1:K,v are the future frames. From
+the m-th selected VGGT-Ωlayer, we construct the future
+geometric target as
+G(m)
+1:K,v = Rg
+h
+T (m)
+g
+(o0:K,v)
+i
+1:K
+
+,
+(2)
+where T (m)
+g
+denotes the frozen teacher feature extractor and
+Rg resamples the teacher features to the World DiT spatial
+resolution. Only the future-frame features are retained as
+supervision.
+Let F(ℓg)
+1:K,v denote the World DiT tokens associated with
+view v at layer ℓg. A lightweight projector maps them to the
+
+
+corresponding teacher feature space:
+bG(m)
+1:K,v = P (m)
+g
+
+F(ℓg)
+1:K,v
+
+.
+(3)
+Following the geometric alignment objective, we preserve
+both feature direction and magnitude:
+Lgeo = 1
+M
+M
+X
+m=1
+
+λangL(m)
+ang + λscaleL(m)
+scale
+
+,
+(4)
+with
+L(m)
+ang = −Ek,v,p
+h
+cos
+
+bG(m)
+k,v,p, sg
+
+G(m)
+k,v,p
+i
+,
+(5)
+where p indexes spatial tokens and sg(·) denotes stop-
+gradient. The scale term regresses the unnormalized geomet-
+ric target from the normalized projected feature, preserving
+geometric magnitude information that is discarded by cosine
+alignment.
+2) Semantic Alignment: Geometric supervision captures
+where future interactions occur, but does not explicitly
+preserve task-relevant object, part, and state semantics. We
+therefore align a deeper World DiT representation with dense
+features from a frozen DINOv3 encoder [34]. Unlike VGGT-
+Ω, DINOv3 processes each future frame independently. For
+each future slot k and view v, the semantic target is
+Sk,v = Rs (Ts(ok,v)) ,
+k = 1, . . . , K,
+(6)
+where Ts is the frozen DINOv3 encoder and Rs resamples
+its dense patch features to the World DiT spatial grid.
+A semantic projector maps the corresponding World DiT
+representation to the teacher feature space:
+bSk,v = Ps
+
+F(ℓs)
+k,v
+
+.
+(7)
+We then optimize the dense feature alignment objective
+Lsem = −Ek,v,p
+h
+cos
+
+bSk,v,p, sg (Sk,v,p)
+i
+.
+(8)
+The resulting perceptual objective is
+Lperc = λgeoLgeo + λsemLsem.
+(9)
+Together, these two alignment objectives encourage the
+single-step latent to preserve both temporally consistent
+geometric structure and rich semantic information.
+C. Control Sufficiency Shaping
+Perceptually sufficient representations describe the pre-
+dicted future, but do not necessarily capture how robot ac-
+tions drive its evolution. We therefore impose complementary
+forward and inverse dynamics objectives on deeper World
+DiT layers to explicitly couple future latent transitions with
+robot actions. For two adjacent future slots k and k + 1, we
+denote by Ak the action segment executed between them.
+1) Forward Dynamics: We first require the future latent
+evolution to be predictable from the executed robot actions.
+At a World DiT layer ℓf, a lightweight latent world model
+Wθ takes the current future latent and the intervening action
+segment to predict the next latent through a residual update:
+bF+
+k+1 = F(ℓf )
+k
++ Wθ
+
+F(ℓf )
+k
+, Ak
+
+,
+bF−
+k+1 = F(ℓf )
+k
++ Wθ
+
+F(ℓf )
+k
+, A−
+k
+
+,
+(10)
+where A−
+k is a mismatched action segment. The next-slot
+representation F(ℓf )
+k+1 is treated as a stop-gradient target.
+Let d+
+k and d−
+k denote the token-wise normalized feature
+distances from bF+
+k+1 and bF−
+k+1 to this target, respectively.
+We define the forward-dynamics objective as
+Lfwd = Ek
+h
+d+
+k + λrank
+
+mfwd + d+
+k −d−
+k
+
++
+i
+,
+(11)
+where [x]+ = max(0, x). The ranking term requires the
+correct action segment to explain the observed latent transi-
+tion better than a mismatched one, discouraging the forward
+model from ignoring action information.
+2) Inverse Dynamics: Forward dynamics alone does not
+guarantee that a latent transition preserves enough informa-
+tion to recover the action that caused it. We therefore impose
+the complementary inverse relation at a deeper World DiT
+layer ℓi. A lightweight inverse dynamics model Iψ takes two
+consecutive dense latent states and predicts the intervening
+action segment:
+bA+
+k = Iψ
+
+F(ℓi)
+k
+, F(ℓi)
+k+1
+
+.
+(12)
+The model first aligns the two dense latent states through
+cross-attention and then uses learned action queries to decode
+the action sequence. The action prediction error combines
+Smooth-L1 regression for robot motion and binary cross-
+entropy for the gripper state.
+To ensure that the inverse dynamics model relies on
+the latent transition rather than the source state alone, we
+construct two negative pairs:
+bA−
+k = Iψ
+
+F(ℓi)
+k
+, sg
+
+F(ℓi)
+j
+
+,
+bAsame
+k
+= Iψ
+
+F(ℓi)
+k
+, sg
+
+F(ℓi)
+k
+
+,
+(13)
+where F(ℓi)
+j
+is a mismatched future latent and sg(·) denotes
+stop-gradient. Let e+
+k , e−
+k , and esame
+k
+denote the action
+prediction errors of the positive, mismatched, and same-state
+pairs, respectively. The inverse-dynamics objective is
+Linv = Ek
+
+e+
+k + λpair[mpair + e+
+k −e−
+k ]+
++ λsame[msame + e+
+k −esame
+k
+]+
+
+.
+(14)
+The mismatched pair requires the true future transition to
+be more informative than an unrelated one, while the same-
+state pair explicitly distinguishes a real state change from no
+transition. Finally, we combine the two objectives as
+Lctrl = λfwdLfwd + λinvLinv.
+(15)
+
+
+TABLE I
+LIBERO SUCCESS RATES (%). BEST AND SECOND-BEST RESULTS ARE
+BOLDED AND UNDERLINED, RESPECTIVELY.
+Method
+Spatial
+Object
+Goal
+Long
+Avg.
+General VLAs
+OpenVLA [1]
+84.7
+88.4
+79.2
+53.7
+76.5
+OpenVLA-OFT [35]
+97.6
+98.4
+97.9
+94.5
+97.1
+π0 [2]
+98.0
+96.8
+94.4
+88.4
+94.4
+π0.5 [3]
+98.8
+98.2
+98.0
+92.4
+96.9
+Future-Aware VLAs
+CoT-VLA [6]
+87.5
+91.6
+87.6
+69.0
+83.9
+FlowVLA [5]
+93.2
+95.0
+91.6
+72.6
+88.1
+WorldVLA [4]
+87.6
+96.2
+83.4
+60.0
+81.8
+LaMP [29]
+99.4
+99.8
+97.4
+96.7
+98.3
+World Action Models
+Motus [8]
+96.8
+99.8
+96.6
+97.6
+97.7
+Fast-WAM [32]
+98.2
+100.0
+97.0
+95.2
+97.6
+Fast-WAM-Joint [32]
+99.6
+99.4
+98.2
+96.8
+98.5
+Fast-WAM-IDM [32]
+98.8
+97.8
+97.8
+97.6
+98.0
+SLIP-VLA (Ours)
+99.6
+99.8
+98.2
+98.0
+98.9
+Forward dynamics makes future evolution predictable
+from robot actions, whereas inverse dynamics makes the
+executed actions recoverable from latent evolution. Together,
+they improve the control sufficiency of the single-step latent.
+D. Training and Inference
+During training, we jointly optimize future prediction,
+action generation, and the perceptual and control shaping
+objectives. The World DiT uses a random-timestep branch
+to learn the full denoising trajectory and a shared first-step
+branch whose representations condition the Action DiT and
+receive perceptual and control shaping, without additional
+predictive forwards. The Action DiT is trained with the
+standard conditional flow matching objective [2], conditioned
+on the VLM context and the selected single-step future
+representations. The overall training objective is
+L =λactLact + λrandLrand
+vid + λfirstLfirst
+vid
++ λpercLperc + λctrlLctrl,
+(16)
+where Lrand
+vid
+and Lfirst
+vid
+denote the video prediction losses
+from the random-timestep and first-step branches, respec-
+tively. During early training, the timestep of the first-step
+branch is sampled within a small neighborhood of the
+source endpoint and gradually annealed to zero, progres-
+sively matching the inference condition. We further adopt a
+staged optimization schedule that first stabilizes the predic-
+tive representation before jointly optimizing the full policy.
+At inference, given the current observations, language in-
+struction, and robot state, SLIP-VLA constructs the current-
+anchored source and performs a single World DiT forward
+to obtain multi-layer future representations. The Action DiT
+directly queries these representations to generate the action
+chunk. VGGT-Ω, DINOv3, and the forward and inverse dy-
+namics modules are training-only and removed at inference,
+introducing no additional online modules.
+TABLE II
+LIBERO-PLUS SUCCESS RATES (%). BEST AND SECOND-BEST RESULTS
+ARE BOLDED AND UNDERLINED, RESPECTIVELY.
+Method
+Cam. Robot Lang. Light BG Noise Layout Avg.
+General VLAs
+OpenVLA [1]
+0.8
+3.5
+23.0
+8.1
+34.8 15.2
+28.5
+15.6
+OpenVLA-OFT [35]
+56.4
+31.9
+79.5
+88.7 93.3 75.8
+74.2
+69.6
+π0 [2]
+13.8
+6.0
+58.8
+85.0 81.4 79.0
+68.9
+53.6
+π0-Fast [36]
+65.1
+21.6
+61.0
+73.2 73.2 74.4
+68.8
+61.6
+Future-Aware VLAs
+WorldVLA [4]
+0.1
+27.9
+41.6
+43.7 17.1 10.9
+38.0
+25.0
+LaMP [29]
+64.5
+69.6
+88.2
+95.3 97.4 76.9
+73.8
+79.3
+World Action Models
+Fast-WAM [32]
+18.8
+45.7
+70.1
+83.2 45.7 29.8
+62.7
+49.1
+Fast-WAM-Joint [32]
+39.9
+65.1
+94.7
+92.1 58.1 56.2
+79.3
+68.7
+Fast-WAM-IDM [32]
+38.6
+66.3
+94.2
+87.7 58.0 58.8
+81.5
+68.8
+SLIP-VLA (Ours)
+70.6
+69.7
+88.3
+94.1 95.7 89.4
+81.4
+83.2
+TABLE III
+ROBOTWIN 2.0 SUCCESS RATES (%). BEST AND SECOND-BEST RESULTS
+ARE BOLDED AND UNDERLINED, RESPECTIVELY.
+Method
+Clean
+Rand.
+Avg.
+General VLAs
+π0 [2]
+65.9
+58.4
+62.2
+π0.5 [3]
+82.7
+76.8
+79.8
+Future-Aware VLAs
+WorldVLA [4]
+42.5
+32.2
+37.4
+World Action Models
+Motus [8]
+88.7
+87.0
+87.8
+Fast-WAM [32]
+91.9
+91.8
+91.8
+Fast-WAM-Joint [32]
+90.8
+90.3
+90.6
+Fast-WAM-IDM [32]
+91.2
+91.3
+91.3
+SLIP-VLA (Ours)
+92.2
+91.3
+91.8
+IV. EXPERIMENTS
+We conduct extensive experiments in simulation and the
+real world to answer the following questions:
+• Q1: How does SLIP-VLA compare with state-of-the-
+art VLA and WAM methods on standard manipulation
+benchmarks?
+• Q2: Does the single-step latent imagination remain
+effective under distribution shifts and more challenging
+manipulation settings?
+• Q3: How do perceptual and control sufficiency shaping
+contribute to action performance and the learned future
+representations?
+• Q4: How much future denoising is necessary for action
+prediction, and what efficiency does single-step latent
+imagination provide?
+A. Experimental Setup
+Benchmarks. We evaluate our SLIP-VLA on three simu-
+lation benchmarks and the real-world manipulation tasks.
+LIBERO [37] serves as the standard benchmark for multi-
+task manipulation, while LIBERO-Plus [38] evaluates zero-
+shot robustness under distribution shifts. We further use
+RoboTwin 2.0 [39] to evaluate more complex bimanual
+manipulation across 50 tasks under the official settings.
+
+
+Fig. 3.
+Qualitative analysis of perceptual and control information in the
+single-step latent. (a) Compared with the naive single-step baseline, SLIP-
+VLA recovers more coherent future geometry and more concentrated task-
+relevant semantic responses. (b) For forward dynamics, the correct action
+produces a prediction closer to the target latent, while a shuffled action
+induces clear spatial deviations; the action-response map highlights regions
+most affected by the action change.
+Implementation Details. All auxiliary supervision is derived
+from the same robot demonstrations used for policy learning,
+without additional demonstrations or manual annotations.
+SLIP-VLA uses a Qwen3.5-2B VLM, a 12-layer World DiT,
+and a 24-layer Action DiT with primary and wrist camera
+inputs. We use K = 4 action-aligned future slots, η = 0.2 for
+current-anchored initialization, and 16-step action chunks.
+All models are trained on eight NVIDIA A100 GPUs.
+B. Comparison with State-of-the-Art Methods (Q1 & Q2)
+LIBERO. Table I shows that SLIP-VLA achieves the highest
+average success rate, demonstrating that a shaped single-step
+latent can match or surpass strong future-aware and iterative
+WAM baselines on standard manipulation tasks.
+LIBERO-Plus. As shown in Table II, SLIP-VLA achieves
+83.2% average success under distribution shift, outperform-
+ing the strongest compared method by 3.9 points and the
+best WAM by 14.4 points. The larger margin highlights the
+benefit of latent shaping under out-of-distribution conditions.
+RoboTwin 2.0. As shown in Table III, SLIP-VLA achieves
+91.8% average success on the more complex bimanual tasks
+without external robot data pretraining, matching the best
+result. Together with LIBERO-Plus, these results show that
+single-step latent imagination remains effective under both
+distribution shifts and more challenging manipulation.
+Fig. 4.
+Effect of denoising steps on future prediction and control
+performance. The top row shows representative predicted videos with one
+to four denoising steps, while the curves report PSNR and LIBERO-Plus
+success rate. Additional denoising provides no consistent improvement in
+visual prediction quality and does not improve action performance, with the
+highest success rate achieved using a single step.
+TABLE IV
+ABLATION STUDY OF PERCEPTUAL AND CONTROL SUFFICIENCY
+SHAPING. SUCCESS RATES (%) ON LIBERO AND LIBERO-PLUS.
+Variant
+LIBERO
+LIBERO-Plus
+Naive Single-Step
+97.7
+79.0
+w/ Perceptual Sufficiency
+98.3
+81.4
+w/ Control Sufficiency
+98.5
+82.3
+w/ Perceptual + Control Sufficiency
+98.9
+83.2
+TABLE V
+QUANTITATIVE ANALYSIS OF THE PERCEPTUAL SUFFICIENCY OF
+FROZEN SINGLE-STEP LATENT REPRESENTATIONS.
+Geometry
+Semantics
+Variant
+Pearson ↑
+AbsRel ↓
+mIoU ↑
+Dice ↑
+Naive Single-Step
+0.804
+0.188
+0.388
+0.486
+SLIP-VLA (Ours)
+0.916
+0.112
+0.590
+0.683
+C. Ablation and Analysis (Q3 & Q4)
+Perceptual and Control Sufficiency Ablation. Table IV
+shows that both perceptual and control shaping improve
+over the naive single-step baseline, while their combination
+performs best on LIBERO and LIBERO-Plus. The larger gain
+on LIBERO-Plus indicates that structured latent shaping is
+particularly beneficial under distribution shift.
+Perceptual Analysis of the Latent Representation. To
+evaluate perceptual sufficiency, we discard the training-time
+alignment heads and fit linear probes to frozen World DiT
+representations for future depth and task-relevant object
+masks. Table V shows improved geometry (higher Pearson
+and lower aligned AbsRel) and semantics (higher object
+mIoU and Dice), indicating that both are more accessible
+in the single-step latent. The qualitative results in Fig. 3(a)
+show the same trend.
+
+
+Fig. 5.
+Real-world evaluation of SLIP-VLA. (a) The real-world manipulation platform. (b.1) Our SLIP-VLA successfully completes the in-distribution
+corn-to-plate task. (b.2) It remains successful under visual distribution shifts in background, object appearance, and object orientation. (b.3) SLIP-VLA
+further completes both two-step and three-step long-horizon tasks involving sequential interaction with the pot and the target object.
+TABLE VI
+QUANTITATIVE ANALYSIS OF CONTROL SUFFICIENCY IN SLIP-VLA.
+FORWARD DYNAMICS MEASURES LATENT PREDICTION DISTANCE
+UNDER DIFFERENT ACTION PERTURBATIONS, WHILE INVERSE
+DYNAMICS MEASURES ACTION RECOVERY ERROR UNDER DIFFERENT
+LATENT-TRANSITION PERTURBATIONS. LOWER IS BETTER.
+Evaluation Condition
+Distance ↓
+∆vs. Correct ↑
+Forward Dynamics
+Correct Action
+0.012
+–
+Gripper Shuffled
+0.527
+0.515
+Motion Shuffled
+0.772
+0.759
+Fully Shuffled
+0.876
+0.864
+Inverse Dynamics
+Correct Pair
+0.004
+–
+Same-State
+1.747
+1.743
+Source-Only
+1.881
+1.877
+Next-Only
+1.962
+1.958
+Shuffled-Next
+2.124
+2.120
+Control Analysis of the Latent Representation. To eval-
+uate control sufficiency, we test whether latent transitions
+support action-conditioned future prediction and action re-
+covery. Table VI shows that shuffling actions worsens for-
+ward prediction, while corrupting latent transitions degrades
+inverse dynamics, revealing bidirectional action dependence.
+Fig. 3(b) further shows structured spatial deviations in the
+predicted future latent when the action changes.
+Source Initialization. Table VII shows that initializing future
+TABLE VII
+ABLATION STUDY OF SOURCE INITIALIZATION STRATEGIES. SUCCESS
+RATES (%) ON LIBERO AND LIBERO-PLUS.
+Source Initialization
+LIBERO
+LIBERO-Plus
+Gaussian Noise
+98.6
+82.5
+Current Latent
+98.8
+82.9
+Current + Noise (Ours)
+98.9
+83.2
+TABLE VIII
+REAL-WORLD SUCCESS RATES (%). EACH TASK CONDITION IS
+EVALUATED OVER 50 TRIALS.
+Task
+π0
+SLIP-VLA (Ours)
+In-Distribution
+Corn →Plate
+72
+86
+Out-of-Distribution
+Unseen Background
+58
+70
+Unseen Object Appearance
+54
+70
+Unseen Object Orientation
+52
+66
+Long-Horizon
+Open →Corn into Pot (2-step)
+68
+82
+Open →Corn into Pot →Close (3-step)
+60
+74
+slots from the current latent outperforms pure Gaussian
+noise, highlighting the benefit of preserving current scene
+structure. Adding a small amount of noise further improves
+performance by allowing future changes while retaining this
+structural prior.
+Denoising Steps and Efficiency. Fig. 4 shows that additional
+
+
+denoising brings no consistent gain in visual quality or
+LIBERO-Plus performance, with the highest success rate
+achieved in a single step. This answers Q4: once properly
+shaped, the single-step latent is sufficient for action predic-
+tion, eliminating unnecessary iterative refinement.
+D. Real-World Experiments
+Platform. We conduct real-world experiments on the AgileX
+COBOT Magic platform shown in Fig. 5(a). COBOT Magic
+is a bimanual manipulation platform equipped with PiPER
+robotic arms, a TRACER mobile base, two wrist cameras,
+and a top camera. Our policy uses the multi-view visual
+observations to perform closed-loop manipulation on the
+physical robot.
+Task Design. As illustrated in Fig. 5(b.1)–(b.3), we evaluate
+three groups of tasks with increasing difficulty. The in-
+distribution (In-D) setting evaluates the standard corn-to-
+plate task. For out-of-distribution (OOD) evaluation, we
+preserve the same manipulation objective while indepen-
+dently introducing unseen backgrounds, objects, and object
+orientations. We further consider two long-horizon tasks: a
+two-step task that opens the pot lid and places the corn
+into the pot, and a three-step task that additionally requires
+closing the lid after placement. Each condition is evaluated
+over 50 trials.
+Results. As shown in Table VIII, SLIP-VLA consistently
+outperforms π0 across all six real-world conditions, with
+absolute improvements of 12–16 percentage points. On the
+In-D task, SLIP-VLA improves the success rate from 72%
+to 86%. The advantage persists across unseen backgrounds,
+objects, and orientations, where SLIP-VLA achieves 70%,
+70%, and 66% success, respectively. It also maintains strong
+performance as the task horizon increases, achieving 82% on
+the two-step task and 74% on the more challenging three-
+step task. The successful rollouts in Fig. 5(b.1)–(b.3) further
+demonstrate that single-step latent imagination transfers ef-
+fectively to physical manipulation under visual distribution
+shifts and extended action sequences.
+V. CONCLUSION
+We presented SLIP-VLA, a policy learning framework
+that replaces iterative future imagination with a single-step
+predictive latent for efficient future-aware action predic-
+tion. SLIP-VLA shapes this latent for perceptual sufficiency
+through geometric and semantic alignment, and for control
+sufficiency through forward and inverse dynamics. These
+training-time objectives introduce no additional modules
+at inference. Across simulation benchmarks and real-world
+manipulation tasks, SLIP-VLA achieves state-of-the-art per-
+formance while requiring only 12 ms for single-step latent
+imagination. Our results show that effective future-aware
+control does not require fully denoised visual predictions
+when the predictive latent is properly shaped.
+REFERENCES
+[1] M. J. Kim et al., “OpenVLA: An open-source vision-language-action
+model,” arXiv preprint arXiv:2406.09246, 2024.
+[2] K. Black et al., “π0: A vision-language-action flow model for general
+robot control,” arXiv preprint arXiv:2410.24164, 2024.
+[3] Physical Intelligence et al., “π0.5: a vision-language-action model
+with open-world generalization,” arXiv preprint arXiv:2504.16054,
+2025.
+[4] J. Cen et al., “WorldVLA: Towards autoregressive action world
+model,” arXiv preprint arXiv:2506.21539, 2025.
+[5] Z. Zhong, H. Yan, J. Li, X. Liu, X. Gong, T. Zhang, W. Song,
+J. Chen, X. Zheng, H. Wang, and H. Li, “FlowVLA: Visual chain of
+thought-based motion reasoning for vision-language-action models,”
+arXiv preprint arXiv:2508.18269, 2025.
+[6] Q. Zhao et al., “CoT-VLA: Visual chain-of-thought reasoning for
+vision-language-action models,” in CVPR, 2025.
+[7] Motubrain Team et al., “Motubrain: An advanced world action model
+for robot control,” arXiv preprint arXiv:2604.27792, 2026.
+[8] H. Bi et al., “Motus: A unified latent action world model,” in CVPR,
+2026.
+[9] L. Li et al., “Causal world modeling for robot control,” arXiv preprint
+arXiv:2601.21998, 2026.
+[10] S. Ye et al., “World action models are zero-shot policies,” arXiv
+preprint arXiv:2602.15922, 2026.
+[11] H. Wu, D. Wu, T. He, J. Guo, Y. Ye, Y. Duan, and J. Bian, “Geometry
+Forcing: Marrying video diffusion and 3D representation for consistent
+world modeling,” in ICLR, 2026.
+[12] J. Han, S. Jeon, J. Jung, R. Zurbr¨ugg, H. An, T. Portela, M. Hutter,
+M. Pollefeys, S. Kim, and S. Hong, “Geometric Action Model for
+robot policy learning,” arXiv preprint arXiv:2606.17046, 2026.
+[13] J. Qian, B. Han, C. Shi, L. Xiao, L. Yang, S. Shi, and L. Jiang, “Geo-
+Predict: Leveraging predictive kinematics and 3D Gaussian geometry
+for precise VLA manipulation,” in CVPR, 2026.
+[14] J. Wang, M. Chen, N. Karaev, A. Vedaldi, C. Rupprecht, and
+D. Novotny, “VGGT: Visual geometry grounded transformer,” in
+CVPR, 2025.
+[15] S. Yu, S. Kwak, H. Jang, J. Jeong, J. Huang, J. Shin, and S. Xie, “Rep-
+resentation alignment for generation: Training diffusion transformers
+is easier than you think,” in ICLR, 2025.
+[16] X. Leng, J. Singh, Y. Hou, Z. Xing, S. Xie, and L. Zheng, “REPA-E:
+Unlocking VAE for end-to-end tuning with latent diffusion transform-
+ers,” in ICCV, 2025.
+[17] X. Yang and X. Wang, “Diffusion model as representation learner,” in
+ICCV, 2023.
+[18] Q. Yu et al., “AffordanceVLA: A vision-language-action model em-
+powering action generation through affordance-aware understanding,”
+arXiv preprint arXiv:2606.06155, 2026.
+[19] W. Song, Z. Zhou, H. Zhao, J. Chen, P. Ding, H. Yan, Y. Huang,
+F. Tang, D. Wang, and H. Li, “ReconVLA: Reconstructive vision-
+language-action model as effective robot perceiver,” in AAAI, 2026.
+[20] Z. Huang, J. Zhang, H. Liu, C. Zhang, R. Cheng, and L. Zhang,
+“Learning transferable dynamics priors from action to world model-
+ing,” arXiv preprint arXiv:2606.29501, 2026.
+[21] Y. Tian, S. Yang, J. Zeng, P. Wang, D. Lin, H. Dong, and J. Pang,
+“Predictive inverse dynamics models are scalable learners for robotic
+manipulation,” in ICLR, 2025.
+[22] G. Zhou, H. Pan, Y. LeCun, and L. Pinto, “DINO-WM: World models
+on pre-trained visual features enable zero-shot planning,” in ICML,
+2025.
+[23] L. Maes, Q. Le Lidec, D. Scieur, Y. LeCun, and R. Balestriero,
+“LeWorldModel: Stable end-to-end joint-embedding predictive archi-
+tecture from pixels,” arXiv preprint arXiv:2603.19312, 2026.
+[24] J. Boylan and C. Hokamp, “No Gaussian required: Contrastive inverse
+dynamics for JEPA world models,” arXiv preprint arXiv:2608.17542,
+2026.
+[25] Q. Long et al., “Scaling world model for hierarchical manipulation
+policies,” arXiv preprint arXiv:2602.10983, 2026.
+[26] T. Chen, H. Wu, J. Wang, X. Li, and L. Fang, “StreamVLA: Break-
+ing the reason-act cycle via completion-state gating,” arXiv preprint
+arXiv:2602.01100, 2026.
+[27] T. Lu, H. Zhang, Z. Diao, J. Wang, S. Xu, X. Lin, G. Zhong, Z. Ye,
+P. Wang, Z. Wu, and Y.-G. Jiang, “ThinkingVLA: Interleaved vision
+and language reasoning for robotic manipulation,” arXiv preprint
+arXiv:2606.17937, 2026.
+[28] W. Zhang et al., “DreamVLA: A vision-language-action model
+dreamed with comprehensive world knowledge,” in NeurIPS, 2025.
+[29] X. Wang, C. Wang, Y. Xu, M. Ye, F. Zhang, J. Tian, X. Zhan, L. Zhu,
+C. Lu, and L. Yang, “LaMP: Learning vision-language-action policy
+with 3D scene flow as latent motion prior,” in ECCV, 2026.
+
+
+[30] Y. Hu, Y. Guo, P. Wang, X. Chen, Y.-J. Wang, J. Zhang, K. Sreenath,
+C. Lu, and J. Chen, “Video Prediction Policy: A generalist robot policy
+with predictive visual representations,” in ICML, 2025.
+[31] J. Pai, L. Achenbach, V. Montesinos, B. Forrai, O. Mees, and E. Nava,
+“mimic-video: Video-action models for generalizable robot control
+beyond VLAs,” arXiv preprint arXiv:2512.15692, 2025.
+[32] T. Yuan, Z. Dong, Y. Liu, and H. Zhao, “Fast-WAM: Do world
+action models need test-time future imagination?” arXiv preprint
+arXiv:2603.16666, 2026.
+[33] F. Li, W. Song, H. Zhao, J. Wang, P. Ding, D. Wang, L. Zeng, and
+H. Li, “Spatial Forcing: Implicit spatial representation alignment for
+vision-language-action model,” in ICLR, 2026.
+[34] O. Sim´eoni et al., “DINOv3,” TMLR, 2026.
+[35] M. J. Kim, C. Finn, and P. Liang, “Fine-tuning vision-language-action
+models: Optimizing speed and success,” in RSS, 2025.
+[36] K. Pertsch, K. Stachowicz, B. Ichter, D. Driess, S. Nair, Q. Vuong,
+O. Mees, C. Finn, and S. Levine, “FAST: Efficient action tokenization
+for vision-language-action models,” in RSS, 2025.
+[37] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone,
+“LIBERO: Benchmarking knowledge transfer for lifelong robot learn-
+ing,” in NeurIPS, 2023.
+[38] S. Fei et al., “LIBERO-Plus: A progressive robustness benchmark for
+visual-language-action models,” in CVPR, 2026.
+[39] T. Chen et al., “RoboTwin 2.0: A scalable data generator and bench-
+mark with strong domain randomization for robust bimanual robotic
+manipulation,” in ICML, 2026.

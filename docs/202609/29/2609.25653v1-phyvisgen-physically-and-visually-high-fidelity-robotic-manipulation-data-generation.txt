@@ -1,0 +1,998 @@
+PhyVisGen: Physically and Visually High-Fidelity Robotic Manipulation
+Data Generation
+Yu Zheng1∗, Qiyu Feng1∗, Yixin Wu1∗, Baoquan Yang1, Yixuan Zhou3, Bingyang Hu2,
+Kemeng Huang4,2, Guansheng Yang2 and Hesheng Wang1
+Abstract— Large-scale manipulation demonstrations are es-
+sential for learning robust visuomotor policies, yet real-world
+data collection is expensive and difficult to scale. Simula-
+tion offers a promising alternative, but physical and visual
+discrepancies can limit the transferability of synthetic data,
+particularly for manipulation with soft grippers. We present
+PhyVisGen, a physically and visually high-fidelity framework
+for scalable robotic manipulation data generation. On the
+physical side, PhyVisGen introduces an arm-gripper coupling
+method based on the Incremental Potential Contact (IPC),
+enabling high-fidelity soft contact throughout complete ma-
+nipulation trajectories. On the visual side, it combines real-
+scene reconstruction with real-time path tracing to generate
+visually realistic observations while preserving captured scene
+appearance. Quantitative evaluations demonstrate the physical
+and visual fidelity of PhyVisGen. Policies trained exclusively on
+synthetic manipulation demonstrations achieve 65–95% success
+across five real-robot tasks, without real-robot demonstration
+data or policy fine-tuning.
+I. INTRODUCTION
+Robot manipulation increasingly relies on imitation learn-
+ing [1], [2], which learns complex skills from expert demon-
+strations. However, achieving robust generalization typically
+requires large-scale data, while collecting demonstrations on
+physical robots is expensive and labor-intensive.
+To extend the manipulation data scale, a growing body of
+work [3], [4], [5], [6], [7], [8], [9] has explored simulation-
+based approaches for automatically generating robot ma-
+nipulation data. However, scaling the quantity of synthetic
+demonstrations alone does not ensure their fidelity to real-
+world manipulation. For contact-rich manipulation learning,
+discrepancies arise from both the physical interactions and
+the visual observations.
+On the physical side, recent manipulation simulators have
+incorporated deformable-body models, substantially improv-
+ing the simulation of deformable objects [10], [11], [12],
+[13], [14]. However, deformability in real robotic systems is
+not limited to manipulated objects: soft grippers also deform
+during contact, continuously changing the contact geometry
+and force transmission [15]. Incremental Potential Contact
+(IPC)-based methods [16], [17], [18] have enabled high-
+fidelity simulation of soft gripper-object interactions, but ex-
+isting approaches mainly focus on isolated grasp generation,
+*The first three authors contributed equally. Corresponding Author:
+Hesheng Wang, Guansheng Yang (e-mail: wanghesheng@sjtu.edu.cn).
+1School of Automation and Intelligent Sensing, Shanghai Jiao Tong
+University, Shanghai 200240, China.
+2Shenzhen Dizhou Technology Co., Ltd., Shenzhen, China
+3Global College, Shanghai Jiao Tong University, Shanghai, China.
+4The University of Hong Kong, Hong Kong, China.
+Physically high fidelity
+Visually high fidelity
+Sim2Real 
++
+=
+Gen
+Fig. 1.
+PhyVisGen generates the manipulation data with the interaction
+between the soft gripper and rigid and deformable objects. Our IPC-based
+simulation ensures the physically high fidelity of the manipulation trajectory
+(left), and the path-tracing-based rendering realizes the visually high fidelity
+of the rendered image (middle). The generated data finally enables the
+policy to be zero-shot deployed in the real world (right).
+execution, or stability evaluation. Extending high-fidelity
+soft contact from isolated grasps to complete manipulation
+trajectories remains underexplored.
+On the visual side, existing real-to-sim approaches [6],
+[19], [20] commonly rely on reconstructed scene representa-
+tions or image compositing to preserve the appearance of
+real environments. While these approaches can reproduce
+realistic backgrounds, rasterization or visual blending cannot
+faithfully model geometry-dependent light transport between
+simulated objects and the reconstructed scene, including
+shadows, reflections, and refractions. Ray-tracing-based ren-
+dering engine [21], [22] provides more physically consistent
+light interactions, but directly re-rendering reconstructed
+textured meshes introduces another challenge: their textures
+already encode the illumination observed during real-world
+capture, while the renderer applies additional illumination,
+leading to appearance shifts and lighting artifacts.
+To address the above challenges, we propose PhyVis-
+Gen, a physically and visually high-fidelity data generation
+framework for robot manipulation with soft grippers. The
+central goal of PhyVisGen is to reduce the sim-to-real gap
+from two complementary perspectives. On the physical side,
+we build on StiffGIPC [23] and propose an arm-gripper
+coupling method that integrates robot arm links, rigid grip-
+per components, and deformable fingertips within a unified
+incremental-potential formulation. This coupling allows con-
+tact forces on the soft fingertips to propagate back to the
+robot arm while jointly resolving robot motion, soft-gripper
+deformation, contact, friction, and object response. Thus,
+high-fidelity IPC-based soft-gripper simulation is extended
+from isolated grasping to complete manipulation trajectories.
+On the visual side, we develop a real-time path tracer
+arXiv:2609.25653v1  [cs.RO]  22 Sep 2026
+
+
+that efficiently simulates complex lighting and optical phe-
+nomena, such as shadows and transparency. More impor-
+tantly, our appearance-preserving shadow-receiving material
+enables reconstructed meshes to be directly placed into the
+simulator while preserving their original real-world appear-
+ance, while still supporting physically consistent shadow
+interactions with simulated objects. We further introduce a
+channel-wise 1D lookup table (LUT) calibration to compen-
+sate for rendering and tone-mapping discrepancies.
+We evaluate PhyVisGen on a range of soft-gripper ma-
+nipulation tasks. Experimental results show that visuomotor
+policies trained solely on data synthesized by PhyVisGen
+can be deployed to real robotic systems without any fine-
+tuning on real robot data and successfully perform multiple
+zero-shot sim-to-real manipulation tasks.
+In summary, the main contributions are as follows:
+• We propose PhyVisGen, a physically and visually high-
+fidelity data generation framework for robot manipula-
+tion with soft grippers.
+• We build a physically high-fidelity soft-gripper ma-
+nipulation system, realizing arm-gripper coupling and
+complete trajectory rollout.
+• We develop a visually high-fidelity renderer, which
+enables physically consistent lighting interactions with
+simulated objects while preserving the captured appear-
+ance of reconstructed real-world scenes.
+• We demonstrate that manipulation policies trained
+solely on synthetic data generated by PhyVisGen can
+achieve zero-shot sim-to-real deployment across multi-
+ple soft-gripper manipulation tasks.
+II. RELATED WORK
+A. Manipulation Data Generation
+Conventional data collection pipelines typically rely on
+teleoperation [1], [15], which provides high-quality real-
+world data but is difficult to scale across large numbers of
+tasks, objects, and scene configurations. To improve data
+efficiency, several works have explored simulation-based
+demonstration generation [3], [4], [5], [6]. Among them,
+MimicGen [4] decomposes a few source demonstrations into
+object-centric trajectories and adapts them to novel object
+locations, enabling large-scale demonstration synthesis. Re-
+lated efforts have further extended automated demonstration
+generation to bimanual manipulation, dexterous manipula-
+tion, and long-horizon task manipulation [7], [9], [8].
+However, most existing methods primarily emphasize the
+scale and diversity of generated trajectories, while rely-
+ing on simplified contact models or conventional rendering
+pipelines. As a result, the physical and visual discrepancies
+between simulation and reality can remain substantial, partic-
+ularly for manipulation involving soft grippers or deformable
+objects. Our work complements this line of research by fo-
+cusing on both the fidelity of physical interactions and visual
+observations during scalable manipulation data generation.
+B. Physical Simulation
+Deformable-object
+simulation
+has
+been
+increasingly
+adopted in robotic manipulation to capture interaction dy-
+namics that cannot be adequately represented by rigid-
+body models. Among existing approaches, Material Point
+Method (MPM)-based simulation has been widely explored
+for deformable-object manipulation [10], [11]. In parallel, Fi-
+nite Element Method (FEM)-based approaches provide high-
+fidelity modeling for deformable object manipulation [12],
+[13]. These works substantially improve the modeling and
+data generation capability for manipulation involving de-
+formable objects.
+Beyond deformable objects, soft grippers have been in-
+creasingly adopted in robotic manipulation for their im-
+proved contact adaptability and tolerance to geometric and
+pose uncertainties. Their deformation, however, fundamen-
+tally alters contact geometry and force transmission, placing
+higher demands on contact modeling and simulation fidelity.
+IPC-based methods [16], [17], [18] provide high-fidelity sim-
+ulation of contact and deformation between soft grippers and
+manipulated objects. IPC-GraspSim [16] explicitly models
+deformable fingertip–object interactions and demonstrates
+improved grasp prediction accuracy. GRIP [18] further accel-
+erates IPC-based simulation to enable large-scale generation
+of deformable–rigid coupled grasping data.
+Despite these advances, existing soft-gripper simulators
+are largely designed for isolated grasp generation, execution,
+or stability evaluation. Less attention has been paid to inte-
+grating the soft gripper with manipulation tasks. Our work in-
+corporates high-fidelity soft contact into robot manipulation
+processes and using the resulting high-fidelity trajectories for
+policy learning.
+C. Realistic Rendering
+Performing 3D reconstruction of real-world scenes and
+rendering interactive high-fidelity observations is critical for
+narrowing the gap between simulation and reality in robot
+policy learning. Existing methods fall into three categories.
+The first [24], [25], [26] employs 3DGS for reconstruction
+and rendering. The second [20] uses visual blending by
+compositing simulator-rendered results with background im-
+ages. While both of these approaches can faithfully preserve
+the background, methods relying solely on rasterization
+or visual blending cannot accurately model light visibility,
+shadow, reflection, and refraction between objects and the
+reconstructed background. The third [21], [22] leverages ray-
+tracing-based rendering engines. However, directly render-
+ing a reconstructed textured mesh introduces a fundamen-
+tal appearance inconsistency: the texture already encodes
+the illumination observed during real-world capture, while
+the rendering engine applies additional illumination during
+re-rendering, resulting in undesired reflections and other
+lighting artifacts. Moreover, even when such illumination-
+induced discrepancies are suppressed, the rendered images
+can still exhibit photometric differences from real camera
+observations due to discrepancies in camera response and
+image formation [27].
+
+
+Real2Sim
+Physically High-fidelity Simulation
+Visually High-fidelity Render
+Sim2Real
+Rigid
+Background
+Deformable
+Spring
+Fixed Joint
+Arm-Gripper
+Coupling
+Gripper Base
+Realtime Path
+Tracing Integration
+Physical Mesh
+Dual Mesh
+Mapping
+Demonstrations
+RGBs
+qpos
+action
+Imitation           Learning
+Shadow
+No Shadow
+Visual Mesh
+Appearance-preserving
+Shadow-receiving Material
+LUT
+calibration
+Fig. 2.
+Pipeline of PhyVisGen. The real2sim provides the textured reconstruction of the manipulated objects and background. The reconstructed objects
+are first fed into the IPC-based and arm-gripper-coupled simulation, which generates the physically high-fidelity trajectories. The trajectories are input into
+the rendering system, which adopts path tracing, appearance-preserved shadow-receiving material, dual mesh mapping, and LUT calibration to generate
+the visually high-fidelity observations. The demonstrations are used for imitation learning. The learned policies are zero-shot deployed in the real world.
+In contrast, our work combines reconstructed real-world
+scenes with physically based rendering while explicitly ad-
+dressing the appearance inconsistencies introduced when re-
+rendering captured textures, enabling more faithful visual
+interactions between simulated objects and reconstructed
+environments.
+III. METHOD
+In this section, we will first introduce the framework of
+our PhyVisGen, followed by the details of each component
+in the pipeline.
+A. Framework
+As illustrated in Fig. 2, PhyVisGen consists of real2sim
+reconstruction, physically and visually high-fidelity demon-
+stration generation, and zero-shot sim2real deployment. We
+first reconstruct sim-ready assets from the real-world setup.
+Our coupled arm-gripper simulator then generates complete
+manipulation trajectories with physically high fidelity. The
+physical states are transferred to a path-tracing pipeline to
+produce visually realistic observations while preserving the
+reconstructed scene appearance. The demonstrations are used
+to train visuomotor policies that are directly deployed on the
+real robot without real-world fine-tuning.
+B. Real2Sim
+We reconstruct the objects and the background separately.
+For rigid and deformable object reconstruction, we adopt
+PGSR [28] for opaque objects and TSGS [29] for transparent
+ones, and then further extract the reconstructed GS into
+watertight, simulation-ready mesh assets. For scene back-
+ground, we use Map-Anything [30] to reconstruct a metric-
+scale scene mesh from RGB-D inputs.
+C. Physically High-Fidelity Simulation
+1) Soft Gripper Simulation: We consider a manipula-
+tion system consisting of the rigid robotic arm, the soft
+gripper, and manipulated objects that can be either rigid
+or deformable. We explicitly model the soft gripper as
+a deformable body and resolve gripper–object interactions
+using a high-fidelity contact solver.
+To robustly simulate contact under large deformation, we
+adopt StiffGIPC [23] as the underlying contact formulation.
+StiffGIPC represents contact using barrier potentials together
+with continuous collision detection, preventing interpenetra-
+tion while maintaining stable contact under large deformation
+and sustained interaction.
+We represent each soft fingertip as a volumetric de-
+formable body discretized by a tetrahedral mesh. Its elastic
+response is modeled using the Stable Neo-Hookean constitu-
+tive model [31]. Material parameters are specified by Young’s
+modulus E and Poisson’s ratio ν for the soft fingertip. De-
+formable objects are modeled within the same deformable-
+body formulation when required. Rigid and near-rigid objects
+are modeled as Affine Body Dynamics (ABD) [32] governed
+by a stiff orthogonality energy that keeps the affine trans-
+formation close to a rotation. Therefore, rigid and fully de-
+formable bodies coexist in the same variational system under
+a single contact, friction, and coupling model. This represen-
+tation enables the simulator to handle both deformable-rigid
+and deformable-deformable interactions under a common
+contact model.
+For soft fingertips, the deformation state directly deter-
+mines the local contact interface. As the gripper closes, the
+fingertips deform around the object, increasing the effective
+contact area and redistributing contact forces.
+2) Arm-Gripper Coupling and Manipulation Rollout:
+High-fidelity contact simulation alone is insufficient for
+generating complete robot manipulation trajectories. During
+manipulation, the soft gripper must continuously interact
+with the robot arms, controller, manipulated objects, and sur-
+rounding environment. We therefore couple the deformable
+gripper simulation with the robotic arm to form a unified
+manipulation system.
+The arm and the soft gripper are mechanically connected
+through two levels of coupling. The finger base and the rigid
+
+
+gripper base are connected by a fixed joint. The rigid gripper
+base is further attached to the FEM soft fingertip through a
+set of springs. Therefore, the coupling energy is:
+Ecouple = Efixed + Estitch,
+(1)
+where the stitch-spring energy is
+Estitch = 1
+2kc
+X
+i∈A
+∥xi,t −ˆxi,t∥2
+2 ,
+(2)
+where A denotes the set of attachment vertices, xi,t is the
+position of a FEM vertex on the soft fingertip, and ˆxi,t is
+the corresponding attachment point carried by the simulated
+rigid gripper base. Since both sides of the springs participate
+in the same solution step, the coupling is bidirectional rather
+than a prescribed positional constraint.
+Based on the arm-gripper coupling, we formulate the
+complete manipulation simulation system. At each simula-
+tion step, all degrees of freedom are jointly advanced by
+minimizing a single incremental potential:
+Etotal = Einertia + Ebarrier + Efriction+
++EFEM + EABD + Ejoint(qref) + Ecouple.
+(3)
+Here, Einertia is the inertial term arising from implicit
+time integration. Ebarrier is the log-barrier contact potential,
+and Efriction is the smoothly mollified friction potential,
+together yielding intersection-free contact following the IPC
+formulation. EFEM models the elastic deformation of soft
+components, and EABD enforces the rigid-body behavior of
+the ABD-represented robot links. Ejoint models the actuated
+revolute and prismatic joints, where qref is the joint actuation
+target. Ecouple is the coupling energy.
+All degrees of freedom are advanced jointly by minimizing
+this single incremental potential at each time step. The
+reference joint trajectory qref enters the system only through
+Ejoint as quadratic drive potentials for the revolute and pris-
+matic joints, analogous to position drives in a PD controller.
+Importantly, qref is not imposed kinematically. Instead, the
+realized robot-link poses are jointly solved together with
+the deformable states and contact interactions. The resulting
+coupling is therefore fully bidirectional, allowing contact
+forces acting on the soft fingertips to propagate through the
+gripper structure back to the robot arm.
+This unified formulation is rolled out throughout the
+complete manipulation trajectory. Given the joint-reference
+sequence generated by the motion planner, the solver jointly
+resolves robot dynamics, soft-gripper deformation, contact
+evolution, friction, and object response at every timestep,
+thereby maintaining physically consistent coupling through-
+out the entire manipulation process.
+3) Motion Generation: Based on the physically high-
+fidelity simulator described above, we adopt a rule-based
+planning strategy to generate complete manipulation trajec-
+tories. Each manipulation task is represented as a sequence
+of key motion elements. The target poses and local manip-
+ulation trajectories in each motion element are transformed
+based on the object pose for generating the demonstration
+data under different object initial poses. The poses and tra-
+jectories are converted into robot commands through inverse
+kinematics and the robot motion planner.
+For each successful rollout, the simulator records the
+complete physical state. The resulting physical trajectories
+are:
+τphy = {qt, at, Tlink
+t
+, Trigid
+t
+, Xdeform
+t
+, Xgripper
+t
+}T
+t=1,
+(4)
+where t is the timestep, qt is the robot joint configuration, at
+executed action. Tlink
+t
+are the poses of the robot links, Trigid
+t
+represents the poses of rigid objects. Xdeform
+t
+and Xgripper
+t
+denote the vertex positions of deformable objects and soft
+grippers, respectively.
+D. Visual High-fidelity Rendering
+Based on physical trajectory τphy generated through physi-
+cal simulator, the frame-wise RGB observations are rendered.
+Specifically, for each timestep t, the recorded rigid-body
+poses and deformable vertex states are transferred to their
+corresponding visual representations, and the RGB observa-
+tion ot is generated as
+ot = R
+
+Tlink
+t
+, Trigid
+t
+, Xdeform
+t
+, Xgripper
+t
+; C, A
+
+,
+(5)
+where R(·) denotes the rendering pipeline, C represents
+the calibrated camera parameters, and A denotes the recon-
+structed visual assets obtained from the real2sim process.
+To improve visual fidelity and rendering efficiency, we
+design the rendering pipeline R(·) with four components:
+physics-to-render dual-mesh mapping for efficient simula-
+tion, a real-time path tracer for shadows and transparency,
+an appearance-preserving shadow-receiving material for pre-
+serving reconstructed background appearance, and channel-
+wise photometric calibration for reducing rendering-to-real
+discrepancies.
+1) Physics-to-Render
+Dual
+Mesh
+Mapping:
+Dense
+meshes
+are
+computationally
+expensive
+for
+physical
+simulation,
+while
+overly
+simplified
+meshes
+degrade
+rendering
+quality.
+Therefore,
+we
+adopt
+a
+dual-mesh
+representation consisting of a coarse mesh Mc for physical
+simulation and a fine mesh Mf for visual rendering. The two
+meshes share the same motion states, while independently
+satisfying the requirements of physics and rendering.
+For rigid objects, we use PAMO [33] to simplify the fine
+mesh Mf into a coarse mesh Mc for physical simulation,
+and directly transfer the simulated pose of Mc to Mf
+during rendering. For deformable objects, where vertex-wise
+deformations cannot be represented by a rigid pose, we
+obtain Mf by applying L-level Loop subdivision to Mc.
+Since Loop subdivision is linear, the complete subdivision
+process can be precomputed as a sparse mapping
+Wc→f = S(L) · · · S(1) ∈RNf ×Nc,
+(6)
+where Nc and Nf denote the numbers of vertices in Mc
+and Mf, respectively. At runtime, the visual vertex states
+are obtained by
+Xf
+t = Wc→fXc
+t,
+(7)
+
+
+where Xc
+t and Xf
+t are the coarse and fine vertex states at
+timestep t.
+2) Realtime Path Tracing Integration: We design a real-
+time rendering engine that achieves interactive frame rates
+while supporting full path tracing with multiple area lights
+and transparent materials. The physics engine provides rigid-
+body poses and soft-body vertex states at each timestep,
+while the rendering engine takes these dynamic states as
+input for path tracing. Our implementation achieves 24 FPS
+at 640 × 360 resolution with 32 SPP on a single NVIDIA
+RTX 5090.
+3) Appearance-preserving Shadow-receiving Material:
+Let Mbg denote the background mesh and Ctex its texture.
+Since Ctex already encodes illumination and shadows from
+real observations, directly treating it as albedo causes a sec-
+ond illumination. Conversely, an emissive material preserves
+the appearance but cannot receive shadows from newly
+introduced objects.
+To address this problem, we design an appearance-
+preserving shadow-receiving material that decouples back-
+ground appearance from shadow interaction. The background
+color is defined as
+Cbg = Ctex [1 −λs(1 −V )] ,
+(8)
+where V ∈[0, 1] denotes the light visibility at the back-
+ground surface point, estimated by ray tracing, and λs ∈
+[0, 1] controls the shadow strength. Specifically, λs = 0
+fully preserves the reconstructed appearance, while λs = 1
+applies the full estimated shadow attenuation. In practice,
+V
+is estimated by tracing shadow rays toward N light
+samples drawn from the emitters’ importance distribution and
+averaging their visibility.
+The material does not evaluate a BRDF or accumu-
+late direct, ambient, or indirect illumination. Instead, paths
+terminate upon hitting the background, ensuring that the
+reconstructed appearance is preserved while allowing objects
+to cast shadows onto the reconstructed geometry.
+4) LUT calibration: Although the appearance-preserving
+material preserves the reconstructed appearance, tone map-
+ping of the path tracer’s HDR output can introduce residual
+color and tone discrepancies with real observations. To ad-
+dress these photometric differences, we introduce a channel-
+wise 1D lookup table (LUT) calibration method.
+Given the reconstructed background texture Ctex, we ren-
+der the background mesh under the same camera viewpoint
+and scene configuration as the corresponding real observa-
+tion, obtaining Irender. We then establish dense pixel-wise
+correspondences between Irender and the corresponding real
+camera frame IGT. After converting both images from sRGB
+to linear RGB, the corresponding pixel intensities are used
+to learn a channel-wise photometric mapping:
+I(c)
+GT(p) = fc
+
+I(c)
+render(p)
+
+, I(c)
+render(p)
+= R(Ctex),
+(9)
+where p denotes an image pixel, c ∈{R, G, B} denotes
+the color channel, R(·) denotes the rendering operator, and
+fc : [0, 1] →[0, 1] is a channel-wise 256-point 1D LUT.
+To provide sufficient resolution for modeling the nonlinear
+photometric response in linear RGB space, we use 256 in-
+tensity bins, allowing the mapping to smoothly capture both
+low-light and highlight regions during appearance transfer.
+To suppress local fluctuations in the estimated response,
+we further enforce a non-decreasing constraint using the
+weighted Pool Adjacent Violators Algorithm (PAVA). The
+resulting channel-wise response functions are combined into
+a 256 × 3 LUT. During subsequent rendering, the calibrated
+LUT is applied independently to each color channel of the
+linear RGB output of every rendered frame, producing the
+final photometrically calibrated observations.
+E. Sim2Real
+The physically and visually high-fidelity demonstrations
+Dsim = {ϵi}N
+i=1 are used to train vision-based imitation
+learning policies πθ, where each demonstration consists
+of the observation-action pairs, i.e., ϵi = {(ot, at)}T
+t . In
+general, the training objective can be written as
+θ∗= arg min
+θ
+E(ot,at)∼Dsim
+
+LIL
+ πθ(ot), at
+
+,
+(10)
+where LIL denotes the policy-specific imitation learning
+objective. After training, the learned policy is directly de-
+ployed on the real robot, resulting in a zero-shot sim-to-real
+manipulation pipeline.
+IV. EXPERIMENTS
+In this section, we conduct extensive qualitative and quan-
+titative evaluations to answer three key questions:
+• Q1 (Physics Fidelity): Does our physically high-fidelity
+simulator accurately reproduce the deformation of the
+real soft gripper during manipulation tasks?
+• Q2 (Visual Fidelity): Does our visually high-fidelity
+renderer deliver rendering while accurately reproducing
+complex physical lighting and preserving background
+color fidelity?
+• Q3 (Sim-to-Real Transfer): Do the generated data en-
+able zero-shot real-world manipulation policy transfer?
+A. Robot Platform
+Our real-world experiments are conducted on a dual-
+arm robotic platform consisting of two Franka Research 3
+manipulators and a ZED camera for visual observation. Each
+arm is equipped with a soft gripper based on the UMI [15]
+gripper design. The grippers are fabricated from TPU using
+3D printing and mounted on the respective robot arms.
+B. Physical Fidelity
+1) Experiment Setting: We establish a shared coordinate
+system between the simulation and the real robot using
+AprilTag [34] markers to evaluate physical fidelity under
+aligned initial conditions and robot motions. We execute the
+same motion sequence generated by the motion-generation
+pipeline in both environments.
+To quantitatively evaluate the physical fidelity of compli-
+ant gripper deformation during manipulation, we introduce
+
+
+IsaacSim
+PhyVisGen (Ours)
+Simulation
+Compare
+LEGEND
+Simulation
+Real
+Intersection
+IsaacSim
+PhyVisGen (Ours)
+IsaacSim
+PhyVisGen (Ours)
+Beaker
+Flask
+Dish
+Fig. 3.
+The qualitative result of the physical fidelity evaluation. The top row demonstrates the observations and gripper masks from the simulation wrist
+camera in IsaacSim and our PhyVisGen. The bottom row shows the observations and gripper masks from the real-world wrist camera, as well as the
+comparison between the simulation and real-world gripper mask.
+TABLE I
+THE PHYSICAL FIDELITY COMPARISON
+Objects
+mIoU (%)
+Isaac Sim
+PhyVisGen (Ours)
+Beaker
+39.49
+83.34
+Flask
+45.16
+82.97
+Dish
+55.68
+84.70
+the gripper mask IoU metric. We use a wrist camera to cap-
+ture the soft gripper throughout the real-world manipulation
+process and place a virtual camera with the same calibrated
+pose in simulation to render the corresponding observations.
+For each pair of frames, we extract the gripper masks from
+the real and simulated images and compute their intersection-
+over-union (IoU) as
+IoUt =
+Mreal
+t
+∩Msim
+t
+
+Mreal
+t
+∪Msim
+t
+,
+(11)
+where Mreal
+t
+and Msim
+t
+denote the gripper masks in the real
+and simulated images at timestep t, respectively. We report
+the mean IoU (mIoU) over the manipulation trajectory with
+the soft gripper deformed as the physical-fidelity measure,
+which measures how closely the simulated gripper deforma-
+tion matches observations in the real world throughout the
+manipulation process.
+We compare our physically high-fidelity simulator against
+Isaac Sim [21]. While Isaac Sim provides general-purpose
+deformable-body simulation, it does not provide an off-the-
+shelf model for a deformable soft gripper integrated with a
+robotic articulation. Accordingly, in our Isaac Sim baseline,
+the gripper is modeled as rigid and remains undeformed
+during interaction. We conduct the fidelity evaluation on
+three fragile real-world objects, including the beaker, flask
+and dish, that require soft gripper during manipulation.
+2) Results: As shown in Table I, the soft-gripper defor-
+mation produced by our simulator achieves mIoUs over 80%
+across all three objects, indicating a close match to the real-
+world observations. In contrast, the mIoUs of Isaac Sim
+are below 60%, exhibiting a substantially larger discrepancy
+from the real system. These results demonstrate that our
+IPC-based soft-gripper simulator can accurately reproduce
+the deformation behavior of the real soft gripper, thereby
+enabling the generation of physically high-fidelity manipu-
+lation trajectories.
+The qualitative comparison in Fig. 3 further supports this
+observation. The overlap region between our simulated grip-
+per and the real gripper covers most of the gripper geometry,
+with only minor non-overlapping areas. In comparison, the
+Isaac Sim exhibits substantially larger mismatched regions.
+This qualitative result further demonstrates that our simulator
+faithfully reproduces real-world soft-gripper deformation.
+C. Visual Fidelity
+1) Experiment Setting: We use the same sim-real aligned
+data collected in Sec. IV-B. The RGB observations of the real
+ZED camera and RGB images rendered with the simulated
+camera are used for visual fidelity comparison. For the quan-
+titative comparison, we use PSNR, LPIPS, and SSIM over
+the images of the three objects as image quality metrics. Both
+the quantitative and qualitative comparisons are conducted
+against commonly used renderers, including SAPIEN [22]
+and Isaac Sim [21].
+2) Results: As shown in Table II, our rendering method
+achieves the highest overall similarity to real-world observa-
+tions. Even without LUT calibration, PhyVisGen achieves
+substantially better SSIM and LPIPS than both SAPIEN
+and Isaac Sim, indicating that our rendering pipeline can
+more faithfully reproduce the appearance of the real scene.
+Using the LUT calibration further improves the rendering
+consistency, achieving the best performance.
+Beyond these quantitative metrics, Fig. 5 provides qual-
+itative comparisons. We show the comparison of the three
+objects respectively. As shown in the red box, our method
+renders transparent objects with more accurate light and
+shadow effects than existing approaches. The yellow box
+demonstrates that the appearance-preserving material elim-
+inates secondary reflections caused by external illumination.
+Moreover, comparing Ours with Ours w/o LUT shows that
+the LUT calibration brings the rendered color tone closer to
+the real observation.
+
+
+(a) Weigh Beaker
+(b) Place Flask
+(c) Open Cabinet
+(d) Fold Towel
+(e) Dual Fold Towel
+Fig. 4.
+Sim-to-Real Policy Evaluation. The example real-world trials of the five soft-gripper manipulation tasks with the ACT policies trained by the
+demonstrations generated by PhyVisGen.
+IsaacSim
+SAPIEN
+Ours w/o
+LUT
+Ours
+Beaker
+Flask
+Dish
+Real
+Fig. 5.
+Visualization results of rendered and real images. The details
+are highlighted in red and yellow boxes.
+TABLE II
+RENDERING PERFORMANCE COMPARISON. BOLD AND UNDERLINED
+VALUES INDICATE THE BEST AND SECOND-BEST PERFORMANCE.
+PSNR ↑
+SSIM ↑
+LPIPS ↓
+SAPIEN
+18.45
+0.80
+0.25
+Isaac Sim
+16.40
+0.62
+0.40
+Ours w/o LUT
+17.31
+0.82
+0.22
+Ours
+23.87
+0.88
+0.17
+D. Sim-to-Real Policy Evaluation
+1) Experiment Setting: As shown in Fig. 4, we evaluate
+the sim-to-real capability of the data generated by PhyVis-
+Gen on five soft-gripper manipulation tasks beyond isolated
+grasping, including typical tasks needing the soft gripper and
+covering different object properties:
+• Weigh Beaker: The robot grasps the transparent beaker
+with the soft gripper and puts it on the scale.
+• Place Flask: The robot grasps the transparent flask with
+the soft gripper and puts it on the plate.
+• Open Cabinet: The robot uses the soft gripper to tightly
+grasp the cabinet handle and follows a curve to open it.
+• Fold Towel: The robot grasps one corner of the towel
+and folds it to the other corner.
+• Dual Fold Towel: The robot uses the dual arms to grasp
+TABLE III
+THE ZERO-SHOT REAL-WORLD SUCCESS RATE OF POLICIES
+Task
+Success Rate (%)
+Weigh Beaker
+90
+Place Flask
+95
+Open Cabinet
+80
+Fold Towel
+65
+Dual Fold Towel
+90
+both sides of the big towel and fold it.
+For each task, we collect synthetic demonstrations using
+the PhyVisGen pipeline. We use the synthetic dataset to train
+the imitation learning policy Action Chunking with Trans-
+formers (ACT) [1]. After training, each policy is deployed
+directly on the real robot without any additional adaptation.
+We evaluate policy performance using task success rate over
+20 real-world trials for each task.
+2) Results: Table III reports the zero-shot real-world
+transfer performance of ACT policies across five manipu-
+lation tasks. For the two tasks involving fragile transparent
+objects, our physical simulator captures the deformation
+behavior of the soft gripper around the objects, while the ren-
+dering pipeline reproduces the optical properties of transpar-
+ent objects together with their shadow interactions with the
+reconstructed background, resulting in success rates at least
+90%. For the Open Cabinet task, our simulator models the
+compliant deformation of the soft gripper around the cabinet
+handle, and the learned policy achieves an 80% real-world
+success rate. Our framework can also manipulate deformable
+objects, achieving success rates of 65% and 90% on the
+two corresponding tasks. Overall, these results demonstrate
+that PhyVisGen can generate physically and visually high-
+fidelity manipulation demonstrations that are sufficient for
+training imitation-learning policies entirely in simulation and
+directly deploying them on real robots without using real-
+world training data.
+V. CONCLUSION
+We presented PhyVisGen, a physically and visually high-
+fidelity data generation framework for robotic manipulation
+with soft grippers. PhyVisGen introduces an arm-gripper
+coupling method within an IPC-based simulation frame-
+work, extending high-fidelity soft-contact simulation from
+
+
+isolated grasps to complete manipulation trajectories. It fur-
+ther integrates reconstructed real-world assets with real-time
+path tracing and an appearance-preserving shadow-receiving
+material to generate visually realistic observations while
+preserving the captured scene appearance. By combining
+these physical and visual components, PhyVisGen enables
+scalable generation of complete manipulation demonstrations
+for visuomotor policy learning. Our experiments show that
+policies trained solely on the generated synthetic data can
+be directly deployed on real robots without real-world fine-
+tuning.
+These results demonstrate the feasibility of using high-
+fidelity synthetic data for zero-shot sim-to-real soft-gripper
+manipulation.
+REFERENCES
+[1] T. Z. Zhao, V. Kumar, S. Levine, and C. Finn, “Learning fine-grained
+bimanual manipulation with low-cost hardware,” Robotics: Science
+and Systems, 2023.
+[2] C. Chi, Z. Xu, S. Feng, E. Cousineau, Y. Du, B. Burchfiel, R. Tedrake,
+and S. Song, “Diffusion policy: Visuomotor policy learning via action
+diffusion,” The International Journal of Robotics Research, vol. 44,
+no. 10-11, pp. 1684–1704, 2025.
+[3] Y. Mu, T. Chen, Z. Chen, S. Peng, Z. Lan, Z. Gao, Z. Liang, Q. Yu,
+Y. Zou, M. Xu et al., “Robotwin: Dual-arm robot benchmark with
+generative digital twins,” in Proceedings of the Computer Vision and
+Pattern Recognition Conference, 2025, pp. 27 649–27 660.
+[4] A. Mandlekar, S. Nasiriany, B. Wen, I. Akinola, Y. Narang, L. Fan,
+Y. Zhu, and D. Fox, “Mimicgen: A data generation system for scalable
+robot learning using human demonstrations,” in Conference on Robot
+Learning, 2023, pp. 1820–1864.
+[5] M. Torne, A. Simeonov, Z. Li, A. Chan, T. Chen, A. Gupta, and
+P. Agrawal, “Reconciling reality through simulation: A real-to-sim-to-
+real approach for robust manipulation,” Robotics: Science and Systems,
+2024.
+[6] X. Han, J. Yu, M. Liu, Y. Chen, X. Lyu, Y. Tian, B. Wang, W. Zhang,
+W. Zhang, and J. Pang, “Re3sim: Generating high-fidelity simulation
+data via 3d-photorealistic real-to-sim for robotic manipulation,” in
+IEEE International Conference on Robotics and Automation, 2026.
+[7] Z. Jiang, Y. Xie, K. Lin, Z. Xu, W. Wan, A. Mandlekar, L. J. Fan,
+and Y. Zhu, “Dexmimicgen: Automated data generation for bimanual
+dexterous manipulation via imitation learning,” in IEEE International
+Conference on Robotics and Automation.
+IEEE, 2025, pp. 16 923–
+16 930.
+[8] C. R. Garrett, A. Mandlekar, B. Wen, and D. Fox, “Skillmimicgen:
+Automated demonstration generation for efficient skill learning and
+deployment,” in Conference on Robot Learning, 2025, pp. 2750–2790.
+[9] W. Wan, J. Fu, X. Yuan, Y. Zhu, and H. Su, “Lodestar: long-horizon
+dexterity via synthetic data augmentation from human demonstra-
+tions,” in Conference on Robot Learning, 2025.
+[10] Z. Huang, Y. Hu, T. Du, S. Zhou, H. Su, J. B. Tenenbaum, and
+C. Gan, “Plasticinelab: A soft-body manipulation benchmark with
+differentiable physics,” in International Conference on Learning Rep-
+resentations, 2021.
+[11] S. Chen, Y. Xu, C. Yu, L. Li, X. Ma, Z. Xu, and D. Hsu, “Daxbench:
+Benchmarking deformable object manipulation with differentiable
+physics,” in International Conference on Learning Representations,
+2023.
+[12] C. Saghour, D. Navarro-Alarc´on, P. Fraisse, and A. Cherubini, “Dual-
+arm shaping of soft objects in 3d based on visual servoing and online
+fem simulations,” International Journal of Robotics Research, 2024.
+[13] I. Huang, Y. Narang, C. Eppner, B. Sundaralingam, M. Macklin,
+R. Bajcsy, T. Hermans, and D. Fox, “Defgraspsim: Physics-based
+simulation of grasp outcomes for 3d deformable objects,” IEEE
+Robotics and Automation Letters, vol. 7, no. 3, pp. 6274–6281, 2022.
+[14] M. Moghani, M. Azizian, A. Garg, Y. Zhu, S. Huver, and A. Man-
+dlekar, “Softmimicgen: A data generation system for scalable robot
+learning in deformable object manipulation,” International Conference
+on Robotics and Automation, 2026.
+[15] C. Chi, Z. Xu, C. Pan, E. Cousineau, B. Burchfiel, S. Feng, R. Tedrake,
+and S. Song, “Universal manipulation interface: In-the-wild robot
+teaching without in-the-wild robots,” in Proceedings of Robotics:
+Science and Systems (RSS), 2024.
+[16] C. M. Kim, M. Danielczuk, I. Huang, and K. Goldberg, “Ipc-
+graspsim: Reducing the sim2real gap for parallel-jaw grasping with
+the incremental potential contact model,” in International Conference
+on Robotics and Automation.
+IEEE, 2022, pp. 6180–6187.
+[17] W. Du, S. Yao, X. Wang, Y. Xu, W. Xu, and C. Lu, “Intersection-
+free robot manipulation with soft-rigid coupled incremental potential
+contact,” IEEE Robotics and Automation Letters, vol. 9, no. 5, pp.
+4487–4494, 2024.
+[18] S. Ma, W. Du, C. Yu, Y. Jiang, Z. Zong, T. Xie, Y. Chen, Y. Yang,
+X. Han, and C. Jiang, “Grip: A general robotic incremental potential
+contact simulation dataset for unified deformable-rigid coupled grasp-
+ing,” in IEEE/RSJ International Conference on Intelligent Robots and
+Systems, 2025, pp. 6312–6319.
+[19] H. Zhao, C. Zeng, L. Zhuang, Y. Zhao, S. Xue, H. Wang, X. Zhao,
+Z. Li, K. Li, S. Huang et al., “High-fidelity simulated data generation
+for real-world zero-shot robotic manipulation learning with gaussian
+splatting,” arXiv preprint arXiv:2510.10637, 2025.
+[20] S. Zhao, J. Mao, W. Chow, Z. Shangguan, T. Shi, R. Xue, Y. Zheng,
+Y. Weng, Y. You, D. Seita et al., “Robot learning from any images,”
+in Conference on Robot Learning, 2025, pp. 4226–4245.
+[21] NVIDIA, “Isaac Sim.” [Online]. Available: https://github.com/isaac-
+sim/IsaacSim
+[22] F. Xiang, Y. Qin, K. Mo, Y. Xia, H. Zhu, F. Liu, M. Liu, H. Jiang,
+Y. Yuan, H. Wang, L. Yi, A. X. Chang, L. J. Guibas, and H. Su,
+“SAPIEN: A simulated part-based interactive environment,” in Pro-
+ceedings of the Computer Vision and Pattern Recognition Conference,
+2020.
+[23] K. Huang, X. Lu, H. Lin, T. Komura, and M. Li, “StiffGIPC:
+Advancing gpu ipc for stiff affine-deformable simulation,” ACM Trans.
+Graph., vol. 44, no. 3, pp. 1–20, 2025.
+[24] H. Lou, Y. Liu, Y. Pan, Y. Geng, J. Chen, W. Ma, C. Li, L. Wang,
+H. Feng, L. Shi et al., “Robo-gs: A physics consistent spatial-
+temporal model for robotic arm with hybrid representation,” in IEEE
+International Conference on Robotics and Automation.
+IEEE, 2025,
+pp. 15 379–15 386.
+[25] M. N. Qureshi, S. Garg, F. Yandun, D. Held, G. Kantor, and A. Silwal,
+“Splatsim: Zero-shot sim2real transfer of rgb manipulation policies us-
+ing gaussian splatting,” in IEEE International Conference on Robotics
+and Automation.
+IEEE, 2025, pp. 6502–6509.
+[26] Y. Wu, L. Pan, W. Wu, G. Wang, Y. Miao, F. Xu, and H. Wang, “Rl-
+gsbridge: 3d gaussian splatting based real2sim2real method for robotic
+manipulation learning,” in IEEE International Conference on Robotics
+and Automation.
+IEEE, 2025, pp. 192–198.
+[27] P. E. Debevec and J. Malik, “Recovering high dynamic range radiance
+maps from photographs,” in Proceedings of SIGGRAPH 97 ACM,
+1997, p. 369–378.
+[28] D. Chen, H. Li, W. Ye, Y. Wang, W. Xie, S. Zhai, N. Wang, H. Liu,
+H. Bao, and G. Zhang, “Pgsr: Planar-based gaussian splatting for
+efficient and high-fidelity surface reconstruction,” IEEE Transactions
+on Visualization and Computer Graphics, 2024.
+[29] M. Li, P. Pang, H. Fan, H. Huang, and Y. Yang, “Tsgs: Improving
+gaussian splatting for transparent surface reconstruction via normal
+and de-lighting priors,” arXiv preprint arXiv:2504.12799, 2025.
+[30] N. Keetha, N. M¨uller, J. Sch¨onberger, L. Porzi, Y. Zhang, T. Fischer,
+A. Knapitsch, D. Zauss, E. Weber, N. Antunes et al., “Mapanything:
+Universal feed-forward metric 3d reconstruction,” in 2026 Interna-
+tional Conference on 3D Vision (3DV).
+IEEE, 2026, pp. 499–509.
+[31] B. Smith, F. D. Goes, and T. Kim, “Stable neo-hookean flesh simula-
+tion,” ACM Transactions on Graphics (TOG), vol. 37, no. 2, pp. 1–15,
+2018.
+[32] L. Lan, D. M. Kaufman, M. Li, C. Jiang, and Y. Yang, “Affine
+body dynamics: fast, stable and intersection-free simulation of stiff
+materials,” ACM Transactions on Graphics, vol. 41, no. 4.
+[33] S. Oh, X. Yuan, X. Wei, R. Shi, F. Xiang, M. Liu, and H. Su, “Pamo:
+Parallel mesh optimization for intersection-free low-poly modeling on
+the gpu,” in Computer Graphics Forum.
+Wiley Online Library, 2025,
+p. e70267.
+[34] E. Olson, “AprilTag: A robust and flexible visual fiducial system,” in
+International Conference on Robotics and Automation.
+IEEE, 2011,
+pp. 3400–3407.

@@ -1,0 +1,1368 @@
+FedDRMan: Federated Subspace Guided Vision-Language-Action Policy
+Distillation for Non-IID Multi-Robot Manipulation
+Biprodip Pal1, Kaushik Roy2, Yanming Zhu1, Brendan Tidd2, Alan Wee-Chung Liew1∗, Peyman Moghadam2
+Abstract— Federated learning offers a natural way for mul-
+tiple robots to jointly improve manipulation policies without
+requiring centralized access to training demonstrations. How-
+ever, non-IID task and environment distributions can induce
+representation drift and mutually incompatible robot-policy
+updates, making naive parameter aggregation destructive. We
+present FedDRMan, a federated subspace-guided distillation
+framework for heterogeneous robot manipulation. At each
+communication round, the server model provides a frozen
+teacher for local behavior cloning, while low-rank multimodal
+subspace and action-distribution distillation preserve globally
+useful representation geometry and policy behavior. To ad-
+dress heterogeneous aggregation, FedDRMan groups clients
+by update compatibility and maintains a persistent model
+for each cluster. The server then spectrally rebalances each
+compatible aggregate to mitigate attenuation of weaker task-
+relevant robot-policy update directions. Extensive experiments
+on LIBERO across diverse non-IID settings, heterogeneity
+levels, client participation variation, together with ablations
+and aggregation analyses, show that FedDRMan substantially
+improves knowledge transfer and consistently outperforms
+strong federated baselines achieving a peak mean success rate
+of 80.7%, 11.6 percentage points above the strongest evaluated
+federated baseline.
+I. INTRODUCTION
+Vision-Language-Action
+(VLA)
+policies
+have
+shown
+strong progress in language-conditioned robot manipulation
+by combining visual perception, language understanding, and
+low-level control. Systems such as RT-2 and OpenVLA-OFT
+demonstrate strong performance in VLA-based manipulation
+and robotic control [1], [2]. This progress often depends
+on large and diverse robot datasets. For example, Open X-
+Embodiment combines demonstrations from multiple robot
+platforms, tasks, and environments to support cross-robot
+generalization [3]. However, most VLA training and adapta-
+tion methods still assume that demonstrations from different
+robots can be pooled for centralized training. This assump-
+tion limits multi-robot systems, where repeatedly transferring
+raw trajectories to a central server can be communication-
+intensive and may reveal sensitive information about users,
+robot locations, operating environments, or other deploy-
+ment details. Collaborative VLA training therefore requires
+mechanisms that exploit distributed robot experience without
+centralizing the underlying demonstrations.
+Federated learning (FL) provides a natural foundation for
+multi-robot collaboration: each robot learns from its local
+1 School of ICT, Griffith University, Australia
+2 CSIRO Robotics, CSIRO, Australia
+∗Corresponding author:a.liew@griffith.edu.au
+demonstrations and exchanges model updates rather than
+raw data, allowing distributed knowledge to contribute to a
+shared policy [4]. However, heterogeneous local data can
+cause robot-policy drift and ineffective aggregation
+[5].
+For example, one robot may observe mostly object-centric
+pick-and-place tasks, while another sees goal-conditioned
+tasks in different scenes and viewpoints, producing different
+multimodal feature distributions and update directions. Local
+behavior cloning (BC) can therefore shift visual, language,
+and proprioceptive representations toward client-specific fea-
+ture distributions, while aggregating incompatible updates
+may suppress task-relevant knowledge. Much existing work
+on heterogeneous FL, however, has focused primarily on
+unimodal or non-robotic settings [6]–[8].
+Knowledge distillation provides a mechanism for con-
+straining local policy drift by transferring knowledge across
+tasks and models in federated and continual learning set-
+tings [8], [9]. Recent work further highlights the impor-
+tance of representation geometry and subspace structure
+for knowledge transfer. Subspace-based distillation reduces
+the sensitivity of coordinate-wise feature matching in high-
+dimensional representations [10], while spectral model-
+merging methods identify task-relevant subspaces and pre-
+serve specialized update directions [11], [12].
+However, these techniques have mainly been developed for
+sequential learning or one-shot centralized model merging,
+rather than federated VLA training, where repeated local
+adaptation reshapes multimodal representations and hetero-
+geneous robot-policy updates must be periodically integrated.
+Recent methods such as FLAME [13] and FedVLA [14]
+demonstrate the feasibility of federated robotic manipulation.
+However, the coupled effects of multimodal representation
+drift during local adaptation and incompatible client updates
+during server aggregation remain insufficiently studied under
+task and environment heterogeneity.
+We introduce FedDRMan, Federated Subspace Guided
+Vision-Language-Action
+Policy
+Distillation
+for
+Non-IID
+Multi-Robot Manipulation. FedDRMan performs geometry-
+aware global-to-local knowledge transfer by distilling mul-
+timodal representation subspaces and action distributions
+from a compatible server policy during local adaptation. At
+the server, FedDRMan exploits client-update geometry to
+separate incompatible robot-policy updates and redistribute
+the strength of update directions within each compatible
+aggregate. Together, these mechanisms preserve transferable
+policy structure during local adaptation and heterogeneous
+knowledge integration at the server, without additional com-
+arXiv:2609.32239v1  [cs.RO]  26 Sep 2026
+
+
+munication. Our contributions are threefold:
+• We formulate federated multimodal subspace distillation
+for non-IID manipulation, regularizing representation
+geometry and action distributions against a frozen server
+policy during local behavior cloning.
+• We introduce compatibility-aware clustered spectral ag-
+gregation for heterogeneous federation, grouping in-
+compatible robot-policy updates before full-model ag-
+gregation and spectrally rebalancing each compatible
+aggregate to preserve weaker task-relevant directions
+without additional communication.
+• We demonstrate strong and consistent gains across mul-
+tiple LIBERO non-IID settings, including same-suite
+and cross-suite federation and varying degrees of task
+and environment heterogeneity, together with extensive
+ablation and aggregation analyses.
+II. RELATED WORK
+Prior non-IID FL methods mitigate heterogeneity through
+proximal regularization, distribution-aware collaboration, or
+decoupled personalization
+[5], [6], [15], but are not tai-
+lored to multimodal robot manipulation policies. Federated
+robotics has previously been studied for object grasping,
+swarm navigation, multi-robot spatio-temporal prediction,
+and warehouse task scheduling [16]–[19]. Federated rein-
+forcement learning has enabled robots to collaboratively
+learn navigation policies, while Flow-FL studies feder-
+ated spatio-temporal prediction from continuously collected
+multi-robot data [18], [19]. However, their learning ob-
+jectives remain task-specific and generally do not address
+end-to-end multimodal, language-conditioned manipulation
+or representation drift across heterogeneous robot policies.
+FLAME subsequently established a federated manipulation
+benchmark and showed that standard FL baselines can
+struggle on harder manipulation tasks, but is primarily
+a benchmark rather than a heterogeneity-specific learning
+method [13]. FedVLA directly addresses federated VLA
+learning through instruction-oriented scene parsing, a dual-
+gating mixture-of-experts (MoE), and expert-driven aggrega-
+tion [14]. Its heterogeneity handling is coupled to MoE ex-
+pert activation and expert-specific aggregation, whereas Fed-
+DRMan targets multimodal representation drift and incom-
+patible client-update geometry without requiring an expert-
+routed policy architecture.
+Representation-preserving distillation has been studied in
+lifelong robot learning, including multimodal feature align-
+ment in M2Distill and low-rank subspace preservation in
+SPREAD [9], [10]. Related model-merging work studies
+task-relevant spectral structure and preservation of weaker
+update directions [11], [12]. These methods primarily target
+sequential learning or one-shot approach. FedDRMan builds
+on these geometric principles but addresses a distinct feder-
+ated problem, jointly controlling multimodal representation
+drift during local adaptation and destructive interference dur-
+ing aggregation through server-guided subspace distillation,
+compatibility-aware clustering, and spectral rebalancing.
+III. METHOD
+A. Problem Formulation
+We consider a federation of K robots operating in a
+shared language-conditioned manipulation setting formulated
+as a finite-horizon Markov decision process (MDP) M =
+(S,A,T ,H,µ0,φ), where S is the state space, A is the con-
+tinuous action space, T : S × A →S denotes the transition
+dynamics, H is the episode horizon, µ0 is the initial-state
+distribution, and φ : S →{0,1} is the sparse goal predicate
+indicating task success during closed-loop evaluation. At
+timestep t, the robot receives a multimodal observation ot of
+the underlying state st ∈S, executes an action at ∈A, and
+transitions to st+1 = T (st,at). Each client k interacts with a
+local task distribution and owns a private demonstration set
+Dk = {τk
+i }nk
+i=1,
+τk
+i = {(ok
+i,t,Dk
+i ,ak
+i,t)}Ti
+t=1,
+Ti ≤H.
+(1)
+where Dk
+i is the language instruction, ak
+i,t ∈A is the ex-
+pert action, and ok
+i,t contains agent-view RGB, wrist RGB,
+joint state, and gripper state. Following LIBERO [20], each
+trajectory is collected from an expert policy and provides
+supervision for a language-conditioned Gaussian mixture
+model (GMM) policy πθ(a | o,D).
+The local distributions Dk are assumed to be non-IID:
+different robots may observe different task families, demon-
+strations, and state-action distributions. Let θ r
+g denote the
+server model at communication round r. Each participating
+client initializes its local policy from θ r
+g and optimizes using
+non-shared local Dk. The overall federated objective is,
+min
+θ
+K
+∑
+k=1
+pk E(o,D,a)∼Dk[Lk(θ;o,D,a)],
+pk =
+nk
+∑j n j
+,
+(2)
+Under non-IID Dk, independent local adaptation can in-
+duce robot-specific representation and policy drift, such that
+direct parameter averaging may yield a global policy that
+poorly preserves behaviors across heterogeneous tasks and
+environments. FedDRMan therefore regularizes each local
+policy against the server model to preserve modality-specific
+subspace geometry, while structuring how heterogeneous
+updates are subsequently merged.
+B. Federated Subspace-Guided Global-to-Local Distillation
+Figure 1 illustrates our approach. At round r, let θ r
+g denote
+the server model assigned to client k. Client k creates a frozen
+teacher ¯θ r
+g and a trainable student θ r,0
+k
+from this model. The
+teacher remains fixed during the local updates of round r and
+is refreshed after server aggregation:
+¯θ r
+g ←θ r
+g,
+θ r,0
+k
+←θ r
+g,
+∇¯θrg = 0.
+(3)
+Each client then optimizes the local policy on its private
+demonstrations using BC, regularized by representation and
+action-level distillation terms. For readability, we write θk
+for the current local student parameters θ r,ℓ
+k
+within the local
+loss terms. Local adaptation to the expert demonstrations is
+driven by the standard BC objective
+LBC(θk) = −E(o,D,a)∼Dk[logπθk(a | o,D)].
+(4)
+
+
+Fig. 1: Overview of FedDRMan. Multimodal subspace distillation limits representation drift during local adaptation, while
+compatible-update aggregation and spectral rebalancing mitigates destructive aggregation of conflicting non-IID robot-policy
+updates and preserve task-relevant update directions.
+Under non-IID local adaptation, BC can reshape modality-
+specific feature geometry away from the shared server rep-
+resentation. Motivated by representation-preserving distilla-
+tion [8], [10], we preserve the dominant representation sub-
+spaces of the server policy. The leading singular directions
+capture principal representation structure, allowing shared
+task-relevant geometry to be constrained while retaining
+lower-energy directions for robot-specific adaptation.
+For
+modality
+m
+∈
+M,
+with
+M
+=
+{text,agent,wrist,joint,gripper},
+the
+batch-time
+encoder
+features are stacked into Fx
+m ∈Rdm×N, N = BT, where
+x ∈{g,k} denotes the server teacher or local student,
+respectively. The reduced singular value decomposition
+(SVD) and rank-rm orthogonal projector are
+Fx
+m = Ux
+mΣx
+m(V x
+m)⊤,
+Px
+rm = Ux
+m,rm(Ux
+m,rm)⊤.
+(5)
+The projected representation is therefore Px
+rmFx
+m. A small pre-
+SVD perturbation is applied for numerical stability when the
+feature matrix is nearly degenerate.
+We then define a symmetric subspace distillation loss for
+each modality m:
+Lm
+sub = ∥Pg
+rmFg
+m −Pk
+rmFk
+m∥2
+F +∥Pg
+rmFk
+m −Pk
+rmFg
+m∥2
+F.
+(6)
+The first term aligns feature content retained by the teacher
+and student subspaces, while the second enforces symmetric
+cross-projection consistency. Together, they preserve domi-
+nant representation geometry without requiring coordinate-
+wise feature correspondence.
+Representation alignment alone does not guarantee consis-
+tent control behavior. We therefore retain the teacher’s action
+distribution by sampling ˆa ∼π ¯θrg(· | o,D) and using
+Lact = E ˆa∼π ¯θrg
+h
+logπ ¯θrg( ˆa | o,D)−logπθk( ˆa | o,D)
+i
+.
+(7)
+Log probabilities are clamped for numerical stability. The
+resulting objective balances adaptation to local demonstra-
+tions with preservation of useful server representation and
+policy structure:
+Lk = LBC + ∑
+m∈M
+λmLm
+sub +λactLact.
+(8)
+For local optimization step ℓ, the student parameters are
+updated as
+θ r,ℓ+1
+k
+= θ r,ℓ
+k −η∇θr,ℓ
+k Lk.
+(9)
+Gradients are propagated only through the local student,
+while the server teacher is held fixed. After the final local
+optimization step ℓfinal, we denote the locally trained model
+uploaded to the server by θ r
+k = θ r,ℓfinal
+k
+. Thus, BC drives robot-
+specific adaptation, subspace distillation constrains represen-
+tation drift, and action distillation preserves the behavioral
+policy inherited from the server model.
+C. Compatible Spectral Federated Aggregation
+After local training, robots upload their locally trained
+models to the server. FedDRMan first groups clients by
+update compatibility, aggregates complete models within
+each cluster, and spectrally rebalances the resulting cluster
+updates. This prevents incompatible non-IID updates from
+being directly aggregated and helps preserve task-relevant
+update directions.
+1) Compatible Update Aggregation (CUA): Cross-suite
+heterogeneity in tasks, environments, and multimodal obser-
+vation distributions can induce incompatible robot-policy up-
+date directions, making a single global consensus restrictive.
+FedDRMan therefore maintains C persistent cluster models
+{θ r
+s }C
+s=1 at the server, while keeping the local objective in
+Eq. (8) unchanged. All clients share the common initial-
+ization θ 0. Compatibility between robot-policy updates is
+
+
+characterized by the accumulated update from the common
+initialization,
+∆r
+k = θ r
+k −θ 0,
+vr
+k = vec(∆r
+k|Ω),
+Sr
+i j =
+(vr
+i)⊤vr
+j
+∥vr
+i∥2∥vr
+j∥2
+,
+(10)
+where Ωdenotes a selected shared submodule of the
+policy and Sr
+ij is the similarity between robot-policy update
+representations. The accumulated update is used only for
+clustering, as it provides a more stable compatibility sig-
+nal than the diminishing incremental per-round update, as
+analyzed in Sec. V-G. Complete local models are used for
+aggregation.
+Let S(G,G′) denote the mean of Sr
+i j over distinct client
+pairs i ∈G, j ∈G′, with i̸ = j. Clients are partitioned
+into C non-empty groups by maximizing mean intra-cluster
+similarity while minimizing mean inter-cluster similarity:
+{Gr
+s}C
+s=1 = argmax
+{Gs}∈ΠC
+"
+1
+C ∑
+s
+S(Gs,Gs)−
+C
+2
+−1
+∑
+s<s′
+S(Gs,Gs′)
+#
+,
+(11)
+where Gr
+s ⊆{1,...,K} denotes the set of clients assigned
+to cluster s at round r, and ΠC denotes the set of all partitions
+into exactly C non-empty groups.
+Within cluster s, the sample weights are renormalized as
+epk =
+nk
+∑j∈Grs nj , and the complete local models are aggregated:
+θ r+1
+avg,s = ∑
+k∈Grs
+epkθ r
+k,
+∆r
+s = θ r+1
+avg,s −θ r
+s .
+(12)
+2) Spectral Rebalancing (SRB):
+Direct averaging can
+attenuate weaker but useful directions in ∆r
+s. FedDRMan
+applies SRB to eligible two-dimensional weight matrices,
+motivated by spectral model-merging methods
+[11], [12].
+Unlike the original one-shot merging setting, here, SRB
+serves as a spectral redistribution mechanism for federated
+updates.
+Let ∆r
+s,b denote an eligible two-dimensional parameter
+block b of ∆r
+s. Its singular value decomposition is
+∆r
+s,b = Us,bΣs,bV ⊤
+s,b,
+Σs,b = diag(σ1,...,σR),
+(13)
+where the round superscript on the SVD factors is omitted
+for readability. The cumulative singular-value threshold β ∈
+[0,1] determines
+c⋆= min
+(
+i : ∑i
+j=1 σ j
+∑R
+j=1 σ j
+≥β
+)
+,
+eσi = max(σi,σc⋆). (14)
+The rebalanced matrix update is then e∆r
+s,b = Us,beΣs,bV ⊤
+s,b.
+Parameter blocks that are not eligible for SRB retain their
+original within-cluster averaged updates. The next persistent
+cluster model is therefore θ r+1
+s
+= θ r
+s + e∆r
+s.
+In practice, SRB is applied to eligible linear weight
+matrices in the image spatial projector, language and propri-
+oceptive encoders, temporal transformer, and policy head; all
+remaining parameters retain their within-cluster averaged up-
+dates. The server tracks client-to-cluster assignments across
+rounds. At the beginning of round r +1, each client down-
+loads the server model associated with its assigned cluster
+to initialize local training. Both clustering and SRB are
+performed entirely on the server and introduce no additional
+client-server model payload relative to FedAvg.
+3) Theoretical Interpretation of FedDRMan Aggregation:
+Prior model-merging analysis shows that averaging heteroge-
+neous task-specific directions can attenuate unique informa-
+tion relative to shared directions [12]. A similar effect arises
+in weighted federated aggregation. For k ∈Gr
+s, write
+δ r
+k = θ r
+k −θ r
+s = Cr
+s +Ur
+k,
+∆r
+s = ∑
+k∈Grs
+epkδ r
+k,
+(15)
+where Cr
+s is a component shared within cluster s and Ur
+k cap-
+tures robot-specific directions. Since ∑k epk = 1, the unique
+component of the aggregate is ∑k epkUr
+k. If the Ur
+k are pairwise
+orthogonal and ∥Ur
+k∥F ≤B, then
+∑
+k
+epkUr
+k
+
+2
+F
+= ∑
+k
+ep2
+k∥Ur
+k∥2
+F ≤
+B2
+Keff,s
+,
+Keff,s =
+ 
+∑
+k
+ep2
+k
+!−1
+.
+(16)
+Hence, the squared magnitude of the aggregated robot-
+specific component can decay as O(K−1
+eff,s), corresponding to
+an O(K−1/2
+eff,s ) decay in its Frobenius norm. More generally,
+∑
+k
+epkUr
+k
+
+2
+F
+= ∑
+k
+ep2
+k∥Ur
+k∥2
+F +2∑
+i<j
+epi epj⟨Ur
+i ,Ur
+j ⟩F.
+(17)
+Thus, positive within-cluster alignment preserves coherent
+update energy through the cross terms. CUA is designed
+to promote such compatibility before aggregation, while
+SRB subsequently strengthens weaker spectral directions that
+remain attenuated.
+IV. EXPERIMENTS
+1) Datasets and Non-IID Setup: We evaluate on three
+standard LIBERO suites: LIBERO-Spatial, LIBERO-Object,
+and
+LIBERO-Goal.
+Each
+suite
+contains
+10
+language-
+conditioned manipulation tasks with 50 expert demonstra-
+tions per task. After sequence construction, the three suites
+contain approximately 62,250, 74,507, and 63,728 training
+sequences, respectively. Each training sample comprises two
+RGB observations, a language instruction, proprioceptive
+state, and a 7-D continuous action sequence.
+a) Same-suite task non-IID: For each suite, we con-
+struct a separate non-IID federation with K=5 clients. Fol-
+lowing standard FL practice [21], task sequences are parti-
+tioned across clients using a Dirichlet distribution with con-
+centration parameter α. We use α=0.5 by default, inducing
+both task and quantity skew while retaining coverage of the
+full suite across the federation. The same partition is used for
+all methods within a suite to ensure controlled comparison.
+For the client-participation analysis, all demonstrations are
+repartitioned for each federation size using the α=0.5 set-
+ting. This setting isolates intra-suite task heterogeneity, since
+all clients operate within the same LIBERO suite but observe
+different non-IID subsets of its tasks and demonstrations.
+
+
+b) Cross-suite task and environment non-IID: To study
+stronger heterogeneity, we additionally construct federations
+across different LIBERO suites. For pairwise settings Object-
+Goal, Object-Spatial, and Goal-Spatial we use K=4 clients,
+with two clients from each participating suite. For the three-
+suite Object-Goal-Spatial setting, we use K=6 clients, with
+two clients per suite. For the main cross-suite experiments,
+we reuse client shards from the original 5-client (α=0.5)
+partitions; for the client-participation analysis, all demon-
+strations are repartitioned for each federation size using the
+same α=0.5 setting. Consequently, cross-suite federation
+introduces heterogeneity at two levels: clients remain non-
+IID within each suite, while clients from different suites ad-
+ditionally differ in task families, objects, environments, and
+state-action distributions. This setting therefore represents a
+substantially harder form of task and environment-level non-
+IID manipulation learning.
+A. Implementation Details and Baselines
+a) Policy Architecture: For all methods, we adopt the
+LIBERO RESNET-T policy architecture [20], which uses
+ResNet visual encoders with FiLM language conditioning
+and pretrained BERT embeddings, followed by a tempo-
+ral Transformer and a GMM action head that models a
+multimodal distribution over continuous actions. We select
+RESNET-T as a benchmark-standard backbone, as LIBERO
+found it to provide strong overall performance across its
+evaluated policy architectures. Its comparatively compact
+parameterization is also well suited to FL, where repeatedly
+communicating large contemporary VLA backbones would
+impose substantial communication overhead. The same ar-
+chitecture is used for all clients and baselines. For Fed-
+DRMan clustering, the temporal Transformer serves as the
+submodule Ωfor computing client-update similarity, while
+complete local models are aggregated.
+b) Training and Evaluation Protocol: Following the
+standard FL convention of evaluating the learned shared
+model [4], we evaluate each federated policy on all 10
+tasks of the corresponding LIBERO suite using closed-loop
+MuJoCo rollouts with a 250-step horizon. Task success rate
+(SR) is the primary metric. We evaluate aggregated models
+every 5 communication rounds using 10 rollouts per task for
+checkpoint selection, and report final performance using 20
+randomized rollouts per task. All results are averaged over
+three seeds.
+c) Hyperparameters: All FL methods are trained with
+1 local epoch per FL round and a batch size of 32 for 50
+communication rounds. We use AdamW with a learning rate
+of 10−4, weight decay of 10−4, and gradient clipping at 100.
+The same policy architecture, optimizer, client partition, and
+local training budget are used across federated baselines. We
+use C = 1 for same-suite task non-IID federation (all clients
+belong to one group), C = 2 for pairwise cross-suite settings,
+and C = 3 for the three-suite setting. Empirically, for the
+subspace loss, we use a fixed rank of 48, a distillation weight
+of 1.0, and feature noise with standard deviation 0.01 for
+SVD stabilization. Unless specified otherwise, the modality
+weights are set to 0.03 for language, vision, and propriocep-
+tion, and 0.005 for action distillation. Suite-specific variants
+are treated as hyperparameter ablations rather than separate
+methods. We set β = 0.90, 0.85, and 0.90 for same-suite
+Object, Goal, and Spatial, respectively, and β = 0.90 for all
+pairwise cross-suite, and β = 0.85 for three suite settings.
+d) Baselines: Baselines include: (i) CENTRALIZED,
+where BC is performed on the pooled training data from all
+clients; (ii) LOCAL, where each client trains independently
+using only its local data without knowledge sharing; (iii)
+FEDAVG [4], the standard FL baseline that performs sample-
+weighted parameter averaging of locally trained models;
+(iv) FEDPROX [5], extends FedAvg with a proximal reg-
+ularization term to limit model drift, using µ=10−3; (v)
+FEDKD [8], a federated generic mutual-distillation frame-
+work, adapted to our continuous-action LIBERO policies.
+We implement the FedKD-A variant (adaptive mutual distil-
+lation). (vi) FEDVLA [14], we implement its Dual-Gating
+mixture-of-experts (MoE) trunk and Expert-Driven Aggre-
+gation as specified, and train with our standard GMM neg-
+ative log-likelihood (NLL) objective rather than the original
+Huber loss, since Huber-on-the-mean leaves action variance
+untrained while inference samples from the full distribution.
+All methods are evaluated using the same non-IID client
+partitions and closed-loop evaluation protocol.
+V. RESULTS
+A. Task Non-IID Performance
+Table I compares methods under the same-suite task non-
+IID setting. In Local BC, no shared policy is learned;
+thus, all client policies are evaluated on the full suite task
+set and their average SR is reported. Most collaborative
+training methods outperform Local BC, demonstrating the
+benefit of leveraging knowledge across participating clients.
+FedDRMan achieves the highest SR on LIBERO-Object and
+LIBERO-Spatial, outperforming the strongest federated base-
+line by 12.8 pp (88.0% vs. 75.2%) and 20.0 pp (82.0% vs.
+62.0%), respectively. On LIBERO-Goal, FedDRMan reaches
+72.0%, matching FedProx and exceeding FedAvg by 2.0
+pp. Compared with FedKD, FedDRMan improves Object,
+Goal, and Spatial by 68.0, 16.0, and 38.0 pp, respectively,
+suggesting that the evaluated distillation baseline alone is
+insufficient under strong client heterogeneity. Overall, Fed-
+DRMan achieves a mean SR of 80.7%, compared with
+69.1% for FedAvg, while retaining the same communication
+payload. FedDRMan attains its best SR at round 40 across
+all three suites, within the common 50-round budget. These
+results highlight the limitations of conventional aggregation
+and non-IID mitigation strategies even under same-suite task
+heterogeneity, while supporting the complementary roles of
+multimodal subspace distillation and structured aggregation.
+B. Task and Environment Non-IID Performance
+Table II shows that cross-suite federation is substantially
+more difficult for conventional federated methods than the
+in-suite setting, with FedAvg, FedProx, and FedKD often
+attaining very low SR when clients specialize in different
+
+
+TABLE I: Experimental results of same-suite task non-IID(α=0.5) federated evaluation across three different LIBERO task
+suites. All metrics are measured based on SR(%). Bold denotes the best federated result.
+Method
+Object
+Goal
+Spatial
+Mean
+SR (%) ↑
+Comm.
+MB / Params
+SR (%) ↑
+Best Round
+SR (%) ↑
+Best Round
+SR (%) ↑
+Best Round
+Centralized BC
+56.0±2.0
+35
+60.4±2.0
+50
+46.0±4.0
+50
+54.1
+- / -
+Local BC
+27.2±2.0
+50
+39.6±4.0
+50
+37.2±3.0
+50
+34.7
+- / -
+FedAvg [4]
+75.2±3.0
+50
+70.0±2.0
+25
+62.0±3.0
+25
+69.1
+21.53 / 5.38M
+FedProx [5]
+70.8±2.0
+40
+72.0±2.0
+35
+52.0±4.0
+35
+64.9
+21.53 / 5.38M
+FedKD [8]
+20.0±2.0
+40
+56.0±4.0
+35
+44.0±3.0
+25
+40.0
+21.53 / 5.38M
+FedVLA [14]
+60.0±4.0
+40
+65.0±4.0
+40
+30.0±3.0
+35
+51.7
+3.70 / 0.925M
+FedDRMan (ours)
+88.0±3.0
+40
+72.0±3.0
+40
+82.0±4.0
+40
+80.67
+21.53 / 5.38M
+suites. In Local BC, no shared policy is learned; thus,
+each client policy is evaluated on the full task set of its
+corresponding suite, and the average SR across clients from
+that suite is reported. In the Object-Goal setting, FedDRMan
+reaches 85.0%/70.0%, outperforming FedAvg by 67.0/70.0
+pp and FedProx by 69.0/60.0 pp. A similar trend appears for
+Object-Spatial, where FedDRMan achieves 95.0% on Object
+and 45.0% on Spatial, compared with only 18.0%/0.0%
+for FedAvg. FedDRMan also outperforms FedVLA in both
+Object–Goal and Object-Spatial settings. These large gaps
+suggest that conventional aggregation is particularly vulner-
+able to incompatible cross-suite updates, which FedDRMan
+handles more effectively. The Goal-Spatial setting remains
+more challenging: FedDRMan achieves the strongest Goal
+performance, while remaining competitive on Spatial. Under
+the hardest three-suite federation, performance generally de-
+creases, with the largest degradation on Goal, indicating that
+increasing suite heterogeneity creates stronger interference.
+Nevertheless, FedDRMan retains markedly higher SR than
+FedAvg and FedProx, supporting the complementary roles
+of local subspace distillation, compatibility-aware clustering,
+and spectral rebalancing for cross-suite knowledge integra-
+tion.
+C. Task Specific Success
+Figure 2 further compares the per-task performance, with
+success rates normalized to [0,1] for visualization. We
+compare against FedAvg, the strongest competing feder-
+ated baseline in the same-suite setting, as cross-suite gains
+are already substantially larger. FedDRMan outperforms or
+matches FedAvg on 23 of the 30 tasks across the three suites.
+On LIBERO-Object, notable gains are observed for Cream
+Cheese (+48 pp), Butter (+36 pp), and Ketchup (+20 pp)
+relative to FedAvg. On LIBERO-Goal, FedDRMan improves
+Bowl on Plate by 24 pp, Wine Bottle on Cabinet by 28
+pp, and Push Plate by 28 pp, although FedAvg remains
+stronger on a few tasks. The advantage is most pronounced
+on LIBERO-Spatial, where FedDRMan raises both On Stove
+and Next to Plate from 0% to 100%, while improving In
+Top Drawer from FedAvg’s 0% to 100% (+100 pp). These
+results indicate that FedDRMan particularly improves task-
+specific manipulation behaviours that are poorly preserved
+by conventional federated aggregation.
+D. Non-IID Sensitivity
+We further evaluate FedDRMan under different degrees of
+client heterogeneity by varying the Dirichlet concentration
+parameter α, where smaller values indicate stronger non-
+IID partitions. As shown in Fig. 3, performance generally
+improves as α increases. In the cross-suite Object–Goal
+setting, Object SR rises from roughly 55% at α=0.01 to the
+75–85% range for α≥0.1, while Goal improves substantially,
+from near 0% at α=0.01 to approximately 70–75% for less
+heterogeneous settings. A similar trend appears in the same-
+suite task non-IID setting, where both Object and Goal im-
+prove as heterogeneity decreases, although not monotonically
+at larger α; Goal is particularly sensitive to severe non-
+IIDness, with SR dropping to nearly 0% at α=0.01.
+The trend is not strictly monotonic; for example, Object
+exhibits a small drop at larger α in some runs. Nevertheless,
+the overall pattern is consistent across the sweeps: the most
+heterogeneous partitions lead to markedly lower success
+rates, whereas moderate-to-high α values yield substantially
+stronger performance. This confirms that severe statistical
+heterogeneity remains a major challenge for federated ma-
+nipulation and highlights the importance of FedDRMan’s
+representation-preserving and clustered aggregation mecha-
+Alphabet Soup
+BBQ Sauce
+Butter
+Choc. Pudding
+Cream Cheese
+Ketchup
+Milk
+Orange Juice
+Salad Dressing
+Tomato Sauce
+0.2
+0.4
+0.6
+0.8
+1.0
+LIBERO-Object
+Open Drawer
+Drawer+Bowl
+Push Plate
+Bowl→Plate
+Bowl→Stove
+Bowl→Cab.Top
+CreamCheese→Bowl
+Wine→Rack
+Wine→Cabinet
+Turn On Stove
+0.2
+0.4
+0.6
+0.8
+1.0
+LIBERO-Goal
+Btwn Plate&Ramekin
+Next Ramekin
+Table Center
+On CookieBox
+In TopDrawer
+On Ramekin
+Next CookieBox
+On Stove
+Next Plate
+On Cabinet
+0.2
+0.4
+0.6
+0.8
+1.0
+LIBERO-Spatial
+FedAvg
+FedDRMan (ours)
+Fig. 2: Task sensitivity analysis across different suites.
+0.01
+0.1
+1.0
+Dirichlet concentration α
+0
+50
+100
+SR (%)
+Object
+Goal
+(a) Task non-IID.
+0.01
+0.1
+1.0
+Dirichlet concentration α
+0
+50
+100
+SR (%)
+Object
+Goal
+(b) Task and environment non-
+IID.
+Fig. 3: Sensitivity of FedDRMan to varying Dirichlet non-
+IID severity (α).
+
+
+TABLE II: Experimental results of cross-suite task and environment non-IID (α=0.5) federated evaluation across different
+LIBERO suite combinations. All metrics are measured based on SR(%). Bold denotes the best federated result.
+Method
+Object-Goal
+Object-Spatial
+Goal-Spatial
+Object-Goal-Spatial
+Mean
+SR (%) ↑
+Obj
+Goal
+Obj
+Spat
+Goal
+Spat
+Obj
+Goal
+Spat
+Centralized BC
+78.0±2.0
+78.0±2.0
+62.0±1.0
+46.0±2.0
+58.0±2.0
+54.0±3.0
+44.0±4.0
+60.0±3.0
+42.0±3.0
+58.0
+Local BC
+15.0±2.0
+48.0±3.0
+15.0±2.0
+35.0±2.0
+48.0±3.0
+35.0±2.0
+15.0±2.0
+48.0±3.0
+35.0±2.0
+32.7
+FedAvg [4]
+18.0±2.0
+0.0±0.0
+18.0±3.0
+0.0±0.0
+12.0±1.0
+12.0±0.0
+2.0±1.0
+14.0±3.0
+8.0±2.0
+9.3
+FedProx [5]
+16.0±1.0
+10.0±2.0
+16.0±1.0
+2.0±1.0
+12.0±2.0
+0.0±0.0
+4.0±2.0
+0.0±0.0
+2.0±1.0
+6.9
+FedKD [8]
+20.0±2.0
+8.0±2.0
+4.0±2.0
+6.0±2.0
+14.0±3.0
+14.0±4.0
+0.0±0.0
+2.0±0.0
+0.0±0.0
+7.6
+FedVLA [14]
+35.0±3.0
+60.0±5.0
+65.0±2.0
+30.0±3.0
+40.0±4.0
+60.0±3.0
+55.0±3.0
+40.0±4.0
+35.0±3.0
+46.7
+FedDRMan (ours)
+85.0±2.0
+70.0±3.0
+95.0±4.0
+45.0±4.0
+65.0±3.0
+55.0±3.0
+75.0±4.0
+35.0±4.0
+45.0±5.0
+63.3
+2
+6
+8
+10
+20
+k (number of clients)
+0
+20
+40
+60
+80
+100
+SR (%)
+Object
+Goal
+(a) Same-suite scalability.
+4
+6
+8
+10
+20
+k (total clients, Object-Goal)
+0
+20
+40
+60
+80
+100
+SR (%)
+Object
+Goal
+(b) Cross-suite scalability
+Fig. 4: Analysis of sensitivity to client participation variation.
+nisms under strongly non-IID conditions.
+E. Scalability
+Performance is generally strongest at moderate client
+counts (k=6–10) and degrades when scaling to k=20. Under
+fixed Dirichlet(α=0.5) partitioning, the total demonstration
+set is divided across k clients, so increasing k reduces
+the amount of local data available per client. At k=20,
+each client therefore receives a substantially smaller and
+potentially noisier local shard, which can reduce the quality
+of local updates before aggregation.
+Goal is noticeably more sensitive to this effect than Object:
+from k=10 to k=20, Goal drops from 80% to 58% in the
+same-suite setting and from 70% to 60% cross-suite, whereas
+Object decreases more moderately from 85% to 75% and
+from 89% to 82%, respectively. Goal is more sensitive than
+Object to increasing client count, suggesting greater sensitiv-
+ity to reduced per-client demonstration coverage (from k=10
+to k=20). Goal drops from 80% to 58% in the same-suite
+setting and from 70% to 60% cross-suite, whereas Object
+decreases more moderately from 85% to 75% and from 89%
+to 82%, respectively. Performance at smaller client counts (k)
+is also slightly below the best intermediate configurations,
+indicating a trade-off between the amount of local data
+available to each client and the diversity of updates available
+for federation. This suggests that, although some suites and
+tasks are more sensitive to reduced per-client demonstration
+coverage, FedDRMan remains effective across a broad range
+of client counts.
+F. Ablations
+Table III isolates the contribution of each FedDRMan com-
+ponent in the Object-Goal cross-suite setting. Using subspace
+alignment alone reduces SR from 70.0/60.0 to 60.0/50.0,
+TABLE III: Component-wise ablation of FedDRMan on
+the Object-Goal cross-suite task and environment non-IID
+setting.
+LBC
+Lsub
+Laction
+SRB
+CUA
+SR (Object) ↑
+SR (Goal) ↑
+✓
+×
+×
+×
+✓
+70.0
+60.0
+✓
+×
+✓
+×
+✓
+35.0
+55.0
+✓
+✓
+×
+×
+✓
+60.0
+50.0
+✓
+✓
+✓
+×
+✓
+80.0
+60.0
+✓
+✓
+✓
+✓
+✓
+85.0
+70.0
+✓
+✓
+✓
+✓
+×
+0.0
+0.0
+indicating that preserving representation geometry without
+explicitly preserving the teacher’s action distribution can
+over-constrain local adaptation while still allowing policy-
+level behavior to drift. Conversely, using action distillation
+alone also degrades performance, particularly on Object,
+where SR drops to 35.0% (and to 55.0% on Goal). This
+suggests that action policy guidance alone is insufficient
+under strong cross-suite heterogeneity, since it does not
+explicitly constrain drift in the visual, language, and pro-
+prioceptive representations that support manipulation. When
+subspace alignment and action distillation are combined,
+however, performance substantially recovers, reaching 80.0%
+on Object and 60.0% on Goal. This supports their com-
+plementary roles: subspace alignment preserves transferable
+multimodal representation structure, while action distillation
+anchors the resulting control behavior. SRB further improves
+both suites to 85.0% and 70.0%, respectively, yielding the
+strongest overall configuration. Most importantly, removing
+CUA causes complete failure in this setting (0.0% on both
+suites), falling below plain FedAvg. This indicates that the
+proposed distillation and spectral rebalancing are ineffec-
+tive when incompatible cross-suite updates are aggregated
+into a single server model, highlighting the importance of
+compatibility-aware grouping under strong heterogeneity.
+This result is also consistent with the aggregation anal-
+ysis in Sec. III-C.3, without CUA, poorly aligned client-
+specific components can cancel during aggregation, whereas
+compatibility-based grouping preserves more coherent up-
+date energy. Overall, the results suggest that local representa-
+tion and policy-level preservation and server-side compatible
+update aggregation address complementary sources of non-
+IID interference.
+G. CUA Effectiveness
+a) Compatible Grouping: We further analyze whether
+compatibility-aware clustering successfully separates clients
+
+
+c0 (Obj)
+c1 (Obj)
+c2 (Goal)
+c3 (Goal)
+c0 (Obj)
+c1 (Obj)
+c2 (Goal)
+c3 (Goal)
+30
+30
+0
+0
+30
+30
+0
+0
+0
+0
+30
+30
+0
+0
+30
+30
+0
+5
+10
+15
+20
+25
+30
+# rounds co-clustered (of 30)
+(a) Cross-suite aggregation.
+5
+10
+15
+20
+25
+30
+Round
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Mean Δθ similarity
+Intra (orig.)
+Inter (orig.)
+Intra (from-init)
+Inter (from-init)
+(b) Cross-suite cluster distance.
+Fig. 5: Aggregation effectiveness.
+with compatible local updates. Fig. 5a shows that the two
+Object clients are co-clustered in all 30 rounds (best per-
+formance round), and the two Goal clients exhibit the same
+behavior, while no Object-Goal client pair is ever assigned to
+the same cluster. This indicates that the local update direction
+provides a stable signal of suite-level compatibility rather
+than producing transient round-wise groupings.
+b) Update Dynamics:
+Fig. 5b analyzes the update
+geometry used for client clustering. The clustering signal,
+computed from each client’s accumulated update from ini-
+tialization (triangle curves), exhibits a persistent separation
+between intra- and inter-cluster similarity. Intra-cluster sim-
+ilarity rapidly approaches 1.0 and remains nearly constant,
+indicating highly consistent directions within each cluster.
+In contrast, inter-cluster similarity decreases from approx-
+imately 0.5 to 0.35–0.4 and remains substantially lower,
+confirming distinct update directions across heterogeneous
+suites.
+We also report the similarity of incremental per-round
+updates (circle curves). Both intra- and inter-cluster similar-
+ities decrease as local models specialize, while intra-cluster
+similarity remains consistently higher. These curves are diag-
+nostic only; clustering uses the accumulated from-initial up-
+dates. Together, the two views indicate that FedDRMan iden-
+tifies coherent robot-policy groups despite differing short-
+term optimization directions, reducing destructive cross-suite
+averaging before SRB preserves weaker directions within
+each compatible aggregate. This separation is consistent with
+the analysis in Sec. III-C.3 higher within-cluster alignment
+increases the positive cross terms in Eq. (17), reducing
+attenuation of coherent robot-specific update directions.
+VI. CONCLUSION
+FedDRMan addresses two coupled challenges in non-IID
+federated robotic manipulation: multimodal policy drift dur-
+ing local adaptation and destructive interference among het-
+erogeneous robot-policy updates. It combines server-guided
+subspace and action distillation with compatibility-aware
+clustering and spectral rebalancing to preserve transferable
+policy structure throughout local and server-side learning.
+Across LIBERO Object, Goal, and Spatial, FedDRMan
+achieves 80.7% mean SR, improving over the strongest
+evaluated federated baseline by 11.6 pp with no addi-
+tional communication payload. Cross-suite, heterogeneity-
+sensitivity, and client-scaling experiments further show its ro-
+bustness under increasingly heterogeneous federations, while
+ablations confirm the complementary roles of local distilla-
+tion, CUA, and SRB. Future work will investigate partial
+client participation, longer-horizon and more compositional
+manipulation tasks and real-robot deployments.
+REFERENCES
+[1] A. Brohan, N. Brown et al., “RT-2: Vision-language-action models
+transfer web knowledge to robotic control,” in Proceedings of the 7th
+Conference on Robot Learning, 2023. 1
+[2] M. J. Kim, C. Finn, and P. Liang, “Fine-tuning vision-language-action
+models: Optimizing speed and success,” 2025. 1
+[3] Open X-Embodiment Collaboration, “Open x-embodiment: Robotic
+learning datasets and rt-x models,” in 2024 IEEE International Con-
+ference on Robotics and Automation (ICRA), 2024, pp. 6892–6903.
+1
+[4] H. B. McMahan, E. Moore et al., “Communication-efficient learning
+of deep networks from decentralized data,” in Proceedings of the 20th
+International Conference on Artificial Intelligence and Statistics, ser.
+Proceedings of Machine Learning Research, vol. 54.
+PMLR, 2017,
+pp. 1273–1282. 1, 5, 6, 7
+[5] T. Li, A. K. Sahu et al., “Federated optimization in heterogeneous
+networks,” in Proceedings of Machine Learning and Systems, vol. 2,
+2020, pp. 429–450. 1, 2, 5, 6, 7
+[6] B. Pal, S. Funiak et al., “Dfeddg2: Distribution guided gossip based
+generalizable and communication efficient decentralized federated
+learning,” IEEE Internet of Things Journal, 2026. 1, 2
+[7] Y. Li, Y. Wang et al., “Resource-constrained federated continual learn-
+ing: What does matter?” Advances in Neural Information Processing
+Systems, vol. 38, pp. 79 493–79 518, 2026. 1
+[8] C. Wu, F. Wu et al., “Communication-efficient federated learning via
+knowledge distillation,” Nature communications, vol. 13, no. 1, p.
+2032, 2022. 1, 3, 5, 6, 7
+[9] K. Roy, A. Dissanayake et al., “M2distill: Multi-modal distillation
+for lifelong imitation learning,” in IEEE International Conference on
+Robotics and Automation (ICRA), 2025, pp. 1429–1435. 1, 2
+[10] K. Roy, G. D’urso et al., “SPREAD: Subspace representation distilla-
+tion for lifelong imitation learning,” in IEEE International Conference
+on Robotics and Automation (ICRA), 2026. 1, 2, 3
+[11] L. Li, L. Qi et al., “Model merging in the essential subspace,” in
+Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), June 2026, pp. 31 145–31 154. 1, 2, 4
+[12] R. Skorobogat, K. Roth et al., “Subspace-boosted model merging,”
+arXiv preprint arXiv:2506.16506, 2025. 1, 2, 4
+[13] S. Bou Betran, A. Longhini et al., “FLAME: A federated learning
+benchmark for robotic manipulation,” in 2025 IEEE/RSJ International
+Conference on Intelligent Robots and Systems (IROS), 2025. 1, 2
+[14] C. Miao, T. Chang et al., “FedVLA: Federated vision-language-action
+learning with dual gating mixture-of-experts for robotic manipulation,”
+in Proceedings of the IEEE/CVF International Conference on Com-
+puter Vision (ICCV), October 2025, pp. 6904–6913. 1, 2, 5, 6, 7
+[15] L. Collins, H. Hassani et al., “Exploiting shared representations for
+personalized federated learning,” in Proceedings of the 38th Interna-
+tional Conference on Machine Learning, ser. Proceedings of Machine
+Learning Research, vol. 139.
+PMLR, 2021, pp. 2089–2099. 2
+[16] S. K. Kang and C. Choi, “FOGL: Federated object grasping learning,”
+in 2023 IEEE International Conference on Robotics and Automation
+(ICRA), 2023, pp. 5851–5857. 2
+[17] S. Na, T. Roucek et al., “Federated reinforcement learning for collec-
+tive navigation of robotic swarms,” IEEE Transactions on Cognitive
+and Developmental Systems, vol. 15, no. 4, pp. 2122–2131, 2023. 2
+[18] N. Majcherczyk, N. Srishankar, and C. Pinciroli, “Flow-FL: Data-
+driven federated learning for spatio-temporal predictions in multi-robot
+systems,” in 2021 IEEE International Conference on Robotics and
+Automation (ICRA), 2021, pp. 8836–8842. 2
+[19] T. M. Ho, K.-K. Nguyen, and M. Cheriet, “Federated deep rein-
+forcement learning for task scheduling in heterogeneous autonomous
+robotic system,” IEEE Transactions on Automation Science and En-
+gineering, vol. 21, no. 1, pp. 528–540, 2024. 2
+
+
+[20] B. Liu, Y. Zhu et al., “LIBERO: Benchmarking knowledge transfer for
+lifelong robot learning,” in Advances in Neural Information Processing
+Systems, vol. 36, 2023. 2, 5
+[21] Q. Li, Y. Diao et al., “Federated learning on non-iid data silos: An
+experimental study,” in 2022 IEEE 38th International Conference on
+Data Engineering (ICDE), 2022, pp. 965–978. 4

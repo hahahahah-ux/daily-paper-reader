@@ -1,0 +1,958 @@
+Impedance Cloning: Learning Equilibrium Point Parameters
+for Contact-Rich Manipulation
+Hayato Takahashi, Ryoga Oishi, Yuki Kasuga, and Toshiaki Tsuji
+Abstract— Contact-rich manipulation requires robots to reg-
+ulate force against surfaces whose geometry deviates unpre-
+dictably from training conditions. Trajectory-based imitation
+learning, which reproduces observable outputs, breaks down
+under such shifts. We propose Impedance Cloning, which in-
+stead imitates the biomechanical priors that generate motion—
+the stiffness and equilibrium point—and thereby passively
+absorbs contact uncertainty. Because these parameters encode
+intent rather than outcome, they generalize across surface
+geometries where trajectory reproduction does not. We extract
+them from bilateral teleoperation demonstrations via a particle
+filter without force/torque sensors and evaluate the framework
+on two CRANE-X7 manipulators. In a wiping task with joint-
+space actions, the trajectory-based baseline loses contact below
+−6 cm, whereas the proposed method maintains a consistent
+4–5 N contact force above −6 cm, with a gradual decrease
+below; with Cartesian-space actions, its force–height slope over
+0 to +8 cm is 0.13 ± 0.03 N/cm, versus 0.34–0.83 N/cm for
+fixed-impedance baselines. In a pick-and-place task with 10
+diverse cups (100 trials), the proposed method succeeds in
+84 trials, outperforming the fixed-impedance baseline (74/100)
+and performing comparably to a variable impedance control
+baseline (82/100) with one demonstration instead of ten. In
+a grasping task, the representation reduces torque tracking
+error with both ILBiT and Mamba backbones, confirming its
+generality across architectures.
+Index Terms— Compliance and Impedance Control, Imi-
+tation Learning, Learning from Demonstration, Bioinspired
+Robot Learning.
+I. INTRODUCTION
+Contact-rich manipulation requires a robot to regulate both
+position and force against unpredictable surface geometries.
+Current imitation learning methods—including ACT [1],
+Diffusion Policy [2], and teleoperation-based frameworks
+such as Mobile ALOHA [3]—define their action spaces
+over observable states: end-effector position and force, or
+joint angles and torques. These representations reproduce
+trained motions faithfully within the training distribution,
+but encode no intrinsic compliance. For example, when
+the board height in a wiping task deviates from training
+conditions, conventional trajectory-level policies either lose
+contact entirely or apply excessive force, because the learned
+policy has no mechanism to convert positional error into
+adaptive contact force. While data-driven variable impedance
+control methods exist, they often require estimating and re-
+identifying the environmental dynamics and stiffness for
+This work has been submitted to the IEEE for possible publication.
+Copyright may be transferred without notice, after which this version may
+no longer be accessible.
+The
+authors
+are
+with
+the
+Graduate
+School
+of
+Science
+and
+Engineering,
+Saitama
+University,
+Saitama,
+Japan
+{takahashi,
+oishi, kasuga}@robotics.ees.saitama-u.ac.jp,
+tsuji@ees.saitama-u.ac.jp
+each new condition; therefore, generalization to unknown
+environmental changes remains difficult.
+The Equilibrium Point (EP) hypothesis [4], [5], [6] pro-
+vides a principled account of how the human motor system
+avoids this failure mode. Rather than commanding torques
+directly, the central nervous system modulates two latent con-
+trol parameters—the virtual equilibrium point θeq and limb
+stiffness Keq—and relies on spring-like muscle mechanics
+to absorb contact uncertainty passively. Position and force
+are observable outputs of human motor planning, whereas
+stiffness and equilibrium point are its latent inputs.
+This distinction motivates our approach. Incorporating this
+biomechanical prior constructively, we redefine the action
+space of imitation learning in terms of EP parameters. Ex-
+tracting both stiffness and equilibrium point simultaneously
+from only position and force observations is inherently an
+ill-posed problem. We make this estimation possible by
+combining real-world observation data collected via bilateral
+control with a particle filter that assumes continuous, small
+changes in the command parameters. The estimated Keq and
+θeq sequences are then either replayed directly as recorded
+(Motion Copy, in the replay-based experiments) or generated
+autonomously by a policy trained on them (ILBiT or Mamba,
+in the experiments with generative models). Because the
+robot imitates the generative parameters of human motor
+control rather than its observable outputs, it acquires the
+adaptive mechanism the human used to handle environmental
+uncertainty, not merely a record of what the human did under
+one specific condition. That is, imitation is carried out in the
+generative space rather than in the observable space.
+We validate the framework across three tasks—wiping,
+pick-and-place, and grasping—using a bilateral CRANE-X7
+setup with as few as 10–16 demonstrations and no external
+force/torque sensors. Notably, in the wiping task, whereas
+the trajectory-based baseline completely loses contact at a
+height variation of −6 cm, the proposed method maintains a
+consistent contact force through passive compliance.
+Our contributions are summarized as follows:
+• We propose Impedance Cloning, an imitation learning
+framework that redefines the action space using latent
+EP parameters (Keq, θeq) extracted via a particle filter
+from bilateral teleoperation demonstrations.
+• We show that this representation transfers across un-
+seen surface geometries and object shapes in contact-
+rich tasks (wiping, pick-and-place, grasping), where
+trajectory-based baselines fail.
+• We demonstrate that the proposed action space is
+architecture-agnostic, improving torque tracking perfor-
+arXiv:2609.30842v1  [cs.RO]  25 Sep 2026
+
+
+mance when combined with both Transformer-based
+(ILBiT) and SSM-based (Mamba) generative models.
+II. RELATED WORK
+A. Imitation Learning for Contact-Rich Manipulation
+As discussed in Section I, conventional imitation learn-
+ing methods [1], [2], [3] define their action spaces over
+observable robot states and therefore lack intrinsic com-
+pliance under environmental deviations. Even if a constant
+impedance is heuristically applied to a trajectory-generation
+model such as ACT, it theoretically struggles to fully adapt to
+unknown geometric variations because it lacks the intrinsic
+mechanism to dynamically infer and adjust the stiffness over
+time. Bilateral control has been used as a data collection
+interface for imitation learning to capture both position and
+force information simultaneously [7], [8], though its role
+has remained limited to recording demonstrations. While
+Bogdanovic et al. [9] demonstrated that using impedance
+parameters as actions improves robustness in reinforcement
+learning, our work extends this insight to imitation learning,
+grounding the action space in the EP hypothesis.
+B. Variable Impedance Control and Stiffness Adaptation
+Data-driven stiffness adaptation has gained traction for
+contact-rich tasks [10], [11], [12]. Early work by Buchli
+et al. [13] demonstrated variable impedance control via
+reinforcement learning (PI2), establishing the principle that
+impedance parameters can be treated as learnable control
+outputs. Okada et al. [14] learn contact dynamics with
+a diffusion model and select optimal stiffness offline via
+Bayesian optimization. Geiger et al. [15] reconstruct a
+contact-consistent simulated zero-force trajectory using a dif-
+fusion model conditioned on measured wrenches to implic-
+itly adapt robot stiffness. Another line of research estimates
+stiffness directly from human demonstrations by mapping
+the positional variance across multiple demonstrations to
+stiffness profiles, assuming that regions with low variance
+require high stiffness [16]. While effective, this heuristic
+approach inherently requires multiple demonstrations of the
+exact same task to compute statistical variance, and does
+not capture the true physical compliance of the human
+arm. In contrast, our method takes the human operator’s
+stiffness, together with an equilibrium point estimated as
+a quantity distinct from the measured configuration, as the
+direct targets for imitation learning. Because human stiffness
+and equilibrium points encode the adaptive strategy used
+to handle uncertainty, they can be estimated from a single
+demonstration and transfer across environmental conditions
+without re-identification.
+C. The Equilibrium Point Hypothesis in Motor Control and
+Robotics
+The EP hypothesis [4], [5], [6] proposes that the central
+nervous system regulates movement via a virtual equilibrium
+configuration θeq and stiffness Keq [17]. The same spring-
+like abstraction underlies impedance control in robotics [18],
+where the equilibrium configuration and stiffness are pre-
+scribed as controller settings rather than learned. Tele-
+impedance [19], [20] transfers the operator’s arm stiffness,
+typically estimated from EMG signals, to a remote manipula-
+tor in real time, and such human-in-the-loop demonstrations
+have also been used to teach robots motion and stiffness
+profiles for autonomous execution [21]. These approaches,
+however, rely on dedicated sensing of the operator and take
+the measured hand position as the motion reference; the
+equilibrium point is not estimated as a quantity distinct from
+the actual configuration. To our knowledge, no prior work
+has treated EP parameters as a target representation for
+imitation learning. Hou et al. [22] note that recovering full
+compliance parameters from human demonstrations is ill-
+posed, and therefore construct an approximate compliance
+profile by permitting compliance only along the measured
+force direction. In contrast, our method explicitly takes
+the operator’s actual stiffness and equilibrium point as the
+imitation-learning targets, demonstrating that these can be es-
+timated from a single demonstration using only end-effector
+position and force, or joint angle and torque. We extract
+these parameters as latent time series from teleoperation
+data and reproduce them, either by direct replay or with
+a trained policy, enabling robust generalization to unseen
+environmental conditions.
+III. PROPOSED METHOD
+We refer to the proposed framework as Impedance
+Cloning, whose architecture comprises parameter estimation,
+imitation learning, and torque command generation. The
+key conceptual distinction from conventional methods is
+illustrated in Fig. 1.
+Bilateral teleoperation plays a specific role in this con-
+struction. The operator’s command is not directly observable.
+In a bilateral system, the human arm and the leader robot
+share a single mechanical state. The joint angle and the
+torque estimated by the reaction force observer are therefore
+acquired from the very leader robot to which the human
+applies force. The EP model of (1) below is the assumption
+that converts this observable pair into the latent command.
+The leader robot is therefore used twice: as the measuring
+instrument during demonstration, and as the executor of the
+reconstructed command during autonomous operation.
+A. Definition of a Mathematical Model
+Based on the EP hypothesis, the operator’s command is
+modeled as a spring acting between a virtual equilibrium
+configuration and the measured configuration of the leader
+robot. Let ξ denote the measured configuration and f the
+generalized force conjugate to it. The model is then written
+as
+f = Keq(ξeq −ξ).
+(1)
+Here, Keq is the stiffness and ξeq is the equilibrium point.
+We instantiate (1) in two coordinate frames. In joint space,
+the human operational torque τ is given by
+
+
+Position/Force
+Equilibrium point/Stiffness
+Baselines:
+imitating
+observable 
+responses
+Proposal:
+imitating 
+biomechanical
+priors
+Fig. 1: Comparison of imitation targets. Baselines imitate
+observable responses (position and force); the proposed
+method imitates the latent parameters that generate them—
+equilibrium point and stiffness—enabling passive compli-
+ance against environmental uncertainty.
+τ = Keq(θeq −θ),
+(2)
+where θ is the leader robot’s joint angle measured during
+teleoperation and τ is the joint torque estimated by the
+reaction force observer. In task space, the human operational
+force F is given by
+F = Keq(xeq −x),
+(3)
+where x is the leader’s end-effector position obtained by
+forward kinematics and F = J−T τ is the corresponding
+operational force, with J the Jacobian of the leader robot.
+In both cases, this work considers only the stiffness of each
+degree of freedom and does not account for the off-diagonal
+components of the stiffness matrix; an independent estimator
+is therefore assigned to each joint or each translational
+axis. Because ξ is defined in the leader’s coordinate frame,
+Keq and ξeq represent the operator’s command parameters
+projected onto that frame rather than muscle-level quantities.
+The choice of the frame is therefore a design choice of the
+action space, not a restriction of the model. In the proposed
+method, the state variable zt = [Keq
+t , ξeq
+t ]T based on this
+model is estimated offline at each time step using a particle
+filter and is used as the target for subsequent learning.
+B. Parameter Estimation Algorithm
+For readability, the estimator is described below in the
+joint-space notation of (2); substituting (x, F) for (θ, τ)
+yields the task-space estimator of (3) without any other
+modification. At a single instant, (2) provides one equation
+for two unknowns, so estimating (Keq, θeq) from joint angle
+and torque data alone is ill-posed. What makes it resolvable
+is the content of the EP hypothesis itself: the assumption
+that the command parameters vary slowly compared with the
+measured configuration θ. Under this assumption, responses
+observed at different joint angles within a short window
+jointly constrain the pair, and sequential Bayesian estimation
+recovers it. Because this work treats stiffness as a per-degree-
+of-freedom scalar, we employ an independent particle filter
+for each joint. In the state transition model, the parameters
+primarily undergo a minor random walk. Furthermore, to
+prevent the estimated values from diverging in steady states,
+an adaptive micro-transition process depending on the mag-
+nitude of the stiffness is incorporated into the state transition
+process. Specifically, a nonlinear state transition equation is
+applied, which pulls θeq toward the current joint angle θ
+when stiffness is small, and attenuates this effect when the
+stiffness is large. The state transition at time t for the i-th
+particle is formulated as follows:
+θeq
+t,i = θeq
+t−1,i + αt,i(θt −θeq
+t−1,i) + ϵθ
+t,i,
+(4)
+Keq
+t,i = Keq
+t−1,i + ϵK
+t,i.
+(5)
+Here, αt,i is a pull-back coefficient that adaptively changes
+according to the magnitude of the stiffness, defined by the
+following equation:
+αt,i =
+γ
+1 + βKeq
+t−1,i
+,
+(6)
+where γ and β are hyperparameters controlling the
+strength of the pull-back. Furthermore, ϵθ
+t,i ∼N(0, σ2
+θ) and
+ϵK
+t,i ∼N(0, σ2
+K) represent system noise for the random walk
+of each parameter. To ensure the physical consistency of the
+stiffness, a lower bound is applied to Keq
+t,i after every update
+to prevent negative values.
+In the observation model, the squared error between the
+measured torque at time t and the estimated torque calculated
+using the mathematical model from the estimated states
+Keq
+t,i, θeq
+t,i held by the i-th particle and the measured angle
+is evaluated to calculate the likelihood Lt,i.
+Lt,i = exp
+ 
+−
+ Keq
+t,i(θeq
+t,i −θt) −τt
+2
+2σ2
+!
+.
+(7)
+Here, σ is the standard deviation of the observation
+noise. Resampling is performed based on this likelihood,
+and a weighted average is calculated to stably estimate the
+parameters at each time step.
+All hyperparameters are listed in Table I; they were
+determined empirically to balance the motion stability of
+the physical robot and its responsiveness to environmental
+changes.
+C. Implementation of the Imitation Learning Module
+Fig. 2 compares the action spaces of the baseline and pro-
+posed approaches. Conventional imitation learning methods
+represent robot actions as at = [θt, ωt, τt]. In contrast, the
+proposed method represents actions as impedance parameters
+at = [θeq
+t , Keq
+t ]. For each backbone, both methods share the
+same execution scheme—direct replay for Motion Copy, and
+the same architecture and training procedure for the learned
+models—differing only in the action representation.
+In this study, we evaluated configurations across different
+task settings. For the wiping and pick-and-place experiments,
+
+
+TABLE I: Particle filter hyperparameters. Because particles
+are truncated during resampling, the effective particle count
+is lower than the nominal Np, ranging from 526 to 959 across
+trials.
+Parameter
+Symbol
+Value
+Number of particles
+Np
+1000
+Sampling period
+∆t
+2 ms
+Joint angle noise std.
+σθ
+0.005 rad
+Stiffness noise std.
+σK
+0.02 Nm/rad
+Observation noise std.
+σ
+0.1 Nm
+Pull-back base strength
+γ
+0.02
+Pull-back decay rate
+β
+5.0
+Likelihood threshold
+—
+0.8
+Resampling interval
+—
+every 10 steps
+Stiffness lower bound
+—
+0.01 Nm/rad
+(a) Baseline Method
+(b) Proposed Method
+Fig. 2: Comparison of action spaces. (a) The baseline method
+directly outputs spatial trajectories such as target joint angles
+and torques. (b) The proposed method defines the action
+space using upper-level physical parameters (stiffness Keq
+and equilibrium point θeq), enabling compliance and robust
+adaptation to environmental variations.
+we employ Motion Copy [23] as the backbone. Motion
+Copy essentially functions as a fixed-impedance control by
+directly replaying the recorded position, velocity, and force
+action sequences from demonstrations without a generative
+model. In the pick-and-place task, we additionally introduce
+a Variable Impedance Control (VIC) baseline based on
+the variance-based stiffness estimation method [16], which
+derives stiffness inversely proportional to the positional
+variance across a set of demonstrations. We also evaluate
+the Motion Copy baseline under a single fixed-impedance
+setting. In the Cartesian-space wiping experiment, the Mo-
+tion Copy baseline is instead evaluated under three fixed-
+impedance levels, obtained by scaling the position gain as
+Kp, 0.75Kp, and 0.5Kp. ILBiT and Mamba are used as
+generative sequence modeling backbones in the grasping
+experiment to assess adaptability across different sequence
+modeling architectures.
+This framework allows us to assess both data-efficient
+replay-based performance and the generalization capability
+of generative models under the proposed and conventional
+action representations.
+D. Formulation of Torque Command Generation Rules
+The control architecture during autonomous execution in
+the proposed method is shown in Fig. 3, following the
+disturbance-observer-based bilateral framework [24]. In the
+macro bilateral architecture (Fig. 3(a)), the follower’s re-
+sponses (θf, ωf, τ f) serve as the leader’s command references
+(θl,cmd, ωl,cmd, τ l,cmd). The final torque command value
+τ l,ref for the leader robot is formulated by the following
+equation using the moment of inertia J of each joint, along
+with the position gain Kp, velocity gain Kd, and force gain
+Kf:
+τ l,ref = τ human,est + J
+2 Kp(θl,cmd −θl,res)
++ J
+2 Kd(ωl,cmd −ωl,res) + 1
+2Kf(τ l,cmd −τ l,res).
+(8)
+Here, θl,res, ωl,res, τ l,res are the response values on the
+leader side. The first term on the right side, τ human,est, is the
+estimated human operational torque component, calculated
+by the following equation using the stiffness Keq and equi-
+librium point θeq inferred by the network (red components
+in Fig. 3(b)).
+τ human,est = Keq(θeq −θl,res) −Deqωl,res.
+(9)
+Here, Deq is a constant damping coefficient introduced
+only at execution time. During demonstration, the operator
+physically holds the leader robot, so the damping of the
+human arm is present in the hardware itself and need not
+be commanded. This is consistent with the λ-model [5], in
+which damping is not an independent command variable but
+a quantity tied to stiffness (Deq = µKeq); the estimator
+therefore outputs stiffness only. During autonomous execu-
+tion, however, the operator’s hand is absent, and the unheld
+leader robot exhibits high-frequency vibration unless this
+physical damping is replaced. We therefore add a constant
+Deq per joint (0.1, 0.02, 0.11, 0.03, 0.09, 0.03, 0.07, and
+0.1 Nm·s/rad for J1–J8) purely as a stabilization term for
+the physical manipulator, rather than as an estimate of the
+operator’s damping. Omitting damping during estimation
+introduces negligible model mismatch: in the pick-and-place
+demonstration data, the ratio Deqω/Keq∆θ remains within
+an RMS of 0.7–10% at the three load-bearing joints (J2, J4,
+and J8).
+The follower runs only the black loop in Fig. 3(b), so
+the inferred human operational torque enters the leader
+alone, forming an asymmetric configuration. As a result,
+intervention from the upper-level parameters is added to
+the feedback commands based on the reaction force from
+the follower, achieving adaptive and stable contact motion
+against environmental uncertainty. In the baseline, the leader
+is not used; the follower runs the same loop with the replayed
+or predicted [θt, ωt, τt] as its command references.
+IV. EXPERIMENTS
+We first confirm the validity of the estimated parameters
+(Experiment 1), and then validate the proposed method
+through three manipulation tasks: a wiping task for robust-
+ness against height perturbations (Experiment 2), a pick-and-
+place task for generalizability across objects (Experiment 3),
+and a grasping task to evaluate adaptability across generative
+sequence modeling architectures (Experiment 4).
+
+
+(a) Macro Bilateral Architecture
+(b) Leader Control
+Fig. 3: Control architecture of the proposed method during
+autonomous execution. (a) Signal flow between the leader
+and follower robots. (b) Leader control. The red components
+compute the human operational torque from Keq and θeq;
+the black loop alone is the standard feedback control used
+by the follower.
+Fig. 4: Experimental setup using two CRANE-X7 manip-
+ulators in a bilateral configuration. One acts as the leader
+operated by a human and the other as the follower.
+A. Test Environment and System Configuration
+For the experiments, we constructed a bilateral control
+system using two 8-DOF CRANE-X7 manipulators (Fig. 4).
+Joint torques were estimated using a reaction force observer
+without physical force/torque sensors. A commercially avail-
+able whiteboard cleaner was grasped by the end-effector
+hand, and the target whiteboard was fixed to the workbench
+with tape.
+B. Dataset and Training Settings
+For the wiping task, the operator wiped the cleaner back
+and forth three times to erase writing on the board via
+bilateral control. The operator was instructed to keep the
+motion cycle constant, and a time-series dataset totaling
+approximately 75,000 steps was constructed by acquiring
+10 samples of motion at a sampling period of 2 ms. For
+the pick-and-place task, the operator demonstrated picking
+and placing a single cup (Type A in Fig. 7) from a fixed
+source position to a fixed target position, collecting 10
+demonstrations under the same bilateral control setup. Both
+the proposed method and the Motion Copy baseline—which
+operates under fixed-impedance control—are executed using
+only one of these ten demonstrations. In contrast, the VIC
+baseline uses all ten demonstrations to calculate the variance
+for stiffness derivation. For the grasping task, the operator
+demonstrated grasping a single cup stably, collecting 16
+demonstrations for training. To perform learning independent
+of robot-specific characteristics, we used only unique time-
+series data acquired from the physical robot. Because the
+proposed method targets physical upper-level parameters for
+learning, it exhibits sufficient generalization performance
+even with these small datasets.
+Because this work evaluates the effect of the action
+representation, the comparison must be made under a com-
+mon input modality. ACT and Diffusion Policy are both
+designed to generate actions from camera observations, so
+comparing them directly with our framework, which uses no
+visual input, would leave it unclear whether a performance
+difference stems from the action representation or from the
+input modality. We therefore adopt ILBiT and Mamba, which
+share the same torque-based input structure as the proposed
+method, as the comparison targets.
+ILBiT [25] is a Transformer-based [26] imitation learning
+model designed for bilateral control systems that takes joint
+angle and torque sequences as input. We refer the reader to
+the original paper for architectural details and use the same
+hyperparameters reported therein.
+Mamba [27], [28] is a State Space Model (SSM)-based ar-
+chitecture that compresses past context into low-dimensional
+state variables, enabling real-time motion generation from
+limited training data. The model consists of a single Mamba
+block with SSM dimensionality 4, one input and three
+output linear layers (ni = 1, n = 3, no = 1), and
+dropout with retention probability 0.75. The matrix A is
+fixed rather than learned, with diagonal elements set to
+diag[−0.5, −0.2, −0.08, −0.032], following the ablation re-
+sults in the original paper. Both models were trained with
+MSE loss and the AdamW optimizer (learning rate 10−3),
+with a control loop cycle of 2 ms and inference communi-
+cated at a 100 ms cycle via UDP.
+C. Evaluation Criteria and Experimental Conditions
+For the wiping task, the primary metric is the average
+contact force Favg during wiping motion, calculated from
+the vertical force Fz(t) between the contact start time ts and
+end time tf:
+Favg =
+∆t
+tf −ts
+tf
+X
+t=ts
+Fz(t).
+(10)
+
+
+In joint space, the board height was varied from −10 to
++10 cm in increments of 2 cm from the reference position
+used in the demonstrations, with ±1 cm conditions added to
+confirm finer variations. In Cartesian space, the range was
+−8 to +8 cm (4 cm steps for 0.5Kp and 0.75Kp). Five trials
+were conducted under each condition.
+For the pick-and-place task, the primary metric is the task
+success rate across 10 cup types of varying shape and size.
+A trial is considered successful when the cup is transported
+from the source position to the target position without being
+dropped. For each method, 10 trials were conducted per cup
+type, resulting in a total of 100 trials.
+Torque tracking error is measured as the root mean squared
+error (RMSE) after Dynamic Time Warping (DTW) align-
+ment between the evaluated trajectory and a reference trajec-
+tory derived from training data. The reference is constructed
+by first time-normalizing all training trajectories to N = 500
+points via linear interpolation, then averaging them across
+trials. Because the sign convention of the measured torque
+in the follower differs from that of the leader, the reference
+values are sign-flipped before comparison.
+Given a test trajectory s and the reference r, both of
+length N, DTW computes an optimal warping path P =
+{(il, jl)}L
+l=1 that minimizes the cumulative distance between
+aligned samples. The DTW-RMSE for a single joint is then
+defined as
+RMSE =
+v
+u
+u
+t 1
+L
+L
+X
+l=1
+ sjl −ril
+2.
+(11)
+D. Experiment 1: Validity of Parameter Estimation
+Under the settings described in Section III (Table I), we
+verified the estimator using demonstration data from the
+pick-and-place task. The two-parameter model reconstructs
+the measured torque with a normalized RMSE (NRMSE) of
+0.071.
+We conducted a sensitivity analysis to verify that the
+sequential estimation stably resolves the inherently ill-posed
+parameter estimation. Varying the number of particles Np,
+the stiffness noise standard deviation σK, the initial values,
+and the random seeds gave a spread in the estimated Keq
+ranging from 14% (J3) to 40% (J7) across joints. We further
+swept the pull-back hyperparameters over γ ∈[0.002, 0.1]
+and β ∈[0.2, 50]. Excessive pull-back drives θeq to con-
+verge prematurely to the current joint angle θ, degrading
+the NRMSE of torque reconstruction from 0.071 to 0.275.
+Taking, for J1, J3 and J7, the ratio between the maximum
+and minimum mean Keq over the γ–β grid (49 settings,
+seed-averaged), this ratio ranged from 4.5 (J1) to 5.9 (J7).
+Restricting the sweep to hyperparameters whose reconstruc-
+tion error lies within 5% of the best value, however, keeps the
+ratio within a factor of 1.6 for all of J1, J3 and J7; that is, the
+estimates are stable once the hyperparameters are confined
+to the region where the torque is adequately reconstructed,
+and the values used in this work (Table I) fall inside this
+band.
+E. Experiment 2: Wiping Task — Robustness to Height
+Perturbation
+The height offset is absent from the demonstration data,
+so a trajectory-level action representation has no information
+with which to respond to it, whereas an EP-level repre-
+sentation carries the operator’s own stiffness. We therefore
+expect a much smaller force–height slope for the proposed
+method, and a slope that becomes steeper as the position
+gain increases for fixed-impedance replay.
+This experiment was conducted under two conditions: with
+the action space defined in joint space (2) and in Cartesian
+space (3). The baseline was a single fixed-impedance setting
+in joint space, and fixed-impedance settings at three position-
+gain levels in Cartesian space.
+In the joint-space condition, as shown in Fig. 5, the contact
+force of the baseline fluctuated significantly in proportion
+to the change in board height. Particularly when the height
+decreased, the robot failed to maintain contact because the
+recorded trajectories were rigidly replayed; under conditions
+of −6 cm or lower, the contact force almost disappeared.
+In contrast, the proposed method maintained the desired
+contact force of approximately 4–5 N within the range of −6
+to +10 cm, regardless of the environmental height change.
+The inferred stiffness Keq and equilibrium point θeq pro-
+vide compliance that naturally absorbs unknown positional
+deviations to maintain stable contact forces. Below −6 cm,
+however, the contact force of the proposed method also
+decreased gradually. This is attributable to defining the action
+space in joint space: translational errors are absorbed through
+joint rotations, which causes unintended posture fluctuations,
+and the tilted end-effector makes the edge of the cleaner
+physically catch on the board.
+In the Cartesian-space condition, the action space was
+parameterized by Cartesian position and force instead of
+joint angle and torque. As shown in Fig. 6, the proposed
+method exhibited the same qualitative robustness to height
+offsets, achieving a force–height slope of 0.13 ± 0.03 N/cm
+over 0 to +8 cm (absolute value; mean ± SD of per-trial
+linear fits). In contrast, the three fixed-impedance baselines
+exhibited steeper slopes of 0.34 ± 0.06, 0.52 ± 0.09, and
+0.83 ± 0.05 N/cm for 0.5Kp, 0.75Kp, and Kp, respectively,
+indicating that sensitivity to positional deviations grows
+monotonically with the position gain. At offsets of −6 cm
+and below, the proposed method lost contact, likely because
+wiping beyond the equilibrium point reverses the restoring
+force in (3) away from the board; the abrupt change between
+−4 and −6 cm supports this interpretation.
+These results match the pattern predicted above and con-
+firm that Impedance Cloning is effective and applicable in
+either coordinate space.
+F. Experiment 3: Pick-and-Place Task — Generalizability
+Across Object Types
+Fig. 7 shows the 10 evaluation containers. They span
+a range of materials (paper, plastic, glass, rubber-coated),
+diameters (approximately 5–10 cm), and heights (approx-
+imately 7–15 cm), providing varied combinations of sur-
+
+
+Fig. 5: Average wiping contact force versus board height
+offset in joint space (each marker: one trial). Negative values
+indicate pressing force.
+Fig. 6: Average wiping contact force versus board height
+offset in Cartesian space (mean ± SD over five trials).
+Negative values indicate pressing force.
+face stiffness, contact geometry, and grasp compliance. All
+containers were placed at the same fixed position as the
+demonstration cup; no positional perturbation was introduced
+so that the only source of variation was the object’s physical
+properties.
+Table II summarizes the success rates of the pick-and-
+place task involving 10 cup types of varying shapes and
+materials, 9 of which were not used in the demonstration.
+The proposed method achieved a total success rate of
+84/100, outperforming the fixed-impedance baseline, which
+scored 74/100. Furthermore, despite using only a single
+demonstration, the proposed method performed comparably
+to the VIC baseline (82/100), with no significant difference
+observed (Fisher’s exact test). The improvement of the
+proposed method over the fixed-impedance baseline strongly
+correlated with the containers’ deviation from the required
+fixed-impedance parameters (Spearman ρ
+=
+0.88, p
+=
+0.0008, n = 10). Interestingly, the largest single loss for the
+proposed method occurred on the demonstration cup (Type
+A, −4/10 compared to the baseline), while all containers
+Fig. 7: The 10 test containers used for evaluation.
+TABLE II: Pick-and-place task success results for 10 cup
+types. VIC: variable impedance control baseline; FI: fixed-
+impedance (Motion Copy) baseline.
+Cup Type
+Proposed
+VIC
+FI
+Hard Plastic Cup (Type A)
+6 / 10
+5 / 10
+10 / 10
+Soft Plastic Cup
+10 / 10
+8 / 10
+10 / 10
+Large Paper Cup
+10 / 10
+10 / 10
+10 / 10
+Medium Paper Cup
+10 / 10
+9 / 10
+5 / 10
+Small Paper Cup
+10 / 10
+10 / 10
+3 / 10
+Glass Cup
+10 / 10
+10 / 10
+10 / 10
+Tall Ceramic Cup
+7 / 10
+10 / 10
+10 / 10
+Ceramic Mug
+8 / 10
+7 / 10
+10 / 10
+Ink Bottle
+4 / 10
+7 / 10
+0 / 10
+Measuring Cup
+9 / 10
+6 / 10
+6 / 10
+Total
+84 / 100
+82 / 100
+74 / 100
+whose gripper joint angle differed from the demonstration
+cup by more than 0.40 rad saw improvements of +3 to
++7/10. This indicates that operating in the EP parameter
+space robustly adapts to geometric deviations through com-
+pliance, whereas fixed trajectories struggle to accommodate
+such variations.
+G. Experiment 4: Grasping Task
+We evaluated the proposed method on a top-down grasping
+task with 16 demonstrations on a single cup as training data
+and 10 cups of varying stiffness and geometry as test objects.
+To isolate the effect of Impedance Cloning, we adopted
+ILBiT [25] and Mamba [28] as representative Transformer-
+based and SSM-based architectures that operate purely on
+position and force signals. For each backbone, the baseline
+variant directly imitates position and force trajectories, while
+the proposed variant replaces the action space with the
+equilibrium point parameters Keq and θeq.
+The results are summarized in Table III; the reported
+values are averaged over all 10 test containers and over
+the gripper joint alone or all 8 joints, respectively. The
+baseline variants exhibited large and variable errors due to
+the inability of trajectory policies to adapt to unseen object
+properties. In contrast, the proposed method consistently re-
+duced both mean error and variance across all containers and
+architectures. Note that the overlapping standard deviations
+in Table III reflect across-container variability rather than
+across-trial variability; a per-container comparison under the
+same backbone gives Welch’s t-test p = 0.02 (ILBiT) and
+p = 0.002 (Mamba) at the gripper joint. The compliance
+
+
+TABLE III: Torque tracking error [Nm] on 10 unseen con-
+tainers (mean ± SD). Baseline: each architecture trained
+to directly imitate joint angle, angular velocity, and torque
+trajectories. Prop.: same architecture with the proposed equi-
+librium point action space.
+Architecture
+Method
+Gripper joint
+All joints
+ILBiT
+Baseline
+0.0831 ± 0.0387
+0.0674 ± 0.0794
+Prop.
+0.0477 ± 0.0093
+0.0396 ± 0.0514
+Mamba
+Baseline
+0.0950 ± 0.0418
+0.0636 ± 0.0774
+Prop.
+0.0358 ± 0.0081
+0.0495 ± 0.0609
+encoded in the EP parameters enables the robot to absorb
+object-level variations passively for stable force regulation.
+V. CONCLUSIONS
+We proposed Impedance Cloning, an imitation learning
+framework for contact-rich tasks that redefines the action
+space using stiffness Keq and equilibrium point θeq based on
+the EP hypothesis. We first confirmed that these parameters
+can be estimated from bilateral teleoperation demonstrations,
+and then validated the framework across three manipulation
+tasks: wiping, pick-and-place, and grasping. Experimental re-
+sults demonstrated that the proposed method maintains stable
+contact forces under height perturbations where the baseline
+fails, adapts to unseen object geometries, and improves
+torque tracking accuracy when integrated with generative
+sequence modeling architectures (ILBiT and Mamba).
+These outcomes show that taking upper-level parameters
+grounded in biomechanical insight as the learning target
+is effective for robust contact-rich manipulation. We also
+showed that the framework can be formulated in both joint
+and Cartesian spaces, and that, in the Cartesian-space for-
+mulation, the proposed method is less sensitive than fixed-
+impedance replay to positive height offsets. While we do not
+claim to measure muscle-level stiffness, our results validate
+that extracting and imitating the operator’s latent command
+parameters provides sufficient adaptability for real-world
+uncertainties. Future work includes extending this method to
+dynamic tasks with multi-directional contacts, and examining
+how to choose between the two coordinate spaces, including
+tasks that require exploiting the null space.
+REFERENCES
+[1] T. Z. Zhao, V. Kumar, S. Levine, and C. Finn, “Learning fine-grained
+bimanual manipulation with low-cost hardware,” in Proc. Robotics:
+Science and Systems (RSS), 2023.
+[2] C. Chi, S. Feng, Y. Du, Z. Xu, E. Cousineau, B. Burchfiel, and S. Song,
+“Diffusion policy: Visuomotor policy learning via action diffusion,” in
+Proc. Robotics: Science and Systems (RSS), 2023.
+[3] Z. Fu, T. Z. Zhao, and C. Finn, “Mobile ALOHA: Learning bimanual
+mobile manipulation using low-cost whole-body teleoperation,” in
+Proc. Conf. Robot Learning (CoRL), 2024.
+[4] A. G. Feldman, “Functional tuning of the nervous system with control
+of movement or maintenance of a steady posture—II. Controllable
+parameters of the muscle,” Biophysics, vol. 11, pp. 565–578, 1966.
+[5] A. G. Feldman, “Once more on the equilibrium-point hypothesis (λ
+model) for motor control,” J. Motor Behav., vol. 18, no. 1, pp. 17–54,
+1986.
+[6] E. Bizzi, N. Hogan, F. A. Mussa-Ivaldi, and S. Giszter, “Does the
+nervous system use equilibrium-point control to guide single and
+multiple joint movements?” Behav. Brain Sci., vol. 15, no. 4, pp. 603–
+613, 1992.
+[7] T. Adachi, K. Fujimoto, S. Sakaino, and T. Tsuji, “Imitation learning
+for object manipulation based on position/force information using
+bilateral control,” in Proc. IEEE/RSJ Int. Conf. Intelligent Robots and
+Systems (IROS), 2018, pp. 3648–3653.
+[8] A. Sasagawa, K. Fujimoto, S. Sakaino, and T. Tsuji, “Imitation
+learning based on bilateral control for human-robot cooperation,” IEEE
+Robot. Autom. Lett., vol. 5, no. 4, pp. 6169–6176, 2020.
+[9] M. Bogdanovic, M. Khadiv, and L. Righetti, “Learning variable
+impedance control for contact sensitive tasks,” IEEE Robot. Autom.
+Lett., vol. 5, no. 4, pp. 6129–6136, 2020.
+[10] T. Ren, Y. Dong, D. Wu, and K. Chen, “Learning-based variable
+compliance control for robotic assembly,” J. Mech. Robot., vol. 10,
+no. 6, p. 061008, 2018.
+[11] C. C. Beltran-Hernandez, D. Petit, I. G. Ramirez-Alpizar, and K.
+Harada, “Variable compliance control for robotic peg-in-hole assem-
+bly: A deep-reinforcement-learning approach,” Appl. Sci., vol. 10, no.
+19, p. 6923, 2020.
+[12] M. Oikawa, T. Kusakabe, K. Kutsuzawa, S. Sakaino, and T. Tsuji,
+“Reinforcement learning for robotic assembly using non-diagonal
+stiffness matrix,” IEEE Robot. Autom. Lett., vol. 6, no. 2, pp. 2737–
+2744, 2021.
+[13] J. Buchli, F. Stulp, E. Theodorou, and S. Schaal, “Learning variable
+impedance control,” Int. J. Robot. Res., vol. 30, no. 7, pp. 820–833,
+2011.
+[14] M. Okada, M. Komatsu, and T. Taniguchi, “A contact model based on
+denoising diffusion to learn variable impedance control for contact-
+rich manipulation,” arXiv preprint arXiv:2403.13221, 2024.
+[15] N. Geiger, T. Asfour, N. Hogan, and J. Lachner, “Diffusion-based
+impedance learning for contact-rich manipulation tasks,” IEEE Trans.
+Robot., vol. 42, pp. 3160–3177, 2026.
+[16] Y. Zhang, F. Zhao, and Z. Liao, “Learning and generalizing variable
+impedance manipulation skills from human demonstrations,” in Proc.
+IEEE/ASME Int. Conf. Advanced Intelligent Mechatronics (AIM),
+2022, pp. 810–815.
+[17] E. Burdet, R. Osu, D. W. Franklin, T. E. Milner, and M. Kawato,
+“The central nervous system stabilizes unstable dynamics by learning
+optimal impedance,” Nature, vol. 414, no. 6862, pp. 446–449, 2001.
+[18] N. Hogan, “Impedance control: An approach to manipulation—Part I:
+Theory,” J. Dyn. Syst., Meas., Control, vol. 107, no. 1, pp. 1–7, 1985.
+[19] A. Ajoudani, N. G. Tsagarakis, and A. Bicchi, “Tele-impedance: Tele-
+operation with impedance regulation using a body–machine interface,”
+Int. J. Robot. Res., vol. 31, no. 13, pp. 1642–1656, 2012.
+[20] L. Peternel and A. Ajoudani, “After a decade of teleimpedance: A
+survey,” IEEE Trans. Human-Mach. Syst., vol. 53, no. 2, pp. 401–
+416, 2023.
+[21] L. Peternel, T. Petriˇc, E. Oztop, and J. Babiˇc, “Teaching robots to
+cooperate with humans in dynamic manipulation tasks based on multi-
+modal human-in-the-loop approach,” Auton. Robots, vol. 36, no. 1–2,
+pp. 123–136, 2014.
+[22] Y. Hou, Z. Liu, C. Chi, E. Cousineau, N. Kuppuswamy, S. Feng,
+B. Burchfiel, and S. Song, “Adaptive compliance policy: Learning
+approximate compliance for diffusion guided control,” in Proc. IEEE
+Int. Conf. Robotics and Automation (ICRA), 2025, pp. 4829–4836.
+[23] Y. Yokokura, S. Katsura, and K. Ohishi, “Stability analysis and
+experimental validation of a motion-copying system,” IEEE Trans. Ind.
+Electron., vol. 56, no. 10, pp. 3906–3913, 2009.
+[24] K. Ohnishi, M. Shibata, and T. Murakami, “Motion control for
+advanced mechatronics,” IEEE/ASME Trans. Mechatronics, vol. 1, no.
+1, pp. 56–67, 1996.
+[25] M. Kobayashi, T. Buamanee, Y. Uranishi, and H. Takemura, “IL-
+BiT: Imitation learning for robot using position and torque infor-
+mation based on bilateral control with transformer,” arXiv preprint
+arXiv:2401.16653, 2024.
+[26] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N.
+Gomez, Ł. Kaiser, and I. Polosukhin, “Attention is all you need,” in
+Advances in Neural Information Processing Systems (NeurIPS), 2017,
+pp. 5998–6008.
+[27] A. Gu and T. Dao, “Mamba: Linear-time sequence modeling with
+selective state spaces,” arXiv preprint arXiv:2312.00752, 2023.
+[28] T. Tsuji, “Mamba as a motion encoder for robotic imitation learning,”
+IEEE Access, vol. 13, pp. 69941–69949, 2025.
