@@ -1,0 +1,1365 @@
+UMR: Universal Manipulation Representation
+Song Liu1,2,∗, Linyi Li1,2,∗, Yanshun Zhao1, Rxuan Li1, Xinrui Xu1, Yi Ju1, Yahui Deng1, Senge Zhang1,
+Guoyu Liu1, Yixuan Li1,Wuyang Zhang1,2, Yao Li1, Congcong Zhu1,2,†, Jingrun Chen1,†
+Viewpoint Difference
+Embodiment Gap
+Universal Manipulation Representation
+Action 1
+Action 2
+Action 3
+Action 4
+Ego
+Ideal camera pose
+Jittered camera pose
+Action 5
+Action 6
+World-Ego Point VLA
+Unified Geometric Action Space
+SE(3)
+Conjugation
+Ego Trajectory
+World Flow
+Unifying Heterogeneous Data
+Noisy Egocentric Human Data
+ Data Efficiency
+Human2Robot
+Fig. 1: UMR addresses the challenge of consistently representing and jointly learning from heterogeneous demonstrations through a unified World–Ego
+action representation, enabling WEPVLA to jointly learn in a unified action space, generalize across diverse conditions, and benefit from data scaling.
+Abstract— General-purpose embodied manipulation hinges
+on a unified action representation that generalizes across
+embodiments and scales readily. Yet existing policies rely on
+embodiment-specific action spaces, making cross-embodiment
+demonstrations difficult to leverage at scale and limiting trans-
+fer to new embodiments and spatial variations. To this end,
+we introduce Universal Manipulation Representation (UMR),
+a unified action representation that enables zero-shot skill
+transfer from human demonstrations to heterogeneous robots.
+UMR decomposes manipulation into two functionally distinct
+yet geometrically linked components: embodiment-agnostic
+World Flow, which describes task-relevant object motion in
+the world frame, and Ego Trajectory, which represents end-
+effector motion relative to the current pose. We instantiate
+UMR as World–Ego Point VLA (WEPVLA), a compact 0.5B-
+parameter policy that learns in the unified geometric action
+space through a dual-stream Point Action Adapter and a unified
+Point Action Expert, with an SE(3) conjugation coupling the
+two components. To improve data efficiency, we complement
+UMR with a Data-Efficient Strategy (DES) that diversifies
+object configurations through stage-aware point-cloud editing
+while preserving demonstrated contact geometry. In simulation,
+WEPVLA achieves average success rates of 97.5% on LIBERO
+and 85.7% on the 10-task RLBench benchmark. In real-world
+experiments, a single policy trained on human demonstrations
+augmented by DES transfers zero-shot to diverse deployment
+conditions. With about 10 minutes of collected human demon-
+strations per task and no robot demonstrations, it achieves
+91.7% average success across six evaluation settings, compared
+with 60.8% for HumanEgo. Code and additional materials are
+available at https://umr-wepvla.github.io/.
+1University of Science and Technology of China, Hefei, China. 2Suzhou
+Artificial Intelligence Laboratory, Suzhou, China.
+∗Equal contribution.
+†Corresponding author.
+I. INTRODUCTION
+Scaling up data has become the prevailing route toward
+general-purpose embodied manipulation. Yet the effective-
+ness of data scaling rests on a more fundamental prerequisite:
+how to represent heterogeneous demonstrations. Existing
+policies operate in embodiment-specific joint or end-effector
+spaces [1]–[4], while available datasets encode actions under
+incompatible control semantics and coordinate frames [5]–
+[9]. Consequently, demonstrations from humans and hetero-
+geneous robots cannot be directly expressed in a shared
+action space and increasing data volume does not necessarily
+broaden the model’s transferable capabilities. This calls for
+both a unified manipulation representation and an end-to-end
+policy that can jointly learn from heterogeneous demonstra-
+tions within this representation.
+Recent 3D-aware policies use point clouds, depth, and
+poses to model spatially grounded manipulation [10]–[13].
+Meanwhile, large-scale egocentric datasets establish natural
+human demonstrations as a scalable source of manipulation
+experience [14]–[19]. However, transferring such demonstra-
+tions to robots still relies on specialized interfaces [20]–
+[22], motion retargeting [17], [18], or embodiment-specific
+adaptation [19]. These approaches therefore improve data ac-
+quisition without fully resolving the incompatibility between
+human and robot action spaces.
+Another line of work represents manipulation through
+object motion, 3D flow, or affordances, capturing physi-
+cal effects that are less dependent on the acting embodi-
+ment [19], [23]–[26]. Nevertheless, such world-level motion
+arXiv:2609.34256v1  [cs.RO]  28 Sep 2026
+
+
+Heterogeneous Data
+Deployment
+WEPVLA Co-Training
+Pre-trained VLM
+Noise
+Self-attention
+Upsample
+Downsample
+Lite Point Encoder
+Image token
+Language token
+Action command
+Fore&Background
+Tokenizer
+World Flow
+Point Cloud
+Denoised
+Ego Trajectory
+Point Cloud
+Action expert
+Fine-tuned
+Frozen
+W.F. stream
+E.T. stream
+…
+…
+…
+Generated RGB-D Ego Trajectory
+Objects Point-Flow Extraction
+Universal Manipulation Representation
+Representation Alignment
+Real Head Camera View
+Real Wrist Camera View
+VLA route
+Diverse poses
+Change views
+Cross-embodiment
+Diverse Views
+Diverse Embodiments
+Egocentric Human-
+Hand
+Fig. 2: Overview of the UMR pipeline. UMR reformulates the learning targets of heterogeneous manipulation data from different sources into a
+unified dual-stream representation consisting of World Flow and Ego Trajectory. Building on this representation, we develop WEPVLA with two dedicated
+branches to extract task-relevant and execution-relevant features, which are subsequently fused in a shared Action Expert for action generation. Experiments
+demonstrate strong generalization across robot embodiments, viewpoints, and spatial configurations.
+is not directly aligned with the local control interface of
+a robot and typically requires additional grasping, geomet-
+ric fitting, action decoding, or control modules [23]–[26].
+While these designs enable effective transfer, their multi-
+stage pipelines often rely on task- or embodiment-specific
+interfaces between motion prediction and action generation.
+Together with inconsistent action representations, this sepa-
+ration hinders joint end-to-end learning from heterogeneous
+demonstrations and makes it harder to translate data scaling
+into generalization across tasks and embodiments.
+To address these limitations, we introduce Universal
+Manipulation Representation (UMR), a unified geometric
+action representation for end-to-end learning from hetero-
+geneous demonstrations. UMR represents the same physical
+motion through two complementary geometric components.
+World Flow describes task-relevant motion as a structured
+SE(3) transformation trajectory in the world frame. Under
+a fixed object–end-effector attachment, it removes the grasp
+transform and captures the same object motion across differ-
+ent demonstrators. Ego Trajectory expresses the correspond-
+ing end-effector motion relative to its current pose, removing
+dependence on the global coordinate frame while retaining a
+controller-aligned action representation. World Flow and Ego
+Trajectory are linked by SE(3) conjugation and therefore
+constitute two coordinate views of the same underlying
+motion. This relation allows transferable task motion learned
+from one demonstrator to be expressed as an executable
+trajectory for another embodiment. Unlike unconstrained
+dense point flow, UMR represents motion through a compact
+and geometrically consistent SE(3) trajectory.
+We
+instantiate
+UMR
+as
+World–Ego
+Point
+VLA
+(WEPVLA),
+a
+point-cloud-based
+vision-language-action
+policy. WEPVLA employs a dual-stream Point Action
+Adapter to encode World Flow and Ego Trajectory un-
+der their respective geometric supervision, together with
+a shared Point Action Expert that jointly generates both
+action streams. During inference, the two streams are jointly
+denoised, while only the Ego Trajectory is executed by the
+robot. In this way, WEPVLA jointly learns transferable task-
+relevant object motion and executable actions in a fully
+end-to-end policy, without a separate task-specific stage for
+converting predicted world motion into robot actions. To
+make fuller use of the available demonstrations, we further
+introduce a Data-Efficient Strategy (DES) that diversifies
+relative object configurations while preserving demonstrated
+contact geometry. Experiments on LIBERO and RLBench
+demonstrate competitive manipulation performance, while
+real-world evaluations show zero-shot human-to-robot trans-
+fer across embodiments and scene configurations.
+II. RELATED WORK
+A. 3D-Aware Vision-Language-Action Policies
+Pose-VLA separates universal 3D pose pretraining from
+robot-specific action alignment [13], while PointACT incor-
+porates hierarchical point-cloud features into action decoding
+through multi-scale point–action interaction [10]. Both en-
+hance 3D reasoning but retain embodiment-specific action
+representations. UMR instead represents a unified action
+space through World Flow and Ego Trajectory.
+B. Egocentric and Robot-Free Human Demonstrations
+Robot-free human demonstrations provide scalable train-
+ing data. UMI [20] and HiFi-UMI [22] use handheld inter-
+faces for data collection and robot deployment, while HUG
+retargets human grasps to robot hands [18]. EgoWAM jointly
+learns world prediction and robot action from egocentric
+data, using world prediction as auxiliary supervision [19].
+UMR instead unifies natural human and robot demonstrations
+
+
+in a shared World–Ego action space, where object motion
+and gripper execution are geometrically coupled.
+C. Motion Flow and Affordance Representations
+Flow- and affordance-based methods describe task effects
+rather than embodiment-specific motion. BridgeACT predicts
+where to grasp and how to move, converting these predictions
+into robot actions through separate grasping modules [26].
+UMR couples embodiment-independent World Flow with
+executable Ego Trajectory through an explicit SE(3) conju-
+gation. This formulation links object motion to executable
+action across varying scene configurations and grasp poses,
+enabling end-to-end cross-embodiment manipulation.
+III. METHOD
+A. Universal Manipulation Representation
+UMR decomposes manipulation into two functionally dis-
+tinct yet geometrically linked components: World Flow and
+Ego Trajectory, as shown in Fig. 1.
+1) World Flow: Let E, O, and W denote the end-effector,
+manipulated object, and fixed world frames, respectively. We
+use the notation ATB to denote the rigid transformation
+of frame B represented in frame A. Then the end-effector
+trajectory starting at t with an action chunk of horizon H can
+be defined as {W TE,t+k}H
+k=0. Assume that the end-effector
+maintains rigid contact with the manipulated object within
+an action chunk, such that
+W TE,t = W TO,tG,
+G = OTE,
+(1)
+where G is a time-invariant transform within the action
+chunk. We further define the temporal relative transformation
+of frame B from time t to t + k, represented in frame A, as
+∆ATB,t→t+k = ATB,t+k
+ ATB,t
+−1 ,
+(2)
+where ∆W TE,t→t+k denotes the relative end-effector mo-
+tion from time t to time t + k in frame W. Therefore, the
+motion relative to the action chunk’s initial time t satisfies
+∆W TE,t→t+k = W TE,t+k
+ W TE,t
+−1
+=
+ W TO,t+kG
+  W TO,tG
+−1
+= ∆W TO,t→t+k
+.
+(3)
+Since G is eliminated within the action chunk, the end-
+effector trajectory implicitly encodes the object motion. Let i
+index the grasp configurations Gi. World Flow can represent
+the same object motion across diverse grasp configurations.
+2) Ego Trajectory: Although World Flow provides an
+embodiment-agnostic description of task-relevant motion,
+it is represented in a fixed world frame and cannot be
+directly executed across different embodiments. We therefore
+represent the same motion in the current end-effector frame
+as Ego Trajectory. Specifically, let Et denote the end-effector
+frame at time t, whose pose is W TE,t. All future end-effector
+poses within the action chunk are aligned to Et:
+EtTE,t+k
+	H
+k=1 =
+n W TE,t
+−1 W TE,t+k
+oH
+k=1 .
+(4)
+Furthermore, Ego Trajectory and World Flow are linked by
+an SE(3) conjugate transformation:
+∆EtTE,t→t+k = EtTE,t+k
+ EtTE,t
+−1
+=
+ W TE,t
+−1 W TE,t+k
+=
+ W TE,t
+−1 ∆W TE,t→t+k
+ W TE,t
+
+=
+ W TE,t
+−1 ∆W TO,t→t+k
+ W TE,t
+
+.
+(5)
+Conversely, Ego Trajectory removes dependence on the
+global coordinate system and robot base configuration. The
+world-frame object motion can be converted into the ego-
+centric executable representation.
+Overall, Ego Trajectory and World Flow describe the
+same underlying physical motion from different perspectives.
+World Flow provides an embodiment-agnostic task-relevant
+motion prior, while Ego Trajectory removes global coordi-
+nate dependency and provides an executable representation
+for different embodiments. Through grasp-dependent SE(3)
+conjugation, Ego Trajectory preserves the corresponding
+object motion and enables cross-embodiment transfer.
+B. World–Ego Point VLA
+We instantiate UMR as WEPVLA, a point-cloud VLA
+with a dual-stream Point Action Adapter and a unified Point
+Action Expert, as shown in Fig. 2. Both streams are built on
+a shared Motion-Aware Segmentation module that extracts
+interaction-relevant foreground.
+1) Motion-Aware Segmentation: Let xi,t ∈Xt denote the
+i-th point of point cloud Xt at time t, which is expressed in
+the Et frame. Specifically, let Kt ⊆{−T, . . . , −1, 1, . . . , T}
+denote a discrete set of temporal offsets sampled from the
+entire episode of length T. We evaluate co-moving and
+world-static hypotheses for each temporal observation k ∈
+Kt:
+dmov
+i,t
+=
+min
+y∈Xt+k ∥xi,t −y∥2
+dsta
+i,t =
+min
+y∈Xt+k ∥
+ ∆EtTE,t→t+k
+−1 xi,t −y∥2
+.
+(6)
+The co-motion evidence is obtained from the normalized
+residual difference with motion-dependent weight wt,k via
+a robust temporal aggregation:
+gi,t =
+X
+k∈Kt
+"
+wt,k
+dsta
+i,t −dmov
+i,t
+dsta
+i,t + dmov
+i,t
++ ϵ
+#
+,
+(7)
+where ϵ is a small constant introduced to avoid numerical in-
+stability when the denominator approaches zero. The weight
+wt,k accounts for the varying motion magnitude across tem-
+poral offsets k at time t, and reflects the relative motion speed
+of the trajectory over the corresponding temporal interval.
+We further fuse co-motion, approach, contact, and tool-
+sweep interaction cues into a soft foreground target:
+qi,t = 1 −
+Y
+r∈R
+ 1 −er
+i,t
+
+, R = {mov, app, con, sweep},
+(8)
+
+
+where er
+i,t ∈[0, 1] denotes the foreground score of point i
+under cue r at time t, with higher scores indicating greater
+relevance to manipulation. Thus, the foreground includes
+both co-moving manipulated objects and static targets in-
+volved in tool interaction.
+The resulting qi,t serves as offline supervision for the
+student PriorSeg network, implemented with a LitePT back-
+bone [27] and a binary segmentation head. While the teacher
+exploits temporal point clouds and robot trajectories, the
+student predicts foreground from only the current XYZRGB
+point cloud, enabling single-frame inference.
+2) Point Modeling: As shown in Fig. 2, the segmented
+point cloud is processed by World–Ego streams before
+entering a shared Point Action Expert. The World stream
+represents observations and actions in the world frame W,
+while the Ego stream re-expresses them in the current end-
+effector frame Et. Each stream first employs a Coarse-to-
+Fine Point Encoder to obtain fine-grained foreground tokens
+and coarse background tokens.
+The point-wise foreground features are then fused with
+flow-time and chunk-position-aware action tokens through
+bidirectional self-attention in the Point Action Adapter, pro-
+ducing point-wise action tokens. Finally, the dual-stream
+action and scene tokens are jointly processed with frozen
+VLM image and language tokens by the shared Point Action
+Expert for action prediction.
+3) Coupled Flow Matching: Let aW , aE ∈RH×10 denote
+the World and Ego action chunks, where each action consists
+of a 9D pose (3D translation and 6D rotation [28]) and a
+gripper state. Given Ct = W TE,t ∈SE(3), we sample an
+Ego prior zE and obtain its World counterpart by
+zW = ΦCt(zE),
+(9)
+where ΦCt transforms the 9D pose by Ct while preserving
+the gripper state, coupling the same physical prior across the
+two frames. For s ∈{E, W} and flow time τ ∈[0, 1], we
+interpolate between the prior zs and target action as as
+xs
+τ = (1 −τ)zs + τas,
+us
+τ = as −zs,
+(10)
+where xs
+τ and us
+τ denote the noisy action state and target
+velocity, respectively. To bridge the two flows, let Bτ, Wτ ∈
+SE(3) be the pose components of xE
+τ and xW
+τ . We align
+them into a common world-motion representation by
+GE
+τ = CtBτC−1
+t
+,
+GW
+τ
+= WτC−1
+t
+.
+(11)
+The resulting GE
+τ
+and GW
+τ
+condition the corresponding
+action tokens for joint denoising in the shared Point Action
+Expert. The overall training objective is
+L = LE-FM + λW LW -FM + λsegLPriorSeg,
+(12)
+where LE-FM and LW -FM supervise the Ego and World flow
+velocities, and LPriorSeg supervises manipulation-relevant
+foreground segmentation. At inference, both flows are jointly
+denoised, while only the Ego action chunk is executed.
+C. Data-Efficient Strategy
+To improve sample efficiency, we complement UMR
+with a Data-Efficient Strategy (DES) based on stage-
+aware point-cloud editing. DES independently perturbs task-
+relevant objects to diversify their relative spatial configura-
+tions, expanding the coverage of object-object relations in
+the training data.
+Given a demonstration τ, rigid transformations are sam-
+pled for selected objects and applied to their point clouds.
+During interaction, the end-effector trajectory is transformed
+consistently with the manipulated object to preserve the
+demonstrated contact geometry:
+W TE′,t = H′
+objH−1
+obj
+W TE,t,
+(13)
+where Hobj and H′
+obj denote the original and augmented ob-
+ject poses. Non-interaction trajectories are then regenerated
+to connect the edited interaction states, producing diverse
+and geometrically synthetic demonstrations.
+(a) RLBench 10 tasks.
+(b) LIBERO 4 task suites.
+Fig. 3: Overview of the simulated benchmarks. (a) Ten RLBench tasks
+covering diverse manipulation scenarios that require object interaction and
+tool usage. (b) Four LIBERO suites, spanning tasks related to spatial rela-
+tions, object interaction, goal specification, and long-horizon manipulation.
+IV. EXPERIMENTS
+We instantiate UMR as WEPVLA evaluated with respect
+to three questions: (1) whether UMR improves general ma-
+nipulation performance in novel tasks, (2) whether human-
+only training transfers zero-shot across robot embodiments
+and scene configurations, and (3) whether the representation
+benefits from data scaling.
+A. Simulation Experiments
+We first evaluated WEPVLA on widely used benchmarks
+RLBench [29] and LIBERO [30] illustrated in Fig. 3.
+1) Experiment Setting:
+a) RLBench: Following PointACT [10], we train a
+unified policy on 10 tasks spanning articulated-object ma-
+nipulation (close box, fridge, and laptop lid; toilet seat
+down), grasp manipulation (phone on base, stack wine, frame
+removal, and umbrella retrieval), and tool use (water plants
+
+
+and sweep to dustpan). We collect 100 expert demonstrations
+per task (1,000 total) using the original language instructions.
+Front-view RGB images (256 × 256) and point clouds are
+recorded at 20 Hz, with point clouds downsampled to 19,500
+points. Following HumanEgo [31], we represent robot states
+as virtual-gripper point clouds.
+At inference, WEPVLA predicts a 32-step Ego Trajectory
+(Eq. 4) and executes its first 28 actions. The controller
+attempts Cartesian interpolation with inverse kinematics,
+falling back to RRT-Connect [32] with a 50 ms sampling bud-
+get when infeasible. We evaluate 100 episodes per task using
+the official success criteria, with environment and policy-
+sampling seeds fixed to 100 and 20260801, respectively.
+b) LIBERO:
+We train a unified policy on all 40
+tasks across LIBERO 4 suites, using 50 official demonstra-
+tions per task (2,000 total). Replaying demonstrations from
+recorded simulator states yields synchronized RGB-D obser-
+vations and metric point clouds at 20 Hz, with controller-
+reconstructed targets as action labels. We follow the RL-
+Bench training protocol with 10,000 input scene points and
+adopt the evaluation configuration of OpenVLA [1]. Each
+task is evaluated on 50 initial states, with environment and
+policy-noise seeds fixed to 7 and 0, respectively.
+TABLE I: Success rate (%) on RLBench 10 tasks. We evaluate WEPVLA
+over 100 episodes per task. Results for other methods are taken from [10].
+Close
+box
+Close
+laptop
+Toilet
+seat
+Sweep
+to dustpan
+Close
+fridge
+Phone
+base
+Umbrella
+out
+Frame
+off
+Wine
+rack
+Water
+plants Mean
+ManipLLM (7B) [33]
+50
+80
+40
+20
+80
+35
+10
+25
+15
+20
+38
+OpenVLA (7B) [1]
+65
+40
+75
+60
+80
+20
+35
+15
+10
+10
+41
+π0 (2.6B) [34]
+90
+60
+100
+30
+90
+25
+35
+75
+5
+45
+55
+CogACT (7B) [35]
+80
+85
+90
+65
+90
+50
+60
+35
+25
+25
+60
+HybridVLA (7B) [36]
+85
+95
+100
+90
+100
+50
+50
+70
+50
+50
+74
+EO1 (3B) [37]
+97
+99
+100
+95
+83
+46
+76
+40
+61
+35
+73.2
+ACT3D [38]
+94
+62
+99
+80
+87
+53
+97
+31
+31
+11
+64.5
+PointACT (3B) [10]
+91
+99
+96
+59
+81
+99
+99
+69
+90
+40
+82.3
+WEPVLA (0.5B)
+99
+91
+99
+99
+99
+78
+79
+77
+89
+47
+85.7
+TABLE II: Comparison of 2D VLAs and 3D-aware VLAs on LIBERO
+Bench. “Pretrained” denotes whether the model is fully pretrained, and “train
+tasks” denotes the number of LIBERO tasks the model is fine-tuned on.
+Model
+size
+Wrist
+camera
+Pre-
+trained
+Frozen
+VLM
+Train
+tasks
+Spatial
+Object
+Goal
+Long
+Avg.
+2D VLAs
+OpenVLA-OFT [39]
+7B
+✓
+✓
+×
+40
+97.7
+98.0
+96.1
+95.3
+96.8
+SmolVLA [3]
+2B
+✓
+✓
+✓
+40
+93
+94
+91
+77
+88.8
+GR00T-N1.6 [40]
+3B
+✓
+✓
+✓
+10
+97.7
+98.5
+97.5
+94.4
+97.0
+π0.5 [2]
+3B
+✓
+✓
+×
+10
+98.8
+98.2
+98.0
+92.4
+96.9
+X-VLA [41]
+0.9B
+✓
+✓
+×
+40
+98.2
+98.6
+97.8
+97.6
+98.1
+MolmoAct2 [42]
+7B
+✓
+✓
+×
+40
+97.8
+100
+97.8
+93.2
+97.2
+EO1 [37]
+3B
+✓
+✓
+×
+100
+99.7
+99.8
+99.2
+94.8
+98.4
+3D-aware VLAs
+SpatialVLA [11]
+4B
+×
+✓
+×
+10
+88.2
+89.9
+78.6
+55.5
+78.1
+PointACT [10]
+3B
+×
+×
+✓
+10
+97.4
+99.6
+96.2
+90.6
+96.0
+WEPVLA (Ours)
+0.5B
+×
+×
+✓
+40
+98.4
+99.8
+96.8
+95.0
+97.5
+2) Comparison with State of the Art:
+a) State of the art on RLBench: As shown in Tab. I,
+WEPVLA achieves the best average success rate of 85.7%
+on the 10-task RLBench benchmark, outperforming the
+strongest baseline, PointACT, by 3.4 percentage points. The
+improvement is particularly pronounced on Sweep to dust-
+pan, where WEPVLA increases the success rate from 59%
+to 99%. This task requires coordinated tool use and precise
+reasoning over the relative geometry between the tool, target
+object, and environment, which is well aligned with UMR’s
+explicit modeling of task-relevant object motion through
+World Flow. In contrast, WEPVLA performs worse than
+PointACT on Phone on Base and Umbrella Out (78% vs.
+99% and 79% vs. 99%, respectively). We observe that these
+tasks frequently invoke configuration-space planning near
+kinematic boundaries, producing trajectories with large and
+redundant rotations, making Ego Trajectory more difficult to
+learn.
+b) Smaller
+yet
+stronger
+on
+LIBERO:
+WEPVLA
+achieves an average success rate of 97.5% on LIBERO as
+shown in Tab. II, while using only 0.5B parameters and a sin-
+gle front-view observation. Under the unified 40-task training
+setting, it outperforms SmolVLA (88.8%) and MolmoAct2
+(97.2%), despite being substantially smaller and not requiring
+a wrist camera. Among 3D-aware VLAs, WEPVLA achieves
+the best performance on all four suites, improving over
+PointACT from 96.0% to 97.5% on average, with the largest
+gain on the Long-Horizon suite (95.0% vs. 90.6%). These
+results suggest that the gains of WEPVLA do not arise
+solely from stronger 3D perception: by jointly modeling
+transferable World Flow and executable Ego Trajectory in
+a shared policy, UMR provides a more effective action rep-
+resentation for multi-task manipulation. Overall, WEPVLA
+delivers competitive or state-of-the-art performance with
+substantially fewer parameters, while maintaining a single
+policy across all tasks.
+Fig. 4: Real-world setup and Eval Tasks. Left: Experimental scene and
+hardware, manipulated objects, and training data source. Right: Examples
+of evaluation tasks under diverse deployment conditions.
+B. Real-World Experiments
+We further evaluated the generalization of WEPVLA
+trained solely on human demonstrations in real-world en-
+vironments under diverse cross-condition generalization.
+1) Experiment setup: As shown in Fig. 4, we construct
+two real-world tabletop environments, a desk scene and a
+table scene, to evaluate WEPVLA under diverse deployment
+conditions. The setup includes two robot embodiments, Piper
+and Franka, each equipped with a parallel-jaw gripper,
+as well as a fixed Intel RealSense L515 RGB-D camera
+for scene observation. We further introduce three portable
+gripper configurations with different geometries to evaluate
+robustness to end-effector variations. Across the two scenes,
+seven everyday objects with diverse shapes, sizes, and phys-
+ical properties are used for manipulation. Together, these
+configurations enable evaluation across changes in scene
+layout, viewpoint, robot embodiment, gripper geometry, and
+object properties.
+
+
+TABLE III: Real-world evaluation settings.
+Tasks
+ID Embodiments Views
+Scenes
+Height
+Disturbance
+CubeStacking I
+Franka-A
+×
+Table
+✓
+×
+II
+Piper
+✓
+Desk
+×
+×
+TowelFolding III
+Franka-B
+×
+Table
+×
+×
+TrashSweep
+IV
+Franka-C
+×
+Table
+×
+✓
+MugRack
+V
+Franka-C
+×
+Table
+×
+×
+VI
+Piper
+×
+Desk
+✓
+×
+TABLE IV: Training data statistics.
+Source
+Type
+Tasks
+Episodes
+Views
+Robots
+Public Datasets
+LIBERO [30]
+Sim
+40
+2000
+Exo
+1
+RLBench [29]
+Sim
+10
+1000
+Exo
+1
+RH20T [43]
+Real
+146
+8300
+Exo
+4
+Task Data
+Ours
+Real
+4
+3000
+Exo / Ego
+0
+2) Data Collection: We collect human demonstrations
+using a head-mounted Intel RealSense L515 RGB-D camera,
+recording synchronized RGB-D frames, camera intrinsics,
+timestamps, and hand motion. WiLoR [44] estimates 3D
+hand poses, from which the thumb and index finger are
+mapped to a virtual parallel-jaw gripper to obtain robot-
+compatible end-effector trajectories.
+To compensate for head motion, we use the camera
+frame as the scene reference for exocentric sequences. For
+egocentric sequences, ORB-SLAM3 [45] estimates camera
+motion, allowing reconstructed point clouds and virtual-
+gripper trajectories to be transformed into the first camera
+frame of each episode. The resulting metric-aligned point
+clouds and trajectories serve as expert demonstrations.
+3) Task Settings: We evaluate WEPVLA on four tasks as
+shown in Fig. 4: CubeStacking for grasping, relocation, and
+appearance reasoning; MugRacking for precise object–pose
+alignment; TrashSweeping for tool use; and TowelFolding
+for deformable-object manipulation. Six evaluation settings
+test generalization across embodiments, viewpoints, scenes,
+heights, and disturbances as shown in Tab. III.
+For each task, we collect 100 human demonstrations in
+approximately 10 minutes: 50 nominal and 50 recovery
+demonstrations from out-of-distribution initial states and
+recovery scenarios. DES further generates 500 episodes
+per task, including full-stage and stage-specific trajectories,
+yielding 600 training episodes per task.
+Fig. 5: Real-world comparison with HumanEgo. Both methods are trained
+as unified policies on 10 minutes of human demonstrations per task. Left:
+Success rates across six real-world evaluation (I–VI). Right: Success rates
+aggregated by generalization condition. Cross-Embodiment includes Tasks
+I–VI, Cross-Environment includes Tasks I, II, V, and VI, and Cross-Setup
+includes Tasks I, III, and VI. UMR consistently outperforms HumanEgo
+across both individual tasks and aggregated generalization settings.
+4) One Policy, Zero-Shot across Tasks and Conditions:
+We evaluate whether a single policy trained solely on human
+demonstrations can generalize zero-shot across tasks, robot
+embodiments, and deployment conditions. This directly tests
+the core design of UMR: World Flow captures embodiment-
+agnostic task motion, while Ego Trajectory adapts it to the
+current end-effector for execution.
+We compare WEPVLA with HumanEgo [31] under the
+same setting, where both methods are trained as unified
+multi-task policies using approximately 10 minutes of hu-
+man demonstrations per task and no robot demonstrations.
+As shown in Fig. 5, WEPVLA achieves an average suc-
+cess rate of 91.7%, substantially outperforming HumanEgo
+at 60.8% across Tasks I–VI. Aggregated over the cross-
+condition generalization, WEPVLA achieves success rates of
+95.0%, 91.7%, and 90.0% under cross-environment, cross-
+embodiment, and cross-setup generalization, respectively,
+compared with 70.0%, 60.8%, and 58.3% for HumanEgo.
+These consistent gains across tasks and distribution shifts
+indicate that UMR captures transferable manipulation struc-
+ture rather than condition-specific action mappings. Since
+this unified action representation is learned end to end within
+a single policy, it provides a natural basis for leveraging
+larger and more heterogeneous datasets; we therefore next
+investigate its scaling behavior with increasing data.
+C. Scaling Experiments
+We evaluate UMR from two complementary perspectives:
+data efficiency and data scaling.
+For data efficiency, we vary the human-demonstration
+budget from 3 to 10 minutes per task and compare UMR,
+UMR w/o DES, and HumanEgo under the same evaluation
+protocol. DES augments limited demonstrations through
+stage-aware point-cloud editing, perturbing task-relevant ob-
+ject configurations while preserving the demonstrated contact
+geometry. For data scaling, we evaluate Long-6 and Long-8,
+the two most challenging long-horizon tasks for our model,
+to reduce ceiling effects and better expose scaling behavior.
+We progressively expand the training corpus from 100 task-
+specific LIBERO episodes (50 per task), to all 2,000 LIBERO
+episodes, and finally to 14,300 heterogeneous episodes from
+the datasets summarized in Tab. IV, while keeping the model
+architecture and evaluation protocol fixed.
+As shown in Fig. 6(a), UMR achieves higher success
+rates with substantially less human demonstration data, while
+DES further improves performance in the low-data regime.
+Fig. 6(b) further shows consistent gains as the training set
+grows: the average success rate on Long-6 and Long-8
+increases from 82% to 90% and 96% across the three data
+scales. Together, these results demonstrate that UMR is both
+data-efficient and able to benefit from data scaling.
+
+
+0
+3
+6
+10
+Collection Time (mins)
+0%
+25%
+50%
+75%
+100%
+Success Rate (%)
+UMR
+UMR w/o DES
+HumanEgo
+3min
+6min
+10min
+3min
+6min
+10min
+(a)
+100
+2000
+14300
+Data Size (episodes)
+70
+75
+80
+85
+90
+95
+100
+Success Rate (%)
+Long-6
+Long-8
+Average
+82%
+90%
+96%
+100
+episodes
+2000
+episodes
+14300
+episodes
+(b)
+Fig. 6: Data efficiency and scaling of UMR. (a) UMR achieves higher success rates with limited human demonstrations, while DES further improves
+data efficiency. (b) Scaling the training data improves performance on both long-horizon tasks, increasing average success from 82% to 96%.
+V. ABLATION STUDIES
+WEPVLA is built upon SmolVLA [3]. To isolate the
+contributions of 3D perception, point–action modeling, and
+the World–Ego representation, we progressively augment the
+baseline with raw point clouds, motion-aware foreground
+segmentation, Point Modeling, Ego Trajectory, and World
+Flow, as summarized in Tab. V.
+A. From Raw 2D to 3D Perception
+Our evaluation of the official SmolVLA checkpoint yields
+an average success rate of 81.65%, compared with the
+reported 87.3%. Adding raw scene point clouds slightly
+reduces performance to 81.50%, indicating that unstructured
+3D geometry alone is insufficient. Motion-aware foreground
+segmentation raises success to 89.00% by focusing on
+interaction-relevant regions. Point Modeling further improves
+it to 92.25% by integrating point-wise geometry with action
+tokens and multimodal features. These results highlight the
+importance of both selecting relevant geometry and effec-
+tively integrating it into action prediction.
+B. From 3D Perception to World–Ego Representation
+Introducing Ego Trajectory increases success to 96.40% by
+expressing actions relative to the current end-effector pose,
+reducing dependence on global configurations and enabling
+continual re-anchoring during execution. Adding World Flow
+further improves success to 97.50%. Its embodiment-agnostic
+task-motion supervision complements the locally executable
+Ego Trajectory, helping the policy preserve intended task
+effects across grasp poses and spatial configurations.
+TABLE V:
+Success rates (%) on LIBERO. Episodes denotes the total
+number of evaluation episodes for each method and the mean is calculated
+across all four suites. Policies are trained only in front view.
+Method
+Episodes
+Spatial
+Object
+Goal
+Long
+Mean
+SmolVLA(Official)
+2000
+82.00
+92.00
+85.20
+67.40
+81.65
++ Point Cloud
+400
+92.00
+76.00
+91.00
+67.00
+81.50
++ Motion Seg.
+400
+93.00
+94.00
+93.00
+76.00
+89.00
++ Point Modeling
+400
+97.00
+97.00
+92.00
+83.00
+92.25
++ Ego Trajectory
+200
+97.60
+99.10
+94.70
+94.00
+96.40
++ World Flow(Ours)
+2000
+98.40
+99.80
+96.80
+95.00
+97.50
+VI. CONCLUSIONS
+In this work, we presented UMR, a unified action repre-
+sentation for learning manipulation from heterogeneous hu-
+man and robot demonstrations. UMR couples embodiment-
+agnostic World Flow with locally executable Ego Trajectory
+through SE(3) conjugation, connecting transferable object
+motion with embodiment-conditioned execution. We instan-
+tiated UMR as WEPVLA, a compact 0.5B-parameter policy
+with a dual-stream Point Action Adapter and a shared Point
+Action Expert. The policy jointly predicts both components
+and executes only the Ego Trajectory. Motion-aware fore-
+ground segmentation focuses learning on interaction-relevant
+geometry, while DES enriches object configurations for
+data-efficient training. Simulation experiments show strong
+performance on RLBench and LIBERO, and real-world
+evaluations support zero-shot human-to-robot transfer across
+embodiments and scene configurations. Together, these re-
+sults highlight the value of a shared geometric action space
+for transferable manipulation and provide a foundation for
+learning from heterogeneous demonstrations at scale.
+Limitations. The current implementation relies on pre-
+cise RGB-D geometry and hand pose estimation, whose
+quality can deteriorate under severe occlusion or missing
+depth. Evaluation also focuses on tabletop manipulation
+with parallel-jaw grippers; broader validation with dexterous
+hands and more complex contact patterns remains necessary.
+Future Work. Future research will explore more robust
+3D reconstruction from 2D images, larger-scale pretraining
+on diverse human and robot demonstrations, and extensions
+to dexterous and dual-arm manipulation, broadening the
+applicability of the unified representation.
+REFERENCES
+[1] M. J. Kim, K. Pertsch et al., “Openvla: An open-source vision-
+language-action model,” arXiv preprint arXiv:2406.09246, 2024.
+[2] P.
+Intelligence,
+Kevin
+et
+al.,
+“π0.5:
+a
+vision-language-action
+model with open-world generalization,” 2025. [Online]. Available:
+https://arxiv.org/abs/2504.16054
+[3] M. Shukor, D. Aubakirova et al., “Smolvla: A vision-language-action
+model for affordable and efficient robotics,” 2025. [Online]. Available:
+https://arxiv.org/abs/2506.01844
+
+
+[4] J. Cen, C. Yu et al., “WorldVLA: Towards autoregressive action
+world model,” arXiv preprint arXiv:2506.21539, 2025. [Online].
+Available: https://arxiv.org/abs/2506.21539
+[5] Open X-Embodiment Collaboration, “Open x-embodiment: Robotic
+learning datasets and RT-X models,” arXiv preprint arXiv:2310.08864,
+2023. [Online]. Available: https://arxiv.org/abs/2310.08864
+[6] K.
+Wu,
+C.
+Hou
+et
+al.,
+“RoboMIND:
+Benchmark
+on
+multi-
+embodiment intelligence normative data for robot manipulation,”
+arXiv preprint arXiv:2412.13877, 2024. [Online]. Available: https:
+//arxiv.org/abs/2412.13877
+[7] A. Khazatsky, K. Pertsch et al., “DROID: A large-scale in-the-wild
+robot manipulation dataset,” arXiv preprint arXiv:2403.12945, 2024.
+[Online]. Available: https://arxiv.org/abs/2403.12945
+[8] K. Liu, Z. Jia et al., “FastUMI-100K: Advancing data-driven robotic
+manipulation with a large-scale UMI-style dataset,” arXiv preprint
+arXiv:2510.08022, 2025. [Online]. Available: https://arxiv.org/abs/
+2510.08022
+[9] Y. Liu, Y. Liu et al., “HOI4D: A 4d egocentric dataset for category-
+level human-object interaction,” arXiv preprint arXiv:2203.01577,
+2022. [Online]. Available: https://arxiv.org/abs/2203.01577
+[10] S. Chen, P. Pacaud et al., “PointACT: Vision-language-action
+models with multi-scale point-action interaction,” arXiv preprint
+arXiv:2605.21414, 2026. [Online]. Available: https://arxiv.org/abs/
+2605.21414
+[11] D. Qu, H. Song, Q. Chen, Y. Yao, X. Ye, Y. Ding, Z. Wang,
+J. Gu, B. Zhao, D. Wang, and X. Li, “Spatialvla: Exploring spatial
+representations for visual-language-action model,” 2025. [Online].
+Available: https://arxiv.org/abs/2501.15830
+[12] P. Li, Y. Chen et al., “Bridgevla: Input-output alignment for
+efficient 3d manipulation learning with vision-language models,”
+2025. [Online]. Available: https://arxiv.org/abs/2506.07961
+[13] H. Lin, H. Yu, J. Huang, H. Zhang, Y. Ling, P. Tan et al., “Posevla:
+Universal pose pretraining for generalizable vision-language-action
+policies,” 2026. [Online]. Available: https://arxiv.org/abs/2602.19710
+[14] K. Grauman, A. Westbury et al., “Ego4D: Around the world in 3,000
+hours of egocentric video,” arXiv preprint arXiv:2110.07058, 2021.
+[Online]. Available: https://arxiv.org/abs/2110.07058
+[15] K. Grauman, A. Westbury, L. Torresani, K. Kitani, J. Malik et al.,
+“Ego-Exo4D: Understanding skilled human activity from first- and
+third-person perspectives,” arXiv preprint arXiv:2311.18259, 2023.
+[Online]. Available: https://arxiv.org/abs/2311.18259
+[16] R. Hoque, P. Huang et al., “EgoDex: Learning dexterous manipulation
+from large-scale egocentric video,” arXiv preprint arXiv:2505.11709,
+2025. [Online]. Available: https://arxiv.org/abs/2505.11709
+[17] R. Zheng, D. Niu et al., “EgoScale: Scaling dexterous manipulation
+with diverse egocentric human data,” arXiv preprint arXiv:2602.16710,
+2026. [Online]. Available: https://arxiv.org/abs/2602.16710
+[18] K. Y. Wu, T. Zhou et al., “Human universal grasping,” 2026.
+[Online]. Available: https://arxiv.org/abs/2606.17054
+[19] B. Li, X. Yin, M. Lin, Y. Zhang, and D. Xu, “Egowam: World action
+models beyond pixels with in-the-wild egocentric human data,” 2026.
+[Online]. Available: https://arxiv.org/abs/2607.08436
+[20] C. Chi, Z. Xu et al., “Universal manipulation interface: In-the-
+wild robot teaching without in-the-wild robots,” arXiv preprint
+arXiv:2402.10329, 2024. [Online]. Available: https://arxiv.org/abs/
+2402.10329
+[21] Zhaxizhuoma, K. Liu, C. Guan, Z. Jia et al., “FastUMI: A scalable
+and hardware-independent universal manipulation interface with
+dataset,” arXiv preprint arXiv:2409.19499, 2024. [Online]. Available:
+https://arxiv.org/abs/2409.19499
+[22] Simple AI, Y. Wei, J. Ma, J. Wang et al., “HiFi-UMI: Learning
+deployable
+manipulation
+policies
+from
+high-fidelity
+UMI
+data
+alone,” arXiv preprint arXiv:2607.25895, 2026. [Online]. Available:
+https://arxiv.org/abs/2607.25895
+[23] C. Yuan, C. Wen, T. Zhang, and Y. Gao, “General flow as foundation
+affordance for scalable robot learning,” 2024. [Online]. Available:
+https://arxiv.org/abs/2401.11439
+[24] W.
+Huang,
+Y.-W.
+Chao,
+A.
+Mousavian,
+M.-Y.
+Liu,
+D.
+Fox,
+K. Mo, and L. Fei-Fei, “Pointworld: Scaling 3d world models
+for in-the-wild robotic manipulation,” 2026. [Online]. Available:
+https://arxiv.org/abs/2601.03782
+[25] M. Tong, H. Jiang, Q. Feng, L. Liu, and J. Gu, “PointAction:
+3d points as universal action representations for robot control,”
+arXiv preprint arXiv:2606.03943, 2026. [Online]. Available: https:
+//arxiv.org/abs/2606.03943
+[26] Y. Han, J. Liu et al., “Bridgeact: Bridging human demonstrations
+to robot actions via unified tool-target affordances,” 2026. [Online].
+Available: https://arxiv.org/abs/2604.23249
+[27] Y. Yue, D. Robert et al., “Litept: Lighter yet stronger point trans-
+former,” in Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), June 2026, pp. 24 173–24 184.
+[28] Y. Zhou, C. Barnes, J. Lu, J. Yang, and H. Li, “On the continuity
+of rotation representations in neural networks,” 2020. [Online].
+Available: https://arxiv.org/abs/1812.07035
+[29] S. James, Z. Ma, D. R. Arrojo, and A. J. Davison, “Rlbench: The
+robot learning benchmark & learning environment,” 2019. [Online].
+Available: https://arxiv.org/abs/1909.12271
+[30] B. Liu, Y. Zhu et al., “Libero: Benchmarking knowledge transfer for
+lifelong robot learning,” Advances in Neural Information Processing
+Systems, vol. 36, pp. 44 776–44 791, 2023.
+[31] Z. Wang, B. He et al., “Humanego: Zero-shot robot learning from
+minutes of human egocentric videos,” 2026.
+[32] J. Kuffner and S. LaValle, “Rrt-connect: An efficient approach to
+single-query path planning,” in Proceedings 2000 ICRA. Millennium
+Conference. IEEE International Conference on Robotics and Automa-
+tion. Symposia Proceedings (Cat. No.00CH37065), vol. 2, 2000, pp.
+995–1001 vol.2.
+[33] X. Li, M. Zhang et al., “Manipllm: Embodied multimodal large
+language model for object-centric robotic manipulation,” in Proceed-
+ings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), June 2024, pp. 18 061–18 070.
+[34] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn,
+N. Fusai, L. Groom, K. Hausman, B. Ichter, S. Jakubczak, T. Jones,
+L. Ke, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair, K. Pertsch, L. X.
+Shi, J. Tanner, Q. Vuong, A. Walling, H. Wang, and U. Zhilinsky,
+“π0: A vision-language-action flow model for general robot control,”
+2026. [Online]. Available: https://arxiv.org/abs/2410.24164
+[35] Q. Li, Y. Liang et al., “Cogact: A foundational vision-language-action
+model for synergizing cognition and action in robotic manipulation,”
+arXiv preprint arXiv:2411.19650, 2024.
+[36] J. Liu, H. Chen et al., “Hybridvla: Collaborative diffusion and
+autoregression in a unified vision-language-action model,” 2025.
+[Online]. Available: https://arxiv.org/abs/2503.10631
+[37] D. Qu, H. Song, Q. Chen, Z. Chen, X. Gao, D. Wang et al.,
+“Eo-1: An open unified embodied foundation model for general robot
+control,” 2026. [Online]. Available: https://arxiv.org/abs/2508.21112
+[38] T. Gervet, Z. Xian, N. Gkanatsios, and K. Fragkiadaki, “Act3d:
+3d feature field transformers for multi-task robotic manipulation,”
+in Proceedings of The 7th Conference on Robot Learning, ser.
+Proceedings of Machine Learning Research, J. Tan, M. Toussaint, and
+K. Darvish, Eds., vol. 229. PMLR, 06–09 Nov 2023, pp. 3949–3965.
+[Online]. Available: https://proceedings.mlr.press/v229/gervet23a.html
+[39] M. J. Kim, C. Finn, and P. Liang, “Fine-Tuning Vision-Language-
+Action Models: Optimizing Speed and Success,” in Proceedings of
+Robotics: Science and Systems, LosAngeles, CA, USA, June 2025.
+[40] J. Bjorck, F. Casta˜neda, N. Cherniadev et al., “Gr00t n1: An open
+foundation model for generalist humanoid robots,” arXiv preprint
+arXiv:2503.14734, 2025.
+[41] J. Zheng, J. Li, Z. Wang, D. Liu et al., “X-vla: Soft-prompted
+transformer as scalable cross-embodiment vision-language-action
+model,” 2025. [Online]. Available: https://arxiv.org/abs/2510.10274
+[42] H. Fang, J. Duan, D. Clay, S. Wang, S. Liu, W. Huang, X. Fan, W.-C.
+Tsai, S. Chen, Y. R. Wang et al., “Molmoact2: Action reasoning
+models
+for
+real-world
+deployment,”
+2026.
+[Online].
+Available:
+https://arxiv.org/abs/2605.02881
+[43] H.-S. Fang, H. Fang, Z. Tang, J. Liu, C. Wang, J. Wang, H. Zhu, and
+C. Lu, “Rh20t: A comprehensive robotic dataset for learning diverse
+skills in one-shot,” in 2024 IEEE International Conference on Robotics
+and Automation (ICRA), 2024, pp. 653–660.
+[44] R. A. Potamias, J. Zhang, J. Deng, and S. Zafeiriou, “Wilor: End-to-
+end 3d hand localization and reconstruction in-the-wild,” in Proceed-
+ings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), June 2025, pp. 12 242–12 254.
+[45] C. Campos, R. Elvira, J. J. G. Rodriguez, J. M. M. Montiel, and
+J. D. Tardos, “Orb-slam3: An accurate open-source library for visual,
+visual–inertial, and multimap slam,” IEEE Transactions on Robotics,
+vol. 37, no. 6, p. 1874–1890, Dec. 2021. [Online]. Available:
+http://dx.doi.org/10.1109/TRO.2021.3075644

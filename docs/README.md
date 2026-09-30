@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-29</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-30</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 30 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>18</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-29 19:54:22 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-30 18:54:54 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读18篇、速读12篇，共梳理30篇机器人学习前沿论文。最值得关注的是满分综述《From World Models to World Action Models》对“下一状态预测”的重新思考，以及9分工作用真实世界强化学习让VLA模型自我提升。普通读者可从“世界模型+动作模型”这条主线入手，再结合触觉编码、双臂开罐等速读案例理解落地路径。</p>
+<p>今日精读7篇、速读12篇共19篇机器人操作与VLA论文，其中Copper-Policy和RAVEL以9.0分领跑。最值得看的是机器人操作的鲁棒表征（Copper-Policy）与流式VLA的异步推理加速（RAVEL），速读中手腕操作的事件增强与视觉中断应对也值得关注。普通读者可先从RAVEL了解VLA推理效率思路，再跟进鲁棒表征方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">18 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="From World Models to World Action Models: Rethinking Next-State Prediction">From World Models to World Action Models: Rethinking Next-State Prediction</span></li><li><span class="dpr-home-dashboard-paper-title" title="Find Something You Can&#x27;t Do: Agentic Real-World Reinforcement Learning for Self-Improving VLA Models">Find Something You Can&#x27;t Do: Agentic Real-World Reinforcement Learning for Self-Improving VLA Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="PF-RL: Progress Field Reinforcement Learning via Goal-Conditioned Value Geometry for Vision-Language-Action Models">PF-RL: Progress Field Reinforcement Learning via Goal-Conditioned Value Geometry for Vision-Language-Action Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Copper-Policy: Focus on the Representation for Robust Robot Manipulation">Copper-Policy: Focus on the Representation for Robust Robot Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="RAVEL: Asynchronous Rolling Inference for Flow-Based Vision-Language-Action Models">RAVEL: Asynchronous Rolling Inference for Flow-Based Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="ActionGround: Training-Free Runtime Refinement of Frozen VLA Policies">ActionGround: Training-Free Runtime Refinement of Frozen VLA Policies</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>15</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TACTIC: Understanding Tactile Encoders and Conditioning for Contact-rich Robot Manipulation Policies">TACTIC: Understanding Tactile Encoders and Conditioning for Contact-rich Robot Manipulation Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Grasp2Twist: Learning Bimanual Dexterous Jar Opening by Reinforcement Learning">Grasp2Twist: Learning Bimanual Dexterous Jar Opening by Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Federated Subspace Guided Vision-Language-Action Policy Distillation for Non-IID Multi-Robot Manipulation">Federated Subspace Guided Vision-Language-Action Policy Distillation for Non-IID Multi-Robot Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ECHO: Event-Augmented Context with Hindsight and Outlook for Wrist-Only Manipulation">ECHO: Event-Augmented Context with Hindsight and Outlook for Wrist-Only Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning to Act under Visual Interruptions with Vision-Language-Action Models">Learning to Act under Visual Interruptions with Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="DexRoam: Learning Mobile Bimanual Dexterous Manipulation from Egocentric Whole-Body Human Demonstrations">DexRoam: Learning Mobile Bimanual Dexterous Manipulation from Egocentric Whole-Body Human Demonstrations</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>6</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>10</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
 </section>
 </div>
 

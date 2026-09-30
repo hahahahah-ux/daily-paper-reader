@@ -1,0 +1,423 @@
+Title: ActionGround: Training-Free Runtime Refinement of Frozen VLA Policies
+
+URL Source: https://arxiv.org/pdf/2609.33256v1
+
+Published Time: Tue, 29 Sep 2026 02:34:39 GMT
+
+Number of Pages: 9
+
+Markdown Content:
+# ActionGround: Training-Free Runtime Refinement of Frozen VLA Policies 
+
+Namai Chandra 1, Madhur Thareja 2,1 , Shriram Damodaran 3, Addison Lin Wang 31Indian Institute of Technology Madras 
+
+> 2
+
+Indian AI Research Organisation 
+
+> 3
+
+Nanyang Technological University 
+
+Abstract — Vision-Language-Action (VLA) models map visual observations and language instructions directly to robot actions through a single end-to-end neural policy, but nothing in that policy explicitly represents the discrete phase structure of a manipulation task or the rigid-body dynamics the arm must obey while executing it. We present ActionGround, a neuro-symbolic, training-free runtime layer that wraps a frozen VLA policy without retraining, fine-tuning, or weight access, adding less than 1 ms of overhead per control step. A symbolic phase-aware finite-state machine reads the scene state to identify which manipulation phase (approach, grasp, transport, place) the episode is in and applies a phase-appropriate rule-based correction; in parallel, an always-on, inertia-weighted Euler-Lagrange term folds the robot’s equations of motion into every control step, using the dynamics residual as a logged consistency diagnostic rather than a gate. Neither channel touches the VLA’s weights. Evaluated across OpenVLA, OpenVLA-OFT, Force-VLA, and Generalist-VLA on ten LIBERO-Spatial pick-and-place tasks with a 7-DoF Franka Panda, the same fixed-parameter framework (no per-task or per-backbone retuning) delivers absolute success-rate increases of up to 6% and absolute stability increases of up to 19% across all four backbones (Table II), with trajectory-efficiency gains of up to 15% and per-task regressions confined to two named OpenVLA tasks (Sec. IV-B); it also shows roughly a 10 × improvement in trajectory-jerk robustness under injected action noise on a Robosuite cross-simulator sweep. We also ran a matched-seed Robosuite simulation companion to a real Agilex Piper pick-and-place trial under an identical injected-bias protocol, lifting Baseline success from 35% to 95% . The physical-hardware trial itself is a separate, qualitative deployment demonstration; per-trial quantitative success on the real arm is left to future work. We evaluate exclusively on rigid-object pick-and-place manipulation and scope our claims to that setting. 
+
+Index Terms —neuro-symbolic robotics, vision-language-action models, finite-state phase correction, Euler-Lagrange consistency diagnostic, frozen-policy adaptation. I. I NTRODUCTION 
+
+The ambition to build robotic agents that perceive, rea-son, and physically interact with the world in response to language instructions has long been a central objective in embodied AI [1]. Real-world manipulation is inherently multi-physical: a robot must respect rigid-body dynamics, contact interactions, friction, and gravity while interpreting visual scenes and following linguistic commands. Recent vision-language-action (VLA) models provide an end-to-end mapping from observations and language prompts to actions (Fig. 2). Systems such as RT-2 [2], π0 [3], Task FAILED  Baseline  Task PASSED   
+
+> plate empty bowl on plate n=20, 35% n=20, 95%
+
+Fig. 1: OpenVLA backbone, same weights, on the matched-seed Robosuite place-on-plate simulation com-panion described in Sec. IV-B ( n=20 per mode). Action-Ground succeeds where the unmodified backbone fails under the injected placement-phase bias. CogACT [4], TinyVLA [5], and SmolVLA [6] support language-conditioned control across diverse embodiments. However, these architectures are trained purely to fit demon-stration data and do not explicitly encode the equations of motion or contact constraints that govern physically feasible trajectories. As a result, current VLA models remain limited in structured physical reasoning and long-horizon embodied understanding [7], [8], [9]. Evaluated on the LIBERO-Spatial benchmark [7], our empirical analysis reveals that a single-step OpenVLA policy attains a success rate of only 36% , while its chunked, memory-augmented variant OpenVLA-OFT reaches 92% .This gain shows that short-horizon temporal coherence mit-igates many errors, but also exposes a structural limitation: even with chunking, the policy reasons only over a few recent steps and lacks a global view of the manipulation sequence, leading to limited task-level physical coherence in multi-phase, contact-rich manipulation, and higher computational and memory cost than lighter single-step VLA models. Rather than integrate physics into the policy at training time or redesign it [10], [11], [12], [13], [14], [15], we consider the setting in which an already-trained VLA must be improved while keeping its weights and interface fixed. ActionGround is a training-free, modular, plug-and-play layer that operates alongside an existing policy, rectifying actions immediately prior to execution through any frozen VLA backbone’s standard 7-DoF action vector, with no arXiv:2609.33256v1 [cs.RO] 27 Sep 2026 Vision    
+
+> Encoder
+> (SigLIP) Tokenizer
+> (LLM embed) ActionGround framework tAction Head
+> (7-DoF)
+> ❄OpenVLA / OFT
+> (weights frozen)
+> see Fig.
+> 3
+> Image I
+> Prompt ℓembedding a
+> VLM
+> Backbone Environment
+> (MuJoCo) feedback s taction atOur method
+> (this work) VLA
+
+Fig. 2: Overview of our ActionGround framework . See main texts for details. parameter retraining, fine-tuning, or internal weight access, while improving task success on three backbones and tra-jectory quality across all four (Sec. IV-B). ActionGround reads the environmental state and applies phase-conditioned rather than uniform corrections, with the dynamics residual logged as a continuous consistency diagnostic. Concretely, ActionGround forms a discrete–continuous runtime inter-face: a symbolic task state selects the applicable correction law, and physical information constrains how the proposed action is refined, combining the learned policy with discrete task structure and analytical dynamics at runtime, without modifying the policy itself. Sec. III-C.0.a details the two-branch design (a symbolic phase-aware finite-state machine and an always-on, inertia-weighted Euler-Lagrange correc-tion, together adding < 1 ms of latency per control step). This paper makes three major contributions: (I) We provide an empirical analysis of the physics gap in both single-step and memory-augmented VLA models. (II) We propose ActionGround, a novel plug-and-play, training-free neuro-symbolic runtime layer for frozen VLA backbones with a 7-DoF action interface. (III) We evaluate four distinct VLA paradigms (single-step, chunked, force-conditioned, and generalist) alongside four inference modes under aunified PyTorch stack. Our results demonstrate consistent improvements in task success, precision, and efficiency, with mean trajectory jerk held to +17% across a Robosuite noise sweep where the Baseline degrades by +175% , and no per-task regressions on Force-VLA or Generalist-VLA. We additionally demonstrate the same corrector on an Agilex Piper real-world pick-and-place as a qualitative deployment study. II. R ELATED WORK 
+
+Neuro-Symbolic Integration in Robotics. A parallel line of work builds discrete symbolic structure directly into robot decision-making rather than leaving it implicit in a single net-work. Task-and-motion-planning frameworks compose sym-bolic operators over continuous state with sampling-based motion planners [16], [1], and such operators can themselves be learned from continuous skill execution rather than hand-specified [17], [18]. Neuro-symbolic AI more broadly studies how discrete symbolic representations and continuous neural computation inform each other, from probabilistic-logic lay-ers [19] and differentiable logic [20] to concept learners that ground symbols directly in perception [21]; see [22] for a survey of this “third wave.” ActionGround adopts the same discrete/continuous split as this literature, but couples the two directions explicitly at runtime rather than through joint training: the symbolic phase ϕt selects which correction law is active (Eq. 4), while an always-on, inertia-weighted Euler-Lagrange correction (Eq. 9) refines that phase-selected action on every step, per-joint, by how dynamically loaded the current configuration is; the Euler-Lagrange residual itself is logged as a consistency diagnostic and does not modulate this weighting. Unlike TAMP, where the symbolic layer plans and the continuous layer merely samples feasible motions, here the continuous physical signal also refines the symbolic one’s output, a two-way runtime interaction without ever updating 
+
+πθ ’s weights. 
+
+Vision-Language-Action (VLA) Models. VLA models have become the standard paradigm for language-conditioned manipulation. Early systems such as RT-1/RT-2 [23], [2] and PaLM-E [24] showed that large vision–language back-bones can be adapted into end-to-end robot controllers, and subsequent works have diversified the action-head family: autoregressive decoders and policy distillation in π0 [3] and CogACT [4], diffusion-based heads in Diffusion-VLA [25], and more efficient variants such as RT-H [26], TinyVLA, and SmolVLA [5], [6] for deployment. Beyond single-arm settings, hierarchical planners [27], [28], [29], multi-embodiment controllers [30], [31], [32], [33], and recent surveys [34], [35] document this rapid progress. Across these works, however, physical structure remains implicit: architectures are trained to fit demonstration data, but no component explicitly enforces equations of motion, contact feasibility, or energy balance. OpenVLA and its optimised fine-tune OpenVLA-OFT [8], [9] highlight this gap: chunked inference improves success substantially on LIBERO-Spatial, showing the value of short-horizon temporal coherence, yet residual failures persist on contact-rich tasks, indicating a remaining physics deficit [7], [36]. 
+
+Physics-Informed Learning and Control. Another line of research incorporates analytical dynamics into learning and control. Recent techniques include soft residual penalties, adding equation-of-motion terms to the training loss as in PINNs [10]. A complementary approach is to adopt hard structural constraints, embedding Lagrangian, Hamiltonian, or symplectic structure directly into the network [11], [12], [13], [14], often coupled with differentiable simulators [37], [38], [39], [40] or graph-based dynamics models [41], [42]. More recent works have focused on learning-based techniques such as stability-certified controllers, including Lyapunov-based RL and control barrier functions [43], [44], [45], [46], [15], as well as MPPI [47], DMPs [48], RMPs [49], and OSC [50]. These approaches demonstrate that encoding physics can improve sample efficiency and robustness, but they typically act during training, assume access to gradients through the dynamics, or require re-designing the controller. ActionGround instead treats physics as an inference-time correction applied to a frozen VLA: the backbone and its training remain unchanged, and dynamics enter only through an always-on runtime injector (Table I). Unlike CBF-QP safety filters [46], [15] which solve a per-step quadratic program against an always-on certificate, or MPPI-style refinement [47] which samples and re-scores rollouts against a learned cost, ActionGround evaluates a single closed-form residual and applies an always-on, inertia-weighted correction every step, so it adds < 1 ms per step without an optimiser in the loop. Likewise, recent force-aware reactive VLAs (ForceVLA / FD-VLA-style heads) achieve contact correction but require training-time access to a force-residual head; ActionGround targets the same failure modes purely at inference, with no weight updates. 
+
+World Models, Diffusion Policies, and Inference-Time Adaptation. Latent world models, diffusion policies, and constraint-grounded representation learning [52], [53], [54], [55], [56] improve long-horizon behaviour and perception but remain physics-agnostic in the sense above. Closer in spirit to our setting are inference-time interventions that modify actions without retraining the policy. Temporal ensembling in ACT and Octo [32], [57] applies a uniform exponential mov-ing average over position dimensions, improving smoothness but ignoring task phase and dynamics. In our experiments, this kind of uniform smoothing reduces OpenVLA success on LIBERO-Spatial by flattening responsive motions during critical contact phases [7]. ActionGround can be viewed as a structured alternative: it conditions corrections on the manipulation phase and applies an always-on, inertia-weighted dynamics correction on top, logging the residual as a diagnostic rather than using it to switch physics on or off. 
+
+III. M ETHODOLOGY 
+
+A. Basic Principle of VLA 
+
+A vision-language-action (VLA) policy πθ is a learned function that regresses a low-level robot action from an on-board image It and a natural-language prompt ℓ:
+
+aVLA = πθ (It, ℓ ) ∈ R7, (1) 
+
+aVLA = [∆ x, ∆y, ∆z, ∆ϕ, ∆θ, ∆ψ, g ]⊤, (2) where the first six components specify a delta end-effector pose and the seventh is a gripper command. The policy is trained purely on demonstration data and exposes no built-in constraint on the robot’s equations of motion or on the phase-specific physics of manipulation: πθ has no notion of which manipulation phase the trajectory is currently in, and no check that the proposed aVLA is kinodynamically consistent with the joint state (qt, ˙qt) before actuation. 
+
+B. Empirical Results: Identifying the Physics Gap 
+
+This missing structure leads to two recurring failure modes in our experiments: πθ is free to emit actions that the underlying robot dynamics will resist, distort, or refuse. Two qualitative failure modes recur across every backbone we evaluated. First, the policy issues lateral motion at the moment of contact (the “grasp” phase) even when the gripper is not over the target object, producing premature closes or empty-hand grasps. Second, in the placement phase the policy enters at near-full velocity without a deceleration profile, overshooting sub-centimetre targets. Off-the-shelf inference-time fixes do not address these failure modes: a uniform exponential moving average (EMA) over the action stream improves trajectory smoothness on the macro scale but flattens the responsive bursts the policy needs during contact, trading task success for stability. Memory-augmented variants (e.g. chunked decoding) re-cover local temporal coherence but still reason only over a short window and miss the phase-level physical context. Smoother action streams alone do not address these failure modes; it requires phase-aware, dynamics-aware corrections that fire only when the policy is about to commit a physically inconsistent action. Table II backs this empirical claim at the aggregate level: Baseline success on LIBERO-Spatial clusters in a narrow 36 -
+
+40% band across the three single-step backbones (OpenVLA, Force-VLA, Generalist-VLA) and uniform temporal smooth-ing degrades every one of them, confirming that smoothing alone does not close the gap. The chunked OpenVLA-OFT lands at 92% but at significantly higher inference cost, and still loses on contact-rich tasks (e.g. T5 at 40% ). These results indicate limitations in both temporal smoothing and single-step inference, motivating the phase-aware, dynamics-aware design introduced next. 
+
+C. ActionGround Design 
+
+We address these errors without retraining πθ . Action-Ground is a two-branch corrector that sits between the VLA’s predicted action aVLA and the simulator. At every control step, the MuJoCo state st = ( peef  
+
+> t
+
+, q grip  
+
+> t
+
+, p obj  
+
+> t
+
+, ct)
+
+feeds into two independent branches running in parallel (Figure 3): 
+
+Branch A is a phase-aware finite-state machine. It looks at st
+
+and decides which manipulation phase the robot is currently in (approach, grasp, transport, or placement), then applies a small, phase-specific tweak to the action. The correction needed near contact (slow down, reduce gripper bias) differs from the correction used in free space (smooth jitter, maintain motion). Branch A encodes that intuition with a rule per phase, not as a learned weight. 
+
+Branch B is an always-on, inertia-weighted Lagrangian diagnostic and blend, applied on top of Branch A’s proposal when active. It computes the analytical residual rEL of the robot’s equations of motion for the proposed action as a continuous kinodynamic-consistency signal, and folds a mass-aware correction into every step: joints with lower generalised inertia, which carry the greater kinetic risk from an inconsistent command, receive proportionally more correction. We also tested a hard variant that gates this correction on ∥rEL ∥ exceeding a threshold ϵ and found no consistent task gain over the always-on blend, so whenever TABLE I: Taxonomy of physics-constraint strategies in robotic policy learning. “Runtime” indicates whether the constraint is active at inference. 
+
+Strategy Representative works Guarantee Runtime 
+
+Soft Residual PINNs [10], PIPER [51] Approximate No Hard Structural DeLaN [11], HNNs [13], SymODEN [14] Exact No Stability-Certified Neural Lyapunov [45], CBF [15] Certified Optional 
+
+ActionGround (ours, runtime) FSM + EL residual (this work) Diagnostic Yes 
+
+TABLE II: ActionGround gain over Baseline on LIBERO-Spatial (aggregate, %).             
+
+> Backbone ∆Stab ∆Succ OpenVLA +16 .7% +2%
+> Force-VLA +18 .2% +4%
+> Generalist-VLA +19 .3% +6%
+> OpenVLA-OFT †+2 .8% +0%
+> †chunked decoding; others are single-step.
+
+Branch B is active, every number reported uses the always-on blend described below rather than the gated variant. The canonical per-backbone numbers in Table III use Branch A only , uniformly across all four backbones; Branch B is reported separately, as an OpenVLA-only addition on top of Branch A (Sec. IV-B), because OpenVLA-OFT’s action chunking already supplies comparable step-level coherence. Branch B therefore provides an additional correction for errors that Branch A cannot identify from geometry alone. When Branch B is active, its output is combined with the Branch A proposal through Eq. (9): Branch A and Branch B’s always-on inertia-weighted correction blend internally via Eq. (9) to produce a single physics candidate aphys  
+
+> t
+
+, which is then combined with aVLA through the global capped blender 
+
+at = (1 −c) aVLA + c a phys , c = 0 .05 , (3) with a hard gripper override at |g| > 1.5 so deliberate grasp commands are never suppressed by the cap. The executed action is mostly ( 95% ) the VLA’s own prediction, refined by a small ( 5% ) physics correction: The small correction can accumulate over multiple steps while still allowing the VLA action to dominate an individual control step. The cap, hyperparameter-free across all four backbones and all 10 LIBERO-Spatial tasks, is the only place ActionGround can touch the trajectory; no VLA weight is ever updated, and the full pipeline adds < 1 ms per step. The rest of this section details what each branch does and why. 
+
+a) Branch A: Phase-Aware Finite-State Machine Injec-tor: A fundamental structural observation is that different manipulation phases are governed by qualitatively different physical constraints. A VLA policy applying uniform correc-tions across the full episode will necessarily be mismatched to phases it was not optimized for, exactly the failure of temporal smoothing baselines. Our first corrector channel resolves this through a rule-based finite-state machine (FSM) that partitions each episode into phases using geometric predicates on st, then applies a phase-specific correction:                        
+
+> ϕt=DETECT PHASE (st) =
+> 
+> approach dbowl
+> xy ≥6cm
+> grasp dbowl
+> xy <6cm , p bowl ,z t< z lift
+> transport pbowl ,z t≥zlift , d plate
+> xy ≥6cm
+> place pbowl ,z t≥zlift , d plate
+> xy <6cm
+
+(4) where dbowl  
+
+> xy
+
+and dplate  
+
+> xy
+
+are horizontal distances from the end-effector to the bowl and plate, and zlift = 1 cm above the table top (LIBERO-Spatial coordinate frame) is the lift threshold, shared across all backbones and tasks. Given ϕt, the phase correction P HASE CORRECT modifies araw  
+
+> t
+
+as follows. The predicate uses only the instantaneous geometric state: it carries no memory of the previous phase and no contact sensing, so it cannot recover once a height-based threshold is wrong for a given task’s geometry. Tasks whose target starts already elevated relative to the tabletop (T4, T9) are exactly where this shows up, consistent with the occlusion-driven phase-detection failure noted in the Limitations section. 
+
+Approach. A premature-grasp veto sets g ← 0 whenever 
+
+dbowl  
+
+> xy
+
+≥ δgrasp (δgrasp = 6 cm, the same threshold as the phase predicate, so the veto is active for the entire approach 
+
+phase), enforcing the geometric precondition for contact, which VLAs routinely ignore. 
+
+Grasp. A guidance bias β = 0 .5 blends araw  
+
+> t
+
+toward the com-puted grasp waypoint p∗, aphys  
+
+> t
+
+= β(p∗ − peef  
+
+> t
+
+) + (1 − β) araw  
+
+> t
+
+.No smoothing is applied, high-frequency responsiveness is essential at contact acquisition. 
+
+Transport. A vertical lift bias ∆z+ = +2 cm counteracts payload sag; transport-only EMA ( α = 0 .92 ) suppresses jitter: apos  
+
+> t
+
+← α a pos  
+
+> t−1
+
++ (1 −α) ( araw ,pos  
+
+> t
+
++ ∆ z+ ˆez ).
+
+Placement. A deceleration ramp scales action magnitude with proximity, aphys ,pos  
+
+> t
+
+← min(1 , d plate  
+
+> xy
+
+/d thresh ) · araw ,pos 
+
+> t
+
+(Eq. 5), indicating that a precision target demands decel-eration. 
+
+aphys ,pos  
+
+> t
+
+← min 1, dplate 
+
+> xy
+
+dthresh 
+
+!
+
+· araw ,pos  
+
+> t
+
+(5) 
+
+b) Branch B: Always-On Inertia-Weighted Lagrangian Correction: Branch A handles phase-level physics but leaves step-level kinodynamic inconsistency. Branch B addresses this through an always-on inertia-weighted Lagrangian cor-rection. For the Franka Emika Panda in generalised coordi-nates q ∈ R7 the Euler-Lagrange residual is 
+
+rEL (q, ˙q, ¨q) = M (q)¨ q + C(q, ˙q) ˙ q + G(q) − τ, (6) which prior work uses as a training-time regulariser [51]. We instead treat it as an inference-time kinodynamic-consistency Read MuJoCo state (feedback) A. Phase Aware FSM Injector Phase detector                             
+
+> φt
+> B. Always On Euler Lagrange Gate
+> dxy bowl , dxy plate
+> Intercept Proposed Action
+> p1
+> p2
+> p3
+> ⋮
+> pn
+> aVLA
+> a1
+> a2
+> a3
+> ⋮
+> an
+> sim state (st) contacts (qt,q ̇t)
+> Euler Lagrange Residual (r t )
+> adyn Dynamics oracle ( O)
+> Convert joint state to dynamic quantities
+> Geometric Extractor close gripper Grasp Phase Corrected Action
+> aphys [Eq.4]
+> Inertia M(q) Coriolis C(q, q̇t,) Gravity G(q)
+> expected physical response Logged Diagnostic Inertia-weighting Always On
+> aout
+> a' 1
+> a' 2
+> a' 3
+> ⋮
+> a'n
+> final corrected action Infer inter object relation [Eq.1]
+> move towards bowl move bowl above plate release Transport Place Approach Phase Based Action Selection [Eq.3] Capped Blend (c=0.05)
+> w100... 00w20... 000w3 ... 0
+> ⋮⋮⋮⋱⋮
+> 000... wn
+> w = f(rt)
+
+Fig. 3: ActionGround’s runtime refinement layer. Channel A (symbolic phase grounding) and Channel B (always-on, inertia-weighted Euler–Lagrange correction) each propose a candidate correction; the two are combined and capped-blended with the frozen VLA’s own action. The Euler–Lagrange residual rEL (dashed branch) is a logged diagnostic only and does not gate or scale the executed correction. See Sec. III-C for details. 
+
+diagnostic : we log ∥rEL ∥ at every step and report ϵ =0.05 N·m (one decade below the mean clean-trajectory resid-ual) as the reference scale for calling a step “inconsistent” in our analysis, but this threshold does not gate the executed correction below, which is applied at every step regardless of ∥rEL ∥.
+
+M (q), C(q, ˙q), G(q) are extracted from MuJoCo’s internal spatial algebra via a dynamics oracle O(qt, ˙qt). The residual is not tautological because τ is MuJoCo’s instantaneous actuator force: τ is MuJoCo’s instantaneous actuator force at the current step, read directly off the simulator’s own applied-torque state, never solved for from Eq. (6) itself. ¨q is obtained purely kinematically from the VLA’s own predicted delta-pose, 
+
+¨q = 2 qnext − q − ˙q dt 
+
+dt 2 , qnext = q + ∆ qVLA , (7) independent of the equations of motion. The residual there-fore compares two independently sourced quantities: what the VLA’s proposed action implies kinematically, and what the arm is dynamically capable of producing right now. Thus, the residual does not evaluate the dynamics model against quantities derived from the same equation. At every step, the correction uses an inertia-weighted blend 
+
+w = Softmax  diag( M (q)) −1 , (8) which down-weights heavy joints and yields a probability-simplex weight vector applied whether or not ∥rEL ∥ ex-ceeds ϵ. w ∈ R7 is computed in joint space and ap-plied component-wise to the seven-dimensional task -space action (∆ x, ∆y, ∆z, ∆θx, ∆θy , ∆θz , g ); this index-matched weighting is a heuristic approximation and does not provide a kinematically consistent mapping between joint-space inertia and the task-space action. 
+
+aphys  
+
+> t
+
+= w ⊙ aA 
+
+> t
+
++ (1 − w) ⊙ araw  
+
+> t
+
+, (9) where aA 
+
+> t
+
+= PHASE CORRECT (ϕt, a raw  
+
+> t
+
+, s t) is Branch A’s phase-aware proposal (Eq. 4) and w is the always-on inertia weighting of Eq. (8), applied at every step regardless of 
+
+∥rEL ∥. The inertia weighting assigns larger correction to lower-inertia joints. rEL itself, and a work–energy residual logged alongside it, are diagnostics only and do not modulate 
+
+w. The full pipeline adds < 1 ms of overhead per control step without updating VLA weight. 
+
+Remark (principled alternative). The kinematically rigorous fix projects M (q) into task space via the manipulator Jaco-bian J(q) ∈ R6×7, using the operational-space inertia matrix 
+
+Λ( q) =  J(q) M (q)−1 J(q)⊤−1 ∈ R6×6 (10) [50], then weights the six Cartesian channels by 
+
+Softmax(diag(Λ( q)) −1), with the gripper command g
+
+held outside J’s range and weighted separately (e.g. afixed gain) rather than folded into the same softmax as the arm joints. Λ( q) is symmetric positive definite away from kinematic singularities, so this substitution is well-defined almost everywhere non-singular. We flag this as the direct, Jacobian-consistent extension of Eq. (8); none of the numbers reported in Sec. IV-B use it. 
+
+c) Neuro-symbolic coupling.: The two branches couple bidirectionally rather than merely concatenating: the discrete phase ϕt (Eq. 4) selects which continuous correction law Branch A applies, while the continuous inertia weight w
+
+(Eq. 8), recomputed from the dynamics oracle every step, sets how strongly that symbolically-corrected action is trusted against the frozen VLA’s raw prediction (Eq. 9). Because at
+
+is executed and shapes the next observation It+1 the VLA conditions on, the loop closes through the environment even though no gradient reaches πθ .IV. E XPERIMENTS 
+
+A. Experimental Setup 
+
+Setup. We evaluate ActionGround on LIBERO-Spatial [7], a suite of 10 spatial-reasoning pick-and-place tasks (T0–T9) on a Franka Emika Panda arm. Each task is run over 5 trials TABLE III: Aggregate stability and success rate on LIBERO-Spatial (unweighted mean over T0–T9, 5 trials per task at seed 7) under three inference-time modes. Our ActionGround achieves aggregate improvements over the same-row Base-line.                                 
+
+> Backbone Base Temp ActionGround Stab % Succ % Stab % Succ % Stab % Succ % OpenVLA (single-step) 20.1 36 36.2 28 36.8 38 OpenVLA-OFT (chunked) 86.1 92 88.1 92 88.9 92 Force-VLA (force-residual) 20.0 40 36.6 36 38.2 44 Generalist-VLA (flow-matching) 29.9 36 39.2 26 49.2 42
+
+at seed 7 (50 episodes per cell), in closed-loop MuJoCo at 20 Hz on a single NVIDIA RTX 4090. Seed 7 was chosen as the representative run because it lies within ±1% of the median over a 10-seed pilot we ran for OpenVLA Baseline and ActionGround; we report single-seed results throughout for comparability across the four backbones rather than re-running the full 10-seed pilot on all of them. 
+
+Baselines and Implementation. We wrap four frozen VLAs spanning two axes of variation (memoryless vs. chunked decoding; autoregressive vs. force-conditioned vs. flow-matching action heads): OpenVLA [8] (7B single-step autoregressive, memoryless), OpenVLA-OFT [9] (action-chunked near-ceiling reference), Force-VLA (force-residual head reading the live 6-DoF contact wrench, ForceVLA/FD-VLA style), and Generalist-VLA (flow-matching ensem-ble head, π0/GR00T-N1 style [3]); the last two share the same OpenVLA-7B backbone so that the action-head family is the only controlled variable. For each backbone, we contrast four inference-time modes: Baseline (unmodified), 
+
+Temporal (uniform EMA α=0 .85 [32]), ActionGround (Branch A) (the phase-aware FSM of Sec. III-C.0.a, applied uniformly to every backbone; this is the configuration the per-task table reports), and ActionGround + EL blend 
+
+(adds the always-on, inertia-weighted Euler-Lagrange blend of Sec. III-C.0.b on top of Branch A; reported on OpenVLA only because OFT’s chunking already supplies the step-level coherence the blend recovers). We report four met-rics: Success (binary task completion rate), Stability (one minus normalised cumulative end-effector jerk), Precision 
+
+(proximity to the grasp/placement waypoint), and Efficiency 
+
+(one minus normalised steps to completion). To avoid am-biguity about which branch produced which number: every result labeled ActionGround in Table II and Table III uses Branch A alone unless a row explicitly states an EL blend, in which case it is Branch A with Branch B’s always-on inertia-weighted correction on top of it, reported on OpenVLA only. Isolating the inertia weighting’s own contribution, separate from simply blending in a second action candidate, requires a constant-weight control that replaces the adaptive weight of Eq. (8) with a fixed blend factor, and a per-step correlation between the Euler-Lagrange residual and task failure; we leave both as targeted ablations for future work. 
+
+B. Experimental Results 1) Per-task Results on Benchmark Datasets : Table III exhibits three patterns. (i) Temporal smoothing trades success for stability on every single-step backbone : on OpenVLA it raises aggregate stability from 20 .1% to 36 .2% but reduces mean success from 36% to 28% , and the same trade-off appears on Force-VLA ( 40% to 36% ) and Generalist-VLA ( 36% to 26% ); on the chunked OpenVLA-OFT, EMA is redundant and success is unchanged. (ii) ActionGround raises aggregate stability on every backbone and aggregate success on every backbone : success rises OpenVLA 36% 
+
+to 38% , Force-VLA 40% to 44% , Generalist-VLA 36% to 
+
+42% , and the OpenVLA-OFT ties Baseline at 92% ; stability rises OpenVLA 20 .1% to 36 .8% , OpenVLA-OFT 86 .1% 
+
+to 88 .9% , Force-VLA 20 .0% to 38 .2% , Generalist-VLA 
+
+29 .9% to 49 .2% , matching or exceeding Temporal in all four cases even where success is flat. The zero success delta on OpenVLA-OFT is expected, not a counter-example: OFT’s action chunking already supplies the step-level coherence that Branch A’s phase correction targets on the single-step backbones, so the claim that phase-aware correction beats uniform smoothing is scoped to the single-step regime (OpenVLA, Force-VLA, Generalist-VLA), where Temporal measurably regresses success while ActionGround does not. On OFT the relevant comparison is that ActionGround adds stability at zero success cost, which Temporal also fails to do (it is redundant there, not harmful). OpenVLA’s aggre-gate gain is net of two individual per-task regressions, T3 (100% → 60% ) and T6 ( 100% → 60% ), the only regres-sions ActionGround causes on any backbone; Force-VLA and Generalist-VLA have none. (iii) T4 (“bowl in cabinet drawer”) and T9 (“bowl on wooden cabinet”) remain at 0% 
+
+on every single-step backbone, identifying the structural limit of post-hoc inference-time injection on contact-rich tasks with occluded target geometry. 
+
+Inference overhead. ActionGround adds negligible wall-clock cost. On a single RTX 4090 the per-step overhead of Channels A+B sums to ≈ 0.6 ms (Branch A phase FSM: ≈ 0.2 ms; Branch B dynamics oracle and EL residual evaluation: ≈ 0.4 ms; both share the MuJoCo state vector the simulator already maintains). This is well under the 50 ms control period at 20 Hz and is dominated by the underlying VLA forward pass ( 30 − 90 ms depending on backbone), so the additional computation is small relative to the VLA forward pass. 
+
+Beyond LIBERO. To check that ActionGround’s behaviour is not specific to LIBERO-Spatial’s scene generation we ran an additional sweep on a different benchmarking simulator, the Robosuite [58] Lift task on a Franka Panda with the OSC POSE controller ( n=10 trials per cell across Gaussian XY noise levels σ ∈ { 0, 0.05 , 0.10 , 0.15 , 0.20 , 0.30 , 0.40 }). ActionGround preserves clean-Baseline trajectory smooth-ness across the full sweep: ActionGround’s mean jerk grows from 0.064 at σ=0 to 0.075 at σ=0 .40 (a +17% degra-dation), whereas Baseline’s mean jerk grows from 0.064 to 
+
+0.176 over the same sweep (a +175% degradation), giving a ∼ 10 × ratio of jerk robustness in favour of ActionGround. At the highest noise level ( σ = 0 .40 ), the jerk difference is Baseline    
+
+> Force-VLA T6
+> 100%
+> Force-VLA T8
+> 0%
+> Force-VLA T2
+> 40%
+> Force-VLA T9
+> 0%
+> Generalist T3
+> 100%
+> Generalist T8
+> 0%
+> Generalist T6
+> 60%
+> Generalist T4
+> 0%
+> PhysVLA
+> 100% 20%
+> ↑+20%
+> 60%
+> ↑+20%
+> 0% 100% 40%
+> ↑+40%
+> 80%
+> ↑+20%
+> 0%
+
+Fig. 4: Cross-architecture qualitative comparison on LIBERO-Spatial. Baseline (top) vs. ActionGround (bottom), Force-VLA on T6/T8/T2/T9 (cols 1–4) and Generalist-VLA on T3/T8/T6/T4 (cols 5–8). Bottom-right badge: per-task success (n=5 ). Top-right green badge: strict per-task recovery under ActionGround. 
+
+∆jerk = −0.102 (ActionGround 0.075 vs. Baseline 0.176), a 58% reduction; reward also separates monotonically (Action-Ground 11 .06 vs Baseline 10 .89 at σ=0 .40 ). These numbers were obtained on a benchmark and a controller stack disjoint from LIBERO, showing that the jerk-robustness benefit is not an artefact of the LIBERO-Spatial simulator specifically. 
+
+2) Cross-architecture generalisation: To test whether ActionGround generalises beyond a single backbone, we evaluate two further variants, Force-VLA (force-residual head, contact-aware damping) and Generalist-VLA (flow-matching ensemble head, π0-style [3]), built on the same 
+
+frozen OpenVLA-7B weights and differing only in the post-backbone action head. Full descriptions of both heads appear in Sec. 4.1 (Setup); they are best read as controlled inference-time instantiations of two architecture families. Aggregate numbers for Force-VLA and Generalist-VLA appear in the bottom rows of Table III. Two findings carry over unchanged from the OpenVLA / OpenVLA-OFT ex-periments. First, temporal smoothing remains an unreliable default : it degrades Force-VLA aggregate success ( 40% to 
+
+36% ) and Generalist-VLA ( 36% to 26% ), and is the only mode that ever causes a per-task regression on those two backbones. Second, ActionGround is the best-success mode on Force-VLA and Generalist-VLA and ties Baseline on the OpenVLA-OFT : Force-VLA 40% to 44% , Generalist-VLA 
+
+36% to 42% , OpenVLA 36% to 38% , OpenVLA-OFT 92% 
+
+to 92% (all aggregates per-row in Table III); the per-task recoveries that drive these aggregates include Force-VLA T8 
+
+0% to 20% and T2 40% to 60% , and Generalist-VLA T8 0% 
+
+to 40% and T6 60% to 80% .The same corrector is applied with no re-tuning across all four heads (autoregressive single-step, chunked, force-residual, flow-matching), indicating that the correction is not specific to a single action-head family among those evaluated here; we have not tested backbones outside these four families or tasks outside rigid-object pick-and-place. The qualitative outcomes for the best- and worst-case tasks of each variant are shown in Figure 4. The numbers reported here are the Branch-A-only configuration of ActionGround ActionGroundVLA  Baseline  
+
+> Side view Top view
+
+Fig. 5: Real-world Agilex Piper pick-and-place under Base-line (top row) and ActionGround (bottom row), shown from a side view (left) and a top view (right). applied uniformly across all four backbones; the Branch B always-on Euler–Lagrange correction delivers an additional efficiency gain on OpenVLA but was not run on the cross-architecture heads. 
+
+3) Real-world Experiments: To evaluate transfer to physi-cal hardware, we ran an additional real-world pick-and-place experiment on an Agilex Piper 6-DoF arm: the gripper picks a cuboidal sponge block from the table and places it on a ceramic plate (Figure 5). The same OpenVLA backbone is run under Baseline (no correction) and under ActionGround (Branch A on, with identical hyperparameters to the simula-tion runs), with no retraining or backbone fine-tuning for the new embodiment. The physical-hardware trial is presented as a qualitative deployment demonstration; quantitative per-trial success and trajectory metrics are left for future evaluation. The qualitative final-frame outcomes shown in Fig. 5 show successful placement under ActionGround, whereas the un-modified backbone mis-aims. V. L IMITATIONS 
+
+ActionGround’s physical correction capabilities are tied to the URDF/XML calibration of the deployed robot: it depends on reasonably accurate kinematic and inertial pa-rameters, without which the Lagrangian gate must pivot to data-driven dynamics approximations rather than the closed-form Euler Lagrange residual used here. Tasks such as T5, where sub-centimetre precision dominates the failure mode, also expose the limit of post-hoc injection: the 5% 
+
+cap is, by design, too small to fully resolve targets that require training-time integration of physical structure. The two failure modes motivating this paper decompose cleanly across our task set even without a dedicated per-phase metric: T4 and T9 (occluded target geometry) stall at 0% on every single-step backbone because the FSM’s grasp/placement phase predicate depends on a bowl-pose proxy that oc-clusion makes unreliable, directly instantiating the grasp misalignment failure mode; T5’s persistent 60% ceiling di-rectly instantiates the placement precision failure mode. A quantitative grasp-success and goal-reaching-success split, as opposed to this per-task diagnosis, would require extending the per-episode object/target-distance logging we already use in single-backbone diagnostic runs to the full four-backbone comparison, which we did not do in this study and flag as the concrete next step. VI. C ONCLUSION AND FUTURE WORK 
+
+We presented ActionGround demonstrating that frozen VLA models could be made physics-aware without retraining or structural redesign, adding under 1 ms of latency. By com-bining a phase-aware finite-state machine with an always-on, inertia-weighted Lagrangian correction, the framework outperformed uniform temporal smoothing, yielding up to a 6 pp verified success increase across LIBERO-Spatial back-bones (Table II) and providing complementary stability to near-ceiling backbones like OpenVLA-OFT. Future studies will be focused on three areas: adapting phase predicates to deformable manipulation via learned visual cues, integrating the residual gating route into training as a soft policy prior, and sourcing dynamics directly from on-board sensors to eliminate simulation dependencies. REFERENCES [1] L. P. Kaelbling, “The foundation of efficient robot learning,” Science ,vol. 369, no. 6506, pp. 915–916, 2020. [2] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, X. Chen, K. Choro-manski, T. Ding, D. Driess, A. Dubey, C. Finn, P. Florence, C. Fu, M. Gonzalez Arenas, K. Gopalakrishnan, K. Han, K. Hausman, A. Herzog, J. Hsu, B. Ichter, A. Irpan, N. Joshi, R. Julian, D. Kalash-nikov, Y. Kuang, I. Leal, L. Lee, T.-W. E. Lee, S. Levine, Y. Lu, H. Michalewski, I. Mordatch, K. Pertsch, K. Rao, K. Reymann, M. Ryoo, G. Salazar, P. Sanketi, P. Sermanet, J. Singh, A. Singh, R. Soricut, H. Tran, V. Vanhoucke, Q. Vuong, A. Wahid, S. Welker, P. Wohlhart, J. Wu, F. Xia, T. Xiao, P. Xu, S. Xu, T. Yu, and B. Zitkovich, “RT-2: Vision-language-action models transfer web knowledge to robotic control,” Proceedings of the 7th Conference on Robot Learning (CoRL) , 2023. [3] K. Black, N. Brown, D. Driess, A. Esber, M. Suber, A. Srivas-tava, P. Florence, S. Levine, and K. Hausman, “π0: A vision-language-action flow model for general robot control,” arXiv preprint arXiv:2410.24164 , 2024. [4] Q. Li, Y. Liang, Z. Wang, L. Luo, X. Chen, M. Xu, F. Fan, F. Yu, J. Zhong, G. Pang, et al. , “CogACT: A foundational vision-language-action model for synergizing cognition and action in robotic manipulation,” arXiv preprint arXiv:2411.19650 , 2024. [5] J. Wen, Y. Zhu, J. Zhang, M. Mu, Z. Qi, Z. Peng, J. Shao, S. Wang, and M. Zhu, “TinyVLA: Toward fast, data-efficient vision-language-action models for robotic manipulation,” IEEE Robotics and Automation Letters , 2025. [6] M. Shukor, M. Gu´ etin, G. Bachmann, T. Wolf, and R. Ca-dene, “SmolVLA: A small, efficient, and community-driven vision-language-action model for robotic manipulation,” arXiv preprint arXiv:2506.01844 , 2025. [7] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone, “LIBERO: Benchmarking knowledge transfer for lifelong robot learning,” in Advances in Neural Information Processing Systems (NeurIPS) , 2023. [8] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair, R. Rafailov, E. Foster, G. Lam, P. Sanketi, et al. , “Open-VLA: An open-source vision-language-action model,” arXiv preprint arXiv:2406.09246 , 2024. [9] M. J. Kim, C. Finn, and P. Liang, “Fine-tuning vision-language-action models: Optimizing speed and success,” arXiv preprint arXiv:2502.19645 , 2025. [10] M. Raissi, P. Perdikaris, and G. E. Karniadakis, “Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations,” 
+
+Journal of Computational Physics , vol. 378, pp. 686–707, 2019. [11] M. Lutter, C. Ritter, and J. Peters, “Deep lagrangian networks: Using physics as model prior for deep learning,” Proceedings of the International Conference on Learning Representations (ICLR) , 2019. [12] M. Cranmer, S. Greydanus, S. Hoyer, P. Battaglia, D. Spergel, and S. Ho, “Lagrangian Neural Networks,” ICLR 2020 Workshop on Integration of Deep Neural Models and Differential Equations , 2020. [13] S. Greydanus, M. Dzamba, and J. Yosinski, “Hamiltonian neural net-works,” Advances in Neural Information Processing Systems , vol. 32, 2019. [14] Y. D. Zhong, B. Dey, and A. Chakraborty, “Symplectic ODE-Net: Learning hamiltonian dynamics with control,” Proceedings of the International Conference on Learning Representations (ICLR) , 2020. [15] C. Dawson, S. Gao, and C. Fan, “Safe control with learned certificates: A survey of neural Lyapunov, barrier, and contraction methods,” IEEE Transactions on Robotics , vol. 39, no. 3, pp. 1749–1767, 2023. [16] C. R. Garrett, T. Lozano-P´ erez, and L. P. Kaelbling, “PDDLStream: Integrating symbolic planners and blackbox samplers via optimistic adaptive planning,” in International Conference on Automated Plan-ning and Scheduling (ICAPS) , 2020. [17] G. Konidaris, L. P. Kaelbling, and T. Lozano-Perez, “From skills to symbols: Learning symbolic representations for abstract high-level planning,” Journal of Artificial Intelligence Research , vol. 61, pp. 215– 289, 2018. [18] T. Silver, R. Chitnis, J. Tenenbaum, L. P. Kaelbling, and T. Lozano-P´ erez, “Learning symbolic operators for task and motion planning,” in 
+
+IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , 2021. [19] R. Manhaeve, S. Dumanˇ ci´ c, A. Kimmig, T. Demeester, and L. De Raedt, “DeepProbLog: Neural probabilistic logic programming,” in Advances in Neural Information Processing Systems (NeurIPS) ,2018. [20] R. Riegel, A. Gray, F. Luus, N. Khan, N. Makondo, I. Y. Akhalwaya, H. Qian, R. Fagin, F. Barahona, U. Sharma, S. Ikbal, H. Karanam, S. Neelam, A. Likhyani, and S. Srivastava, “Logical neural networks,” 
+
+arXiv preprint arXiv:2006.13155 , 2020. [21] J. Mao, C. Gan, P. Kohli, J. B. Tenenbaum, and J. Wu, “The neuro-symbolic concept learner: Interpreting scenes, words, and sentences from natural supervision,” in International Conference on Learning Representations (ICLR) , 2019. [22] A. d. Garcez and L. C. Lamb, “Neurosymbolic AI: The 3rd wave,” 
+
+arXiv preprint arXiv:2012.05876 , 2020. [23] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, J. Dabis, C. Finn, K. Gopalakrishnan, K. Hausman, A. Herzog, J. Hsu, et al. , “RT-1: Robotics transformer for real-world control at scale,” arXiv preprint arXiv:2212.06817 , 2022. [24] D. Driess, F. Xia, M. S. Sajjadi, C. Lynch, A. Chowdhery, B. Ichter, A. Wahid, J. Tompson, Q. Vuong, T. Yu, et al. , “PaLM-E: An em-bodied multimodal language model,” Proceedings of the International Conference on Machine Learning (ICML) , 2023. [25] J. Wen, Y. Zhu, J. Li, Z. Tang, C. Shen, and F. Feng, “Diffusion-VLA: Scaling robot foundation models via unified diffusion and autoregression,” arXiv preprint arXiv:2412.03293 , 2024. [26] S. Belkhale, T. Ding, T. Xiao, P. Sermanet, Q. Vuong, J. Tompson, Y. Chebotar, D. Dwibedi, and D. Sadigh, “RT-H: Action hierarchies using language,” Robotics: Science and Systems (RSS) , 2024. [27] M. Ahn, A. Brohan, N. Brown, Y. Chebotar, O. Cortes, et al. , “Do as i can, not as i say: Grounding language in robotic affordances,” in 
+
+Conference on Robot Learning (CoRL) , 2022. [28] W. Huang, C. Wang, R. Zhang, Y. Li, J. Wu, and L. Fei-Fei, “VoxPoser: Composable 3D value maps for robotic manipulation with language models,” Conference on Robot Learning (CoRL) , 2023. [29] W. Huang, F. Xia, T. Xiao, H. Chan, J. Liang, P. Florence, A. Zeng, J. Tompson, I. Mordatch, Y. Chebotar, P. Sermanet, N. Brown, T. Jackson, L. Luu, S. Levine, K. Hausman, and B. Ichter, “Inner monologue: Embodied reasoning through planning with language models,” Proceedings of the Conference on Robot Learning (CoRL) ,2022. [30] M. Shridhar, L. Manuelli, and D. Fox, “CLIPort: What and where pathways for robotic manipulation,” in Proceedings of the Conference on Robot Learning (CoRL) , 2022, pp. 894–906. [31] A. Stone, T. Xiao, Y. Lu, K. Gopalakrishnan, et al. , “Open-world object manipulation using pre-trained vision-language models,” in 
+
+Conference on Robot Learning (CoRL) , 2023. [32] T. Z. Zhao, V. Kumar, S. Levine, and C. Finn, “Learning fine-grained bimanual manipulation with low-cost hardware,” in Proceedings of Robotics: Science and Systems (RSS) , 2023. [33] Open X-Embodiment Collaboration, “Open X-Embodiment: Robotic learning datasets and RT-X models,” Proceedings of the IEEE Inter-national Conference on Robotics and Automation (ICRA) , 2024. [34] N. Sapkota, D. Gao, S. A. Khowaja, S. Abuadbba, and A. Robles-Kelly, “Vision-language-action models: Concepts, progress, applica-tions and challenges, a survey,” arXiv preprint arXiv:2505.04769 ,2025. [35] X. Li, P. Li, M. Liu, D. Wang, J. Liu, B. Kang, X. Ma, T. Kong, H. Zhang, and H. Liu, “Towards generalist robot policies: What matters in building vision-language-action models,” arXiv preprint ,2024. [36] S. Zhang, H. Fang, P. Ma, Y. Wang, Y. Zhu, Y. Guo, and J. Pan, “VLABench: A large-scale benchmark for language-conditioned robotics manipulation with long-horizon reasoning tasks,” Proceed-ings of the IEEE/CVF International Conference on Computer Vision (ICCV) , 2025. [37] J. Degrave, M. Hermans, J. Dambre, and F. Wyffels, “A differentiable physics engine for deep learning in robotics,” Frontiers in Neuro-robotics , vol. 13, p. 6, 2019. [38] M. Toussaint, K. Allen, K. Smith, and J. Tenenbaum, “Differentiable physics and stable modes for tool-use and manipulation planning,” in 
+
+Proceedings of Robotics: Science and Systems (RSS) , 2018. [39] C. D. Freeman, E. Frey, A. Raichuk, S. Girber, I. Mordatch, and O. Bachem, “Brax – a differentiable physics engine for large scale rigid body simulation,” in Advances in Neural Information Processing Systems (Datasets and Benchmarks Track) , vol. 34, 2021. [40] E. Heiden, D. Millard, A. Corl, H. Erwin, and G. S. Sukhatme, “Neu-ralSim: Augmenting differentiable simulators with neural networks,” in Proceedings of the IEEE International Conference on Robotics and Automation (ICRA) , 2021. [41] A. Sanchez-Gonzalez, N. Heess, J. T. Springenberg, J. Merel, M. Ried-miller, R. Hadsell, and P. Battaglia, “Graph networks as learnable physics engines for inference and control,” in Proceedings of the International Conference on Machine Learning (ICML) , 2018, pp. 4470–4479. [42] Y. Li, J. Wu, R. Tedrake, J. B. Tenenbaum, and A. Torralba, “Prop-agation networks for model-based control under partial observation,” in Proceedings of the IEEE International Conference on Robotics and Automation (ICRA) , 2019, pp. 1205–1211. [43] Y. Chow, O. Nachum, E. Duenez-Guzman, and M. Ghavamzadeh, “A Lyapunov-based approach to safe reinforcement learning,” Advances in Neural Information Processing Systems , vol. 32, 2019. [44] J. Achiam, D. Held, A. Tamar, and P. Abbeel, “Constrained policy optimization,” in Proceedings of the International Conference on Machine Learning (ICML) , 2017, pp. 22–31. [45] Y.-C. Chang, N. Roohi, and S. Gao, “Neural Lyapunov control,” 
+
+Advances in Neural Information Processing Systems , vol. 32, 2019. [46] A. D. Ames, X. Xu, J. W. Grizzle, and P. Tabuada, “Control barrier function based quadratic programs for safety critical systems,” IEEE Transactions on Automatic Control , vol. 62, no. 8, pp. 3861–3876, 2017. [47] G. Williams, A. Aldrich, and E. A. Theodorou, “Model predictive path integral control: From theory to parallel computation,” Journal of Guidance, Control, and Dynamics , vol. 40, no. 2, pp. 344–357, 2017. [48] A. J. Ijspeert, J. Nakanishi, H. Hoffmann, P. Pastor, and S. Schaal, “Dynamical movement primitives: Learning attractor models for motor behaviors,” Neural Computation , vol. 25, no. 2, pp. 328–373, 2013. [49] N. D. Ratliff, J. Issac, D. Kappler, S. Birchfield, and D. Fox, “Rie-mannian motion policies,” arXiv preprint arXiv:1801.02854 , 2018. [50] O. Khatib, “A unified approach for motion and force control of robot manipulators: The operational space formulation,” IEEE Journal on Robotics and Automation , vol. 3, no. 1, pp. 43–53, 1987. [51] N. Chandra, L. Mohan, Z. Gu, and L. Wang, “PIPER: Physics-informed policy optimization via analytic dynamics regularization,” 
+
+arXiv preprint arXiv:2603.14469 , 2026. [52] D. Ha and J. Schmidhuber, “World models,” Advances in Neural Information Processing Systems , vol. 31, 2018. [53] D. Hafner, J. Pasukonis, J. Ba, and T. Lillicrap, “Mastering diverse domains through world models,” arXiv preprint arXiv:2301.04104 ,2023. [54] C. Chi, Z. Xu, S. Feng, E. Cousineau, Y. Du, B. Burchfiel, R. Tedrake, and S. Song, “Diffusion policy: Visuomotor policy learning via action score diffusion,” Proceedings of Robotics: Science and Systems (RSS) ,2023. [55] S. Nair, A. Rajeswaran, V. Kumar, C. Finn, and A. Gupta, “R3M: A universal visual representation for robot manipulation,” in Conference on Robot Learning (CoRL) , 2023. [56] Y. J. Ma, W. Liang, G. Wang, D.-A. Huang, et al. , “Eureka: Human-level reward design via coding large language models,” in Interna-tional Conference on Learning Representations (ICLR) , 2024. [57] D. Ghosh, H. Walke, K. Pertsch, K. Black, O. Mees, S. Dasari, J. Hejna, T. Kreiman, C. Xu, J. Luo, et al. , “Octo: An open-source generalist robot policy,” Proceedings of Robotics: Science and Systems (RSS) , 2024. [58] Y. Zhu, J. Wong, A. Mandlekar, R. Mart´ ın-Mart´ ın, A. Joshi, S. Nasiri-any, and Y. Zhu, “robosuite: A modular simulation framework and benchmark for robot learning,” arXiv preprint arXiv:2009.12293 ,2020.
