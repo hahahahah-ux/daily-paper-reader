@@ -1,0 +1,925 @@
+1
+OccluDex: Hierarchical 3D Visuo–Tactile Representation Learning
+for Egocentric Dexterous Manipulation under Self-Occlusion
+Ziheng Xu1, Yueyuan Chen1, Xinyuan He1, Guoxing Liu1, Yuanshuo Tan1, Huiming Pan1, Bin He2, Shuo
+Jiang2,†, Peter B. Shull3,†
+1Shanghai Jiao Tong University
+2Tongji University
+3The Chinese University of Hong Kong, Shenzhen
+† Corresponding authors.
+Abstract—Reliable dexterous manipulation requires contin-
+uous estimation of object geometry and hand–object contact
+throughout interaction. With egocentric sensing, however, the ma-
+nipulating hand frequently occludes task-relevant object surfaces
+and contact regions, reducing the visual evidence available for
+state estimation and thereby making robust closed-loop control
+and generalization to unseen object geometries particularly chal-
+lenging. To address this, we present OccluDex, a hierarchical 3D
+visuo–tactile representation learning framework that integrates
+global geometric structure with local contact information for
+robust manipulation under dynamic self-occlusion during hand–
+object interaction. OccluDex adopts multi-scale masked autoen-
+coding to progressively encode partial 3D geometry and fuses
+tactile contact tokens with high-level geometric features through
+cross-modal attention. The encoder is pretrained from synchro-
+nized human visuo–tactile demonstrations and transferred as a
+frozen perceptual backbone for downstream reinforcement learn-
+ing. We evaluate OccluDex on a faucet rotation task, requiring
+one full clockwise handle revolution, and a tabletop object reori-
+entation task, requiring a 180° tabletop object reorientation with-
+out toppling. In simulation experiments, OccluDex demonstrated
+12.6% higher accuracy for unseen objects and 8.3% higher
+accuracy for previously seen objects than the strongest state-
+of-the-art baseline models. Physical experiments were further
+performed with a Shadow Hand to demonstrate successful zero-
+shot sim-to-real generalization on unseen physical objects. This
+results could enable humanoid egocentric object manipulation
+for seen and unseen objects even when the manipulating robotic
+hand occludes vision.
+Index Terms—Dexterous manipulation, Representation Learn-
+ing, Reinforcement Learning.
+I. INTRODUCTION
+D
+EXTEROUS manipulation is a fundamental capability of
+embodied intelligence, requiring perception and control
+to be tightly coupled with physical interaction. Egocentric
+sensing provides a natural paradigm for such systems by
+reducing reliance on external calibration and maintaining
+observations in a reference frame aligned with the manipulat-
+ing body [1]. This self-contained perception–action setting is
+particularly desirable for scalable deployment in unstructured
+environments [2] [3].
+Dexterous manipulation typically occurs within the robot’s
+peripersonal space [4], where close-range egocentric sensing is
+inherently susceptible to hand–object self-occlusion. The hand
+can obscure a substantial portion of the object, particularly
+around the contact interface, while finger articulation and
+object motion continually alter the visible geometry. Conse-
+quently, the policy must operate on observations in which the
+Fig. 1. Simulation and real-world evaluation of OccluDex. In simulation (left),
+Faucet Rotation uses three faucet geometries for seen evaluation and two
+unseen scales for generalization testing, while Tabletop Object Reorientation
+uses ten seen and six unseen YCB objects. In real-world experiments (right),
+two previously unseen physical objects are evaluated for each task.
+target object is partially occluded by the hand and the hand–
+object interaction evolves over time, making robust closed-
+loop control particularly challenging.
+Recent advances in 3D completion and generative recon-
+struction provide powerful tools for recovering missing object
+geometry from partial observations [5] [6]. These methods
+can substantially improve geometric completeness and have
+shown strong capability in inferring plausible unobserved
+structure. However, under severe egocentric self-occlusion,
+the available visual evidence may be limited and continu-
+ously changing, increasing ambiguity in geometric inference
+and placing additional demands on real-time reconstruction.
+[7] [8]. More importantly, geometric completion alone does
+not directly provide the instantaneous contact information
+required for dexterous control. A key challenge is therefore
+to learn a control-relevant perceptual representation directly
+from egocentric observations under dynamic self-occlusion
+during hand–object interaction, without relying on explicit 3D
+reconstruction.
+Tactile sensing provides complementary information by
+directly measuring physical contact. However, tactile obser-
+vations are inherently local, sparse, and contact-dependent,
+and therefore provide limited information about global ob-
+ject geometry [9]. Therefore, recent studies have explored
+visuo–tactile integration to combine 2D visual and contact
+information for fine-grained manipulation [10] [11]. However,
+arXiv:2609.39017v1  [cs.RO]  30 Sep 2026
+
+
+2
+dexterous manipulation policy depends strongly on metric
+geometry and local surface structure, which can be explicitly
+represented in 3D. Explicit 3D representations provide a
+natural geometric reference for grounding tactile cues under
+severe occlusion [12]. Yet effectively integrating the two
+modalities remains nontrivial, as global geometric context and
+sparse local contacts differ substantially in spatial support and
+representation scale.
+Neurophysiological studies suggest that humans mitigate
+similar perceptual limitations through the joint encoding of 3D
+visual and tactile signals by body-centered multimodal neurons
+with spatially aligned receptive fields, supporting a coherent
+representation of peripersonal space. [13]. Such integration
+combines global 3D geometric structure with local contact
+information to support robust control under dynamic self-
+occlusion during hand–object interaction.
+Inspired by this mechanism, we propose OccluDex, a hi-
+erarchical 3D visuo–tactile representation learning framework
+for dexterous manipulation under severe self-occlusion. Oc-
+cluDex progressively encodes point clouds through multi-
+scale tokenization, masking, and hierarchical Transformer en-
+coding to capture local-to-global geometric structure. Tactile
+observations are embedded as contact tokens and fused with
+high-level geometric features through cross-modal attention. A
+hierarchical decoder reconstructs masked geometric and tactile
+observations for joint visuo–tactile pre-training. The pretrained
+encoder is frozen and transferred as the perceptual backbone
+of a downstream proximal policy optimization (PPO) policy.
+To the best of our knowledge, OccluDex is the first hierar-
+chical 3D visuo–tactile representation learning framework for
+dexterous manipulation in occlusion-rich peripersonal space.
+Our main contributions are:
+• We collect an egocentric human manipulation dataset
+with synchronized partial 3D point clouds and tactile
+observations, providing paired geometric–contact super-
+vision under natural hand–object occlusion.
+• We introduce a hierarchical 3D visuo–tactile masked pre-
+training framework that integrates multi-scale geometry
+with tactile contact cues through cross-modal attention,
+enabling the learned representation to preserve both
+global spatial context and local interaction information
+under hand–object occlusion.
+• We demonstrate improved dexterous manipulation per-
+formance and generalization across seen and unseen set-
+tings on two tasks, Faucet Rotation and Tabletop Object
+Reorientation, under egocentric self-occlusion, together
+with zero-shot sim-to-real transfer to a physical Shadow
+Dexterous Hand with previously unseen objects (Fig. 1).
+II. RELATED WORK
+A. Egocentric Perception for Dexterous Manipulation
+Egocentric perception has emerged as a promising paradigm
+for dexterous manipulation [14] [15]. However, during in-
+hand manipulation in peripersonal space, the hand frequently
+occludes substantial portions of the object. Consequently,
+geometric information, particularly around contact regions,
+may become incomplete or ambiguous in visual observations
+[16] [17] [18] [19].
+Existing approaches often mitigate visual occlusion through
+external viewpoints [16] [20] [21] [22] or geometric recon-
+struction from partial observations [5] [6] [23] [24]. Although
+effective in reducing visual ambiguity, these strategies still de-
+pend on additional visual evidence or reconstructed geometry.
+In peripersonal manipulation, however, extensive hand–object
+self-occlusion can substantially limit the available visual evi-
+dence, while the occlusion pattern changes continuously with
+the interaction rather than remaining static. A key challenge is
+therefore to learn a control-relevant perceptual representation
+directly from egocentric observations under dynamic self-
+occlusion during hand–object interaction, without relying on
+explicit 3D reconstruction.
+B. Visuo-Tactile Representation Learning
+Tactile sensing directly reflects local hand–object interaction
+and is particularly valuable when visual observations are
+incomplete, occluded, or ambiguous [19] [25] [26]. However,
+tactile sensing remains inherently sparse and local, providing
+limited information about the global geometric structure of the
+manipulated object.
+Recent efforts have therefore explored visuo–tactile rep-
+resentation learning to combine geometric perception with
+physical interaction. By integrating visual observations with
+tactile feedback, these methods provide richer representations
+of manipulation states and contact information [10] [11] [27]
+[28].
+Despite this progress, existing visuo–tactile representa-
+tion learning methods are predominantly built upon image-
+based visual representations, in which spatial structure is
+encoded only implicitly. For dexterous manipulation under
+self-occlusion, 3D representations provide more explicit ge-
+ometric organization of the hand, object, and contact regions,
+offering a stronger basis for grounding local tactile cues [12].
+Existing 3D visuo–tactile approaches have also been primarily
+studied with parallel-jaw grippers [18], whose contact patterns
+and interaction dynamics are substantially simpler than those
+of multi-fingered dexterous hands. Consequently, structured
+3D visuo–tactile representation learning for multi-fingered
+dexterous manipulation remains underexplored.
+III. METHODS
+OccluDex is a hierarchical 3D visuo–tactile representation
+learning framework designed to extract control-relevant infor-
+mation from egocentric observations subject to dynamic hand–
+object self-occlusion (Fig. 2). Given an egocentric point cloud
+and synchronized tactile measurements, the geometric branch
+progressively aggregates local surface structures into higher-
+level spatial representations, while tactile measurements are
+encoded as sensor-specific contact tokens. The two modal-
+ities are fused through cross-modal attention at the highest
+semantic stage, allowing sparse contact cues to interact with
+global 3D geometric context. During pre-training, geometric
+and tactile observations are jointly masked and reconstructed
+through a hierarchical decoder, encouraging the encoder to
+
+
+3
+Fig. 2.
+Overview of the proposed 3D visuo–tactile representation learning framework. (a) Multi-scale grouping and masking. (b) A hierarchical encoder
+progressively abstracts 3D geometry and performs high-level cross-modal interaction. (c) The decoder reconstructs masked geometric and tactile observations
+through hierarchical token propagation. (d) The pretrained encoder is frozen and transferred to downstream PPO-based dexterous manipulation.
+learn joint geometric–tactile representations and cross-modal
+associations. After pre-training, the decoder is discarded and
+the frozen encoder is transferred as the perceptual backbone
+of a downstream PPO policy.
+A. Hierarchical Multi-scale Geometric Encoding
+Dexterous manipulation requires geometric representations
+that are simultaneously sensitive to fine-grained local struc-
+ture and expressive of broader spatial relationships. These
+complementary requirements naturally span multiple spatial
+scales and are difficult to capture with a single-resolution
+representation. We therefore construct a hierarchical geomet-
+ric representation that progressively aggregates local point
+neighborhoods into coarser semantic regions, allowing the
+encoder to capture fine surface structure together with broader
+environment context. Given an input point cloud P0 = P,
+we recursively construct a hierarchy of multi-scale geometric
+regions. At scale i, 1 ≤i ≤S, representative geometric
+centers are sampled from the preceding scale using Farthest
+Point Sampling (FPS), followed by k-Nearest Neighbor (k-
+NN) grouping:
+Pi = FPS(Pi−1, Ni),
+Ii = kNN(Pi, Pi−1, ki),
+(1)
+where Pi ∈RNi×3 denotes the sampled centers, and Ii ∈
+NNi×ki stores the indices of the ki nearest neighbors in Pi−1
+for each center in Pi.
+Because the same physical region is represented at multiple
+levels of the hierarchy, independently masking each scale
+would create inconsistent visibility patterns across resolutions.
+We therefore adopt progressive multi-scale masking [29], in
+which visibility is sampled at the coarsest scale and propagated
+toward finer scales through hierarchical neighborhood corre-
+spondences (Fig. 3). Let Vi denote the index set of visible
+tokens at scale i. Given the visible set VS sampled at the
+prescribed geometric masking ratio, the visibility pattern is
+recursively propagated as
+Vi =
+[
+j∈Vi+1
+Ii+1[j, :],
+i = S −1, . . . , 1,
+(2)
+where Ii+1[j, :] denotes the finer-scale neighborhood in Pi
+associated with the j-th center in Pi+1. The corresponding
+masked index set is defined as Mi = {1, . . . , Ni}\Vi, and the
+visible and masked positions are obtained as P v
+i = Pi[Vi] and
+P m
+i
+= Pi[Mi], respectively. The masking strategy used during
+pre-training is not intended to simulate the physical self-
+occlusion pattern itself; rather, it provides a self-supervised
+objective that encourages the encoder to learn joint representa-
+tions of geometric observations and tactile signals and capture
+their cross-modal dependencies.
+At the first encoder stage, visible local regions are mapped
+into point tokens using a lightweight PointNet-style tokenizer.
+For each center in P v
+1 , the points in its neighborhood specified
+by I1 are jointly encoded through shared point-wise trans-
+formations and neighborhood aggregation, yielding the initial
+token set T v
+1 ∈RNv
+1 ×C1.
+For subsequent encoder stages, 1 < i ≤S, token merging
+progressively coarsens the representation. The visible tokens
+from the (i −1)-th stage are gathered into local token groups
+according to the hierarchical neighborhood indices Ii. Each
+group is then aggregated by combining token-wise features
+with pooled neighborhood context, producing the merged
+tokens T v
+i ∈RNv
+i ×Ci. Because the visibility pattern is prop-
+agated consistently across scales, the merged tokens remain
+
+
+4
+Fig. 3. Hierarchical multi-scale grouping and progressive masking. Multi-scale geometric regions are constructed through recursive sampling and neighborhood
+grouping, while the visibility pattern is propagated from the highest semantic scale to finer scales through hierarchical correspondences, preserving structural
+consistency across the geometric hierarchy.
+aligned with the same visible geometric regions throughout
+the hierarchy. As the hierarchy deepens, the number of tokens
+decreases while the feature dimensionality increases, allowing
+larger spatial regions to be represented with richer contextual
+information.
+At each scale, the visible tokens are augmented with ge-
+ometric positional embeddings and processed by the corre-
+sponding Transformer encoder.
+B. Tactile Token Embedding
+In parallel with geometric encoding, tactile observations
+are encoded into token-level representations that preserve
+localized contact information. Given the 19-channel tactile
+measurement T ∈R19, each channel is binarized according
+to a fixed activation threshold. This binary representation
+emphasizes contact activation while reducing sensitivity to
+variations in force magnitude.
+Each tactile channel is treated as an individual token and
+mapped into a C-dimensional latent representation:
+Z(j)
+tac = ϕtac( ˆTj) + p(j)
+tac + etac,
+j = 1, . . . , 19,
+(3)
+where ϕtac denotes the tactile embedding function, p(j)
+tac is the
+positional embedding associated with the j-th sensing location,
+and etac is a learnable tactile modality embedding. The result-
+ing token sequence Ztac ∈R19×C preserves sensor-specific
+contact information for subsequent visuo–tactile interaction.
+C. Cross-modal Visuo–Tactile Fusion
+During pre-training, tactile tokens are independently masked
+following the masked autoencoder paradigm, and only visible
+tactile tokens are passed to the encoder.
+We perform visuo–tactile fusion only at the highest semantic
+encoder stage. A central challenge is that the two modalities
+describe hand–object interaction at different spatial scales:
+geometric tokens progressively encode spatial context from
+local surfaces to larger regions, whereas tactile tokens repre-
+sent sparse contact events at specific sensing locations. Direct
+fusion at shallow geometric stages would therefore combine
+representations with strongly mismatched spatial support. We
+instead delay cross-modal interaction until the highest se-
+mantic stage, where the geometric hierarchy has aggregated
+sufficient global context to provide a stable spatial reference
+for tactile cues. The final-stage geometric and tactile tokens are
+concatenated and processed by the cross-modal Transformer.
+Their corresponding positional embeddings are concatenated
+in the same manner, while learnable modality embeddings are
+used to distinguish geometric and tactile tokens.
+The joint sequence is subsequently processed by the final
+Transformer encoder through cross-modal attention. To ex-
+clude invalid padded geometric entries while preserving cross-
+modal interactions, we construct a block-wise attention mask
+Mjoint =
+ Mpc-pc
+Mpc-tac
+Mtac-pc
+Mtac-tac
+
+,
+(4)
+where Mpc-pc preserves the geometric attention mask, Mpc-tac
+and Mtac-pc suppress interactions involving invalid geometric
+tokens, and Mtac-tac permits interactions among visible tactile
+tokens.
+D. Hierarchical Decoder and Reconstruction
+Starting from the coarsest geometric scale, masked ge-
+ometric and tactile observations are reconstructed using a
+lightweight hierarchical decoder. Learnable mask tokens are
+inserted at masked positions and combined with the encoded
+visible tokens to form the decoder input. The decoder consists
+of S −1 lightweight Transformer stages, where global self-
+attention facilitates information exchange between visible and
+masked tokens during reconstruction.
+Tactile reconstruction is performed after the first decoder
+stage. Since tactile observations do not possess an explicit
+multi-scale spatial hierarchy, the decoded tactile features are
+
+
+5
+directly mapped to the masked tactile predictions through a
+lightweight reconstruction head.
+Geometric decoding, in contrast, proceeds hierarchically
+toward finer spatial resolutions. Between subsequent decoder
+stages, token propagation interpolates coarse latent features
+onto finer geometric centers and fuses them with the cor-
+responding encoder features through skip connections. The
+decoder progressively recovers fine-grained geometric infor-
+mation while retaining features learned during hierarchical
+encoding.
+The decoded geometric representations are mapped to the
+masked local point patches through a lightweight reconstruc-
+tion head. We optimize geometric reconstruction using the
+symmetric Chamfer Distance:
+Lpc =
+1
+| ˆPm|
+X
+ˆp∈ˆ
+Pm
+min
+p∈Pm ∥ˆp −p∥2
+2 +
+1
+|Pm|
+X
+p∈Pm
+min
+ˆp∈ˆ
+Pm
+∥p −ˆp∥2
+2,
+(5)
+where Pm denotes the ground-truth masked point patches.
+For tactile reconstruction, the loss is computed only over
+the masked tactile tokens:
+Ltac =
+1
+|Mt|
+X
+j∈Mt
+˜tj −tj
+2
+2 ,
+(6)
+where Mt denotes the index set of masked tactile tokens.
+The overall pre-training objective is defined as
+L = λpcLpc + λtacLtac,
+(7)
+where λtac balances the geometric and tactile reconstruc-
+tion objectives. Joint masked reconstruction encourages the
+encoder to learn complementary representations that capture
+both 3D geometric structure and interaction-relevant contact
+information.
+IV. EXPERIMENTS
+We evaluate OccluDex in terms of representation effective-
+ness, generalization, and real-world transfer on downstream
+dexterous manipulation tasks. We first describe the experimen-
+tal setup in Section IV-A, followed by the evaluation metrics
+and baselines in Section IV-B. Quantitative comparisons with
+representative visuo–tactile representation learning methods
+are presented in Section IV-C, while Section IV-D analyzes the
+contribution of the proposed pre-training components through
+ablation studies. Finally, Section IV-E evaluates sim-to-real
+transfer on a Shadow Dexterous Hand using previously unseen
+objects.
+A. Experimental Setup
+Human Demonstration Data Collection. We collect an
+egocentric visuo–tactile demonstration dataset for representa-
+tion pre-training using a head-mounted Intel RealSense D435i
+camera and a WiseGlove equipped with 19 tactile sensing
+channels. The camera captures RGB-D observations of hand–
+object interactions from the operator’s viewpoint, while the
+glove records contact responses during manipulation. The
+visual and tactile streams are synchronized at 30 Hz to form
+paired visuo–tactile observations.
+TABLE I
+MAIN HYPERPARAMETERS USED FOR OCCLUDEX PRE-TRAINING.
+Parameter
+Value
+Tactile threshold
+40
+Point-cloud mask ratio
+0.8
+Tactile mask ratio
+0.5
+Group sizes
+[16, 8, 8]
+Number of groups
+[512, 256, 64]
+Encoder dimensions
+[96, 192, 384]
+Encoder depths
+[2, 2, 2]
+Decoder depths
+[1, 1]
+Effective batch size
+128
+Point-cloud loss weight
+50
+TABLE II
+ENVIRONMENT CONFIGURATIONS FOR THE DOWNSTREAM
+MANIPULATION TASKS.
+Parameter
+Tabletop Object
+Reorientation
+Faucet Rotation
+Parallel environments
+200
+150
+Episode length
+600
+500
+Camera position
+(0, 0.25, 0.5)
+(0.25, 0, 0.5)
+Camera target
+(0, −0.1, −0.2)
+(−0.1, 0, −0.2)
+Data are collected from three human subjects performing six
+representative manipulation tasks: Upright Object Reorienta-
+tion, Tabletop Object Reorientation, Object Pickup, Bottle-Cap
+Manipulation, Object Sliding, and Screw Manipulation. The
+three subjects contribute 565, 565, and 560 sequences, respec-
+tively, resulting in 1,690 sequences and 409,035 synchronized
+visuo–tactile frames in total.
+Simulation Setup. We pretrain the representation on two
+NVIDIA GeForce RTX 4080 GPUs, with the main hyperpa-
+rameters summarized in Table I. The pretrained representation
+is evaluated on downstream reinforcement learning tasks in
+NVIDIA Isaac Gym using a simulated Shadow Dexterous
+Hand. We consider two representative tasks: Faucet Rotation
+and Tabletop Object Reorientation [11]. Both tasks involve
+substantial hand-induced self-occlusion during manipulation,
+with the objective of stably rotating the faucet handle or object
+through one full revolution. Unless otherwise specified, the
+reward functions and other simulation parameters follow [11].
+At each control step, the policy receives a 48-D proprioceptive
+state, a 19-D binary tactile observation, and a partial point
+cloud of 4,096 points. The egocentric camera resolution is set
+to 424 × 240, and the simulated tactile activation threshold
+is 0.01. Both tasks operate at 60 Hz. Task-specific environ-
+ment configurations are summarized in Table II. We place
+the camera in an egocentric configuration, where the hand
+naturally occludes a substantial portion of the target object
+during manipulation (Fig. 1)
+B. Metrics and Baselines
+Metrics. We use success rate as the primary evaluation
+metric for all downstream dexterous manipulation tasks. For
+each random seed, the trained policy is evaluated over 100
+episodes in both seen and unseen settings, and we report the
+mean and standard deviation across three seeds.
+Baselines. We compare OccluDex against representative
+state-of-the-art visuo–tactile representation learning methods
+
+
+6
+Fig. 4. Training curves on Faucet Rotation and Tabletop Object Reorientation.
+The top row shows success rate, and the bottom row shows mean reward per
+step. Solid lines denote the mean over three random seeds, and shaded regions
+indicate the corresponding standard deviation.
+that explicitly exploit cross-modal interactions between visual
+and tactile observations for downstream dexterous manipula-
+tion. VTDexManip [11] learns transferable 2D visuo–tactile
+representations from human manipulation data and applies the
+learned representation to downstream reinforcement learning.
+VTT-3D is adapted from the original VTT formulation to
+accommodate 3D point-cloud observations [10]. We make only
+the minimal modifications required for the 3D setting while
+preserving its core cross-modal visuo–tactile learning objective
+and network design, and denote the resulting variant as VTT-
+3D. Base-only uses only proprioceptive observations as policy
+input. All methods are evaluated under the same downstream
+PPO training protocol, training budget, and evaluation proce-
+dure.
+C. Comparison on Downstream Dexterous Manipulation
+For Faucet Rotation, three faucet instances are used during
+training, while unseen generalization is evaluated by scaling
+the faucet geometries by factors of 0.9 and 1.1. For Tabletop
+Object Reorientation, ten objects from the YCB dataset [30]
+are used for training, and six held-out YCB objects are
+reserved for unseen-object evaluation.
+The learned representation facilitates downstream policy
+optimization, as reflected in the training dynamics on both
+downstream tasks (Fig. 4).
+Table III summarizes the evaluation results. On Faucet
+Rotation, OccluDex achieves 99.9% success on seen instances
+and 86.6% on unseen faucet scales, outperforming all baselines
+in both settings. Its advantage is particularly evident on unseen
+scales. OccluDex also exhibits substantially lower cross-seed
+variability on this task, indicating more consistent performance
+across independently trained policies. Averaged over seen and
+unseen evaluations, OccluDex reaches 93.2% success.
+On Tabletop Object Reorientation, OccluDex again achieves
+the highest success rates, reaching 75.1% on seen objects and
+83.3% on held-out objects. Its average success rate of 79.2%
+exceeds VTDexManip at 76.9%, VTT-3D at 72.1%, and Base
+at 63.9%, demonstrating effective generalization to previously
+unseen objects.
+Overall, OccluDex achieves an average success rate of
+86.2% across the two downstream tasks, compared with 75.8%
+for VTDexManip, 73.0% for Base, and 65.6% for VTT-3D.
+Together with the training dynamics (Fig. 4), these results
+demonstrate consistent gains across distinct dexterous manip-
+ulation tasks and evaluation settings.
+D. Ablation Study
+Table IV summarizes the ablation results on both down-
+stream tasks, where we evaluate the contributions of tactile
+feedback, 3D geometric observations, and visuo–tactile pre-
+training to downstream manipulation performance.
+1) Contribution of tactile feedback. Removing tactile input
+causes the largest degradation on both tasks. On Faucet
+Rotation, the point-cloud-only variant reduces success by
+45.7% on seen instances and 48.0% on unseen scales. On
+Tabletop Object Reorientation, the corresponding drops
+are 15.6% on seen objects and 17.3% on held-out objects.
+These results highlight the critical role of tactile feedback
+in providing contact information unavailable from geom-
+etry alone.
+2) Contribution of geometric observations. The tactile-
+only variant consistently underperforms the full model.
+Incorporating point-cloud observations improves success
+by 24.3% and 6.7% on the seen and unseen evaluations of
+Faucet Rotation, respectively, and by 9.6% and 4.7% on
+Tabletop Object Reorientation. This confirms that global
+geometric information complements local tactile cues and
+contributes to stronger downstream performance.
+3) Effect of Pre-training. Training the full OccluDex en-
+coder jointly with PPO from scratch incurs prohibitively
+high computational and memory costs, making full-scale
+training impractical under our hardware constraints. Re-
+ducing the number of parallel environments to five makes
+training feasible but results in 0% success, indicating
+the practical difficulty of jointly learning perception and
+control at this scale rather than isolating the effect of
+pre-training. We therefore remove the hierarchical design
+and adopt a simplified single-stage fusion architecture
+as a feasible from-scratch reference. OccluDex consis-
+tently outperforms this reference, with larger gains on
+unseen and held-out evaluations. Overall, the proposed
+pre-training strategy offers two practical advantages: the
+frozen encoder substantially reduces the computational
+cost of downstream reinforcement learning, while its
+learned representation provides stronger downstream per-
+formance than the feasible non-hierarchical from-scratch
+reference.
+E. Real-World Experiments
+a) Hardware setup: Our real-world platform consists of
+a right Shadow Dexterous Hand instrumented with 19 force-
+sensitive resistive sensors, an Intel RealSense D435i depth
+
+
+7
+TABLE III
+EVALUATION RESULTS ON FAUCET ROTATION AND REORIENT OBJECT ON TABLE. VALUES ARE MEAN ± STANDARD DEVIATION OVER THREE RANDOM
+SEEDS.
+Task
+Method
+Seen
+Unseen
+Success (%)
+Return
+Ep. Len.
+Success (%)
+Return
+Ep. Len.
+Faucet Rotation
+Base-only
+83.8 ± 23.9
+842.8 ± 168.9
+292.0 ± 120.3
+80.6 ± 14.9
+810.4 ± 129.3
+318.6 ± 106.5
+VTDexManip
+86.3 ± 20.5
+743.3 ± 110.1
+238.3 ± 96.6
+63.0 ± 25.6
+714.9 ± 56.6
+339.5 ± 85.9
+VTT-3D
+69.7 ± 29.5
+896.5 ± 133.6
+340.5 ± 112.9
+48.8 ± 26.9
+813.1 ± 52.7
+404.8 ± 77.1
+OccluDex
+99.9 ± 0.2
+643.2 ± 39.3
+157.9 ± 16.9
+86.6 ± 2.9
+636.3 ± 25.9
+229.8 ± 7.1
+Tabletop Object
+Reorientation
+Base-only
+65.1 ± 5.7
+573.2 ± 118.9
+77.1 ± 12.4
+62.7 ± 1.6
+554.9 ± 154.3
+84.2 ± 23.6
+VTDexManip
+72.1 ± 1.5
+651.9 ± 62.4
+77.3 ± 5.4
+81.8 ± 3.9
+611.7 ± 17.4
+76.0 ± 3.8
+VTT-3D
+68.5 ± 3.0
+595.9 ± 52.8
+75.2 ± 7.3
+75.7 ± 6.4
+572.5 ± 32.9
+76.4 ± 11.8
+OccluDex
+75.1 ± 2.3
+660.0 ± 20.4
+81.0 ± 7.5
+83.3 ± 2.0
+577.8 ± 35.7
+78.8 ± 15.4
+TABLE IV
+ABLATION STUDY. VALUES DENOTE SUCCESS RATES (%).
+Task
+Variant
+Seen (%)
+Unseen (%)
+Faucet Rotation
+OccluDex (full)
+100.0
+83.7
+w/o point cloud
+75.7
+77.0
+w/o tactile
+54.3
+35.7
+From scratch (w/o hierarchy)
+98.7
+76.8
+Tabletop Object
+Reorientation
+OccluDex (full)
+77.3
+81.3
+w/o point cloud
+67.7
+76.7
+w/o tactile
+61.7
+64.0
+From scratch (w/o hierarchy)
+66.4
+68.3
+camera, and a host computer for synchronized sensing and
+policy execution. The tactile sensors are distributed across the
+fingertips, finger links, and palm (Fig. 5). Their resistance
+changes are converted to voltage signals through condition-
+ing modules and sampled at 1 kHz using three USB data-
+acquisition (DAQ) devices. The measurements are then bina-
+rized into the same 19-dimensional contact representation used
+in simulation. The D435i is mounted above the workspace
+with a fixed view of the hand–object interaction region and
+provides depth observations at 30 Hz, from which a partial
+point cloud of 4,096 points is constructed. Together with 24
+joint positions and 24 joint velocities, these observations form
+the multimodal input to the policy. The policy operates in
+closed loop at 10 Hz and outputs 20 normalized joint-position
+targets, which are mapped to the corresponding Shadow Hand
+actuators for execution.
+b) Sim-to-real transfer: We perform zero-shot sim-to-
+real transfer without updating the pre-trained visuo–tactile
+encoder or PPO policy using real-world data. During simu-
+lation training, robustness is encouraged by randomizing the
+initial hand configuration and object pose and by adding
+Gaussian noise to proprioceptive observations and policy
+actions. Training does not involve dynamics randomization
+or perturbations to the point-cloud observations. The real-
+world camera placement is matched to the simulation setup
+to preserve the egocentric sensing configuration. Under this
+viewpoint, the Shadow Hand substantially occludes the target
+object during both Faucet Rotation and Tabletop Object Reori-
+entation, resulting in persistently incomplete object geometry
+throughout manipulation.
+Fig. 5. Real-world experimental setup. (a) Distribution of the tactile sensors
+on the Shadow Dexterous Hand. The sensors are attached to the fingertips,
+finger links, and palm to provide contact observations during manipulation.
+(b) Overview of the real-world manipulation workspace, including the robotic
+arm, the tactile-instrumented Shadow Hand, the overhead RealSense D435i
+camera, and the corresponding egocentric camera observation used for point-
+cloud perception.
+c) Closed-loop validation:
+We further evaluate Oc-
+cluDex on two real-world dexterous manipulation tasks using
+physical objects that are not observed during simulation train-
+ing. For each task, we select two unseen objects and perform
+10 trials per object, resulting in 20 trials per task. For Faucet
+Rotation, a trial is considered successful if the hand completes
+one full rotation of the faucet handle within 10 s. For Tabletop
+Object Reorientation, a trial is considered successful if the
+object is stably reoriented through at least 180° within 60 s.
+OccluDex succeeds in 17 of 20 Faucet Rotation trials and
+14 of 20 Tabletop Object Reorientation trials, corresponding
+to success rates of 85.0% and 70.0%, respectively. These
+results demonstrate that the simulation-trained policy can be
+effectively executed on unseen physical objects and sustain
+closed-loop dexterous manipulation without real-world fine-
+tuning.
+V. CONCLUSION
+In this paper, we proposed OccluDex, a hierarchical 3D
+visuo–tactile representation learning framework for dexterous
+manipulation under severe self-occlusion. The framework inte-
+grates global 3D geometric structure with local tactile contact
+cues through masked pre-training and transfers the learned
+encoder to downstream PPO-based manipulation. Experiments
+
+
+8
+on Faucet Rotation and Tabletop Object Reorientation demon-
+strate consistent improvements over proprioceptive and visuo–
+tactile baselines, with OccluDex achieving the highest average
+success rate of 86.2% across the two tasks. The simulation-
+trained policy further transfers zero-shot to a real Shadow
+Dexterous Hand, achieving success rates of 85.0% and 70.0%
+on previously unseen physical objects. Ablation results further
+confirm the contributions of 3D geometry, tactile contact cues,
+and visuo–tactile pre-training. These results establish hierar-
+chical 3D visuo–tactile representation learning as a promising
+perceptual foundation for robust and transferable egocentric
+dexterous control under dynamic self-occlusion. Future work
+will explore richer and higher-density tactile sensing, including
+lateral fingertip contacts, with particular emphasis on scal-
+able representation learning and fusion between dense tactile
+observations and 3D geometry. We will further extend the
+framework to finer-grained dexterous manipulation tasks that
+require more precise contact perception and control.
+REFERENCES
+[1] Y. Hu, B. Chen, and H. Lipson, “Egocentric visual self-modeling for
+autonomous robot dynamics prediction and adaptation,” npj Robotics,
+vol. 3, no. 1, p. 14, 2025.
+[2] D. Howard, A. E. Eiben, D. F. Kennedy, J.-B. Mouret, P. Valencia,
+and D. Winkler, “Evolving embodied intelligence from materials to
+machines,” Nature Machine Intelligence, vol. 1, no. 1, pp. 12–19, 2019.
+[3] V. Ortenzi, M. Controzzi, F. Cini, J. Leitner, M. Bianchi, M. A. Roa, and
+P. Corke, “Robotic manipulation and the role of the task in the metric
+of success,” Nature Machine Intelligence, vol. 1, no. 8, pp. 340–346,
+2019.
+[4] E. L`adavas and A. Farn`e, “Visuo-tactile representation of near-the-body
+space,” Journal of Physiology-Paris, vol. 98, no. 1-3, pp. 161–170, 2004.
+[5] X. Yu, Y. Rao, Z. Wang, Z. Liu, J. Lu, and J. Zhou, “Pointr: Diverse point
+cloud completion with geometry-aware transformers,” in Proceedings of
+the IEEE/CVF international conference on computer vision, 2021, pp.
+12 498–12 507.
+[6] T. Huang, Z. Yan, Y. Zhao, and G. H. Lee, “Compc: completing a 3d
+point cloud with 2d diffusion priors,” in International Conference on
+Learning Representations, vol. 2025, 2025, pp. 51 765–51 784.
+[7] L. Rustler, J. Lundell, J. K. Behrens, V. Kyrki, and M. Hoffmann, “Active
+visuo-haptic object shape completion,” IEEE Robotics and Automation
+Letters, vol. 7, no. 2, pp. 5254–5261, 2022.
+[8] Y. Wang, Z. Zhang, J. Qiu, D. Sun, Z. Meng, X. Wei, and X. Yang,
+“Touch2shape: Touch-conditioned 3d diffusion for shape exploration and
+reconstruction,” in 2025 IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR).
+IEEE, 2025, pp. 5656–5665.
+[9] Q. Li, O. Kroemer, Z. Su, F. F. Veiga, M. Kaboli, and H. J. Ritter,
+“A review of tactile information: Perception and action through touch,”
+IEEE Transactions on Robotics, vol. 36, no. 6, pp. 1619–1634, 2020.
+[10] Y. Chen, M. V. der Merwe, A. Sipos, and N. Fazeli, “Visuo-tactile
+transformers for manipulation,” in 6th Annual Conference on Robot
+Learning, 2022.
+[11] Q. Liu, Y. Cui, Z. Sun, G. Li, J. Chen, and Q. Ye, “Vtdexmanip: A
+dataset and benchmark for visual-tactile pretraining and dexterous ma-
+nipulation with reinforcement learning,” in The Thirteenth International
+Conference on Learning Representations, 2025.
+[12] Y. Cai, H. Pan, J. Yang, Y. Liu, Q. Gao, and X. Wang, “Geometry-aware
+3d hand–object pose estimation under occlusion via hierarchical feature
+decoupling,” Electronics, vol. 14, no. 5, p. 1029, 2025.
+[13] N. P. Holmes and C. Spence, “The body schema and multisensory
+representation (s) of peripersonal space,” Cognitive processing, vol. 5,
+no. 2, pp. 94–105, 2004.
+[14] Y. Ze, Z. Chen, W. Wang, T. Chen, X. He, Y. Yuan, X. B. Peng,
+and J. Wu, “Generalizable humanoid manipulation with 3d diffusion
+policies,” in 2025 IEEE/RSJ International Conference on Intelligent
+Robots and Systems (IROS).
+IEEE, 2025, pp. 2873–2880.
+[15] S. Kareer, D. Patel, R. Punamiya, P. Mathur, S. Cheng, C. Wang,
+J. Hoffman, and D. Xu, “Egomimic: Scaling imitation learning via
+egocentric video,” in 2025 IEEE International Conference on Robotics
+and Automation (ICRA).
+IEEE, 2025, pp. 13 226–13 233.
+[16] Y. Qin, Y.-H. Wu, S. Liu, H. Jiang, R. Yang, Y. Fu, and X. Wang,
+“Dexmv: Imitation learning for dexterous manipulation from human
+videos,” in European Conference on Computer Vision.
+Springer, 2022,
+pp. 570–587.
+[17] S. Wang, Q. Wu, K. Chen, Q. Huang, Z. Cheng, and B. Xia, “A multi-
+modal hand imitation dataset for dexterous hand,” in 2025 IEEE/RSJ
+International Conference on Intelligent Robots and Systems (IROS).
+IEEE, 2025, pp. 20 630–20 637.
+[18] B. Huang, Y. Wang, X. Yang, Y. Luo, and Y. Li, “3d-vitac: Learning
+fine-grained manipulation with visuo-tactile sensing,” in Proceedings of
+The 8th Conference on Robot Learning, ser. Proceedings of Machine
+Learning Research, vol. 270. PMLR, 06–09 Nov 2025, pp. 2557–2578.
+[19] P. Lin, Y. Huang, J. Ma, C. Xiao, W. Li, and Z. Jiao, “PP-Tac: Paper
+Picking Using Omnidirectional Tactile Feedback in Dexterous Robotic
+Hands,” in Proceedings of Robotics: Science and Systems, LosAngeles,
+CA, USA, June 2025.
+[20] Y. Xu, W. Wan, J. Zhang, H. Liu, Z. Shan, H. Shen, R. Wang, H. Geng,
+Y. Weng, J. Chen et al., “Unidexgrasp: Universal robotic dexterous
+grasping via learning diverse proposal generation and goal-conditioned
+policy,” in Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, 2023, pp. 4737–4746.
+[21] L. Huang, H. Zhang, Z. Wu, S. Christen, and J. Song, “Fungrasp:
+Functional grasping for diverse dexterous hands,” IEEE Robotics and
+Automation Letters, 2025.
+[22] OpenAI, I. Akkaya, M. Andrychowicz, M. Chociej, M. Litwin, B. Mc-
+Grew, A. Petron, A. Paino, M. Plappert, G. Powell, R. Ribas, J. Schnei-
+der, N. Tezak, J. Tworek, P. Welinder, L. Weng, Q. Yuan, W. Zaremba,
+and L. Zhang, “Solving rubik’s cube with a robot hand,” arXiv preprint,
+2019.
+[23] A. Li, Z. Zhu, and M. Wei, “Genpc: zero-shot point cloud completion
+via 3d generative priors,” in 2025 IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR).
+IEEE, 2025, pp. 1308–1318.
+[24] W. Wu, Y. Shi, and Z. Cai, “Tosc: Task-oriented shape completion for
+open-world dexterous grasp generation from partial point clouds,” in
+Proceedings of the AAAI Conference on Artificial Intelligence, vol. 40,
+no. 13, 2026, pp. 10 781–10 789.
+[25] K.-W. Lee, Y. Qin, X. Wang, and S.-C. Lim, “Dextouch: Learning to
+seek and manipulate objects with tactile dexterity,” IEEE Robotics and
+Automation Letters, vol. 9, no. 12, pp. 10 772–10 779, 2024.
+[26] H. Yan, H.-S. Fang, and C. Lu, “Avita: Adaptive visual-tactile dexterous
+grasping,” IEEE Robotics and Automation Letters, vol. 9, no. 11, pp.
+9462–9469, 2024.
+[27] X. Zhu, B. Huang, and Y. Li, “Touch in the wild: Learning fine-grained
+manipulation with a portable visuo-tactile gripper,” Advances in Neural
+Information Processing Systems, vol. 38, pp. 153 783–153 812, 2026.
+[28] Y. Yuan, H. Che, Y. Qin, B. Huang, Z.-H. Yin, K.-W. Lee, Y. Wu,
+S.-C. Lim, and X. Wang, “Robot synesthesia: In-hand manipulation
+with visuotactile sensing,” in 2024 IEEE International Conference on
+Robotics and Automation (ICRA).
+IEEE, 2024, pp. 6558–6565.
+[29] R. Zhang, Z. Guo, P. Gao, R. Fang, B. Zhao, D. Wang, Y. Qiao, and
+H. Li, “Point-m2ae: multi-scale masked autoencoders for hierarchical
+point cloud pre-training,” Advances in neural information processing
+systems, vol. 35, pp. 27 061–27 074, 2022.
+[30] B. Calli, A. Singh, A. Walsman, S. Srinivasa, P. Abbeel, and A. M.
+Dollar, “The ycb object and model set: Towards common benchmarks for
+manipulation research,” in 2015 international conference on advanced
+robotics (ICAR).
+IEEE, 2015, pp. 510–517.

@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-30</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-02</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 27 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>15</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-30 18:54:54 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-02 19:04:55 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读7篇、速读12篇共19篇机器人操作与VLA论文，其中Copper-Policy和RAVEL以9.0分领跑。最值得看的是机器人操作的鲁棒表征（Copper-Policy）与流式VLA的异步推理加速（RAVEL），速读中手腕操作的事件增强与视觉中断应对也值得关注。普通读者可先从RAVEL了解VLA推理效率思路，再跟进鲁棒表征方向。</p>
+<p>今日扫读27篇、精读15篇、速读12篇，UniWAM以10.0分领跑，肌腱驱动双向灵巧手9.0分紧随。</p>
+<p>最值得看的是《UniWAM: Unified World-Action Model》与《Antagonistic Tendon-Driven Dexterous Robotic Hand with Bidirectional Operation》，速读可关注轨迹变形、触觉奖励和事件驱动语义对齐。</p>
+<p>普通读者建议先读这两篇高分精读的摘要，再沿“灵巧操作+触觉/世界模型”线索挑速读，不必一上来啃完27篇。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Copper-Policy: Focus on the Representation for Robust Robot Manipulation">Copper-Policy: Focus on the Representation for Robust Robot Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="RAVEL: Asynchronous Rolling Inference for Flow-Based Vision-Language-Action Models">RAVEL: Asynchronous Rolling Inference for Flow-Based Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="ActionGround: Training-Free Runtime Refinement of Frozen VLA Policies">ActionGround: Training-Free Runtime Refinement of Frozen VLA Policies</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="UniWAM: Unified World-Action Model">UniWAM: Unified World-Action Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="Design and Validation of an Antagonistic Tendon-Driven Dexterous Robotic Hand with Bidirectional Operation">Design and Validation of an Antagonistic Tendon-Driven Dexterous Robotic Hand with Bidirectional Operation</span></li><li><span class="dpr-home-dashboard-paper-title" title="One from Infinity: Actualizing Futures from Pretrained World Models into Robot Actions">One from Infinity: Actualizing Futures from Pretrained World Models into Robot Actions</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>5</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>12</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>3</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,9 +96,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ECHO: Event-Augmented Context with Hindsight and Outlook for Wrist-Only Manipulation">ECHO: Event-Augmented Context with Hindsight and Outlook for Wrist-Only Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning to Act under Visual Interruptions with Vision-Language-Action Models">Learning to Act under Visual Interruptions with Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="DexRoam: Learning Mobile Bimanual Dexterous Manipulation from Egocentric Whole-Body Human Demonstrations">DexRoam: Learning Mobile Bimanual Dexterous Manipulation from Egocentric Whole-Body Human Demonstrations</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Kinematic Nonlinear Spatio-Temporal Trajectory Warping for Contact-Rich Dexterous Manipulation Demonstrations">Kinematic Nonlinear Spatio-Temporal Trajectory Warping for Contact-Rich Dexterous Manipulation Demonstrations</span></li><li><span class="dpr-home-dashboard-paper-title" title="TaRL: Learning General and Physical Rewards from Tactile Demonstrations">TaRL: Learning General and Physical Rewards from Tactile Demonstrations</span></li><li><span class="dpr-home-dashboard-paper-title" title="CogWAM: Aligning Semantic Cognition with World Action Modeling via Event-Driven Interfaces">CogWAM: Aligning Semantic Cognition with World Action Modeling via Event-Driven Interfaces</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>10</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
 </section>
 </div>
 

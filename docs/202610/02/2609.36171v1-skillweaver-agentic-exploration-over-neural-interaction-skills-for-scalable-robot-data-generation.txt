@@ -1,0 +1,4098 @@
+SkillWeaver: Agentic Exploration over Neural Interaction
+Skills for Scalable Robot Data Generation
+He Zhu1
+Lusen Zhao2
+Kwan Man Cheng1
+Su Li1
+Katerina Fragkiadaki1
+1Carnegie Mellon University
+2University of Illinois Urbana-Champaign
+Large-scale demonstrations have driven unprecedented progress in robot learning, yet collecting robot data
+through teleoperation is expensive and difficult to scale to diverse environments and long-horizon tasks. Sim-
+ulation offers a scalable alternative, but existing data-generation pipelines often rely on open-loop controllers,
+scripted skill sequences, or task-specific programs. We introduce SkillWeaver, an agentic framework that au-
+tonomously generates robot experience by exploring over Neural Interaction Skills (NIS): reusable, parameter-
+ized, closed-loop policies that expose learned physical interaction capabilities to a reasoning agent. Given a task
+and a simulated environment, a VLM agent reasons about what to do next, invokes and parameterizes NIS to in-
+teract with the environment, observes their outcomes, and generates verification, reflection, and memory to guide
+subsequent exploration. We instantiate NIS as reinforcement-learned policies for closed-loop, contact-rich ma-
+nipulation and organize exploration as verifier-guided tree search, enabling the agent to discover successful long-
+horizon behaviors without relying on predetermined execution pipelines. SkillWeaver scales autonomously to
+39.1K demonstrations across 14.1K scenes, which we distill into visuomotor policies. Across simulation bench-
+marks and real-world manipulation, training on SkillWeaver-generated experience substantially improves general-
+ization to novel objects, spatial configurations, tasks, and environments, and enables zero- and few-shot sim-to-
+sim and sim-to-real transfer. Our results suggest agentic exploration over neural interaction skills as a scalable
+alternative for robot data generation.
+Keywords:
+Agentic Robot Data Generation, Embodied Exploration, Neural Interaction Skills
+Website:
+https://katefgroup.github.io/skillweaver/
+Figure 1: We present SkillWeaver, an agentic robot data engine that generates large-scale demon-
+strations in simulation. Given a simulated scene and a robot manipulation task, the agent composes
+reusable neural interaction skills with verifier-guided embodied search, and retains successful expe-
+rience as demonstrations. The generated demonstrations are distilled into visuomotor policies such
+as Vision-Language-Action models.
+arXiv:2609.36171v1  [cs.RO]  28 Sep 2026
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+1
+Introduction
+Robot manipulation has recently seen remarkable progress driven by imitation learning from large-
+scale demonstrations collected through teleoperation [1, 2, 3, 4, 5, 6]. Despite these advances, robot
+data remains a fundamental bottleneck. Collecting high-quality demonstrations is expensive, labor-
+intensive, and time-consuming, requiring robot hardware, trained operators, environment resets,
+and substantial engineering effort. More importantly, scaling human demonstration collection to
+cover the long tail of objects, scene configurations, and long-horizon behaviors needed for broad
+generalization remains challenging even for well-resourced laboratories.
+Simulation offers an appealing alternative: once an interactive environment is available, robot expe-
+rience can in principle be generated at much larger scale and with richer supervision than is practical
+in the real world [7, 8, 9]. Yet generating environments is only part of the problem. Generating
+behavior in those environments still commonly relies on engineered expert pipelines—including
+scripted skill sequences, open-loop grasp proposals [10, 11] and motion planners [12], or hand-
+designed waypoints. Such pipelines can generate data efficiently for behaviors anticipated by their
+designers, but are difficult to scale toward diverse, long-horizon tasks whose successful execution
+may require reasoning about what to do next, recovering from failures, and discovering intermediate
+steps through interaction.
+At the same time, foundation models have enabled a new paradigm of agentic problem solving.
+LLMs and VLMs can reason over available tools, invoke them, observe their outcomes, and itera-
+tively revise their decisions. In robotics, this has enabled semantic skill composition [13] and agents
+that generate and debug executable robot programs [14, 15, 16]. However, software tools and gen-
+erated programs can be limiting as interfaces for contact-rich physical interaction, where successful
+execution requires continuous closed-loop adaptation to the evolving physical state.
+We ask whether the tool-use paradigm of reasoning agents can instead be extended to learned physi-
+cal interaction. To this end, we introduce Neural Interaction Skills (NIS): reusable, parameterized,
+closed-loop policies that expose learned physical capabilities to a reasoning agent. Rather than di-
+rectly predicting low-level robot actions or generating task-specific control programs, an agent can
+reason about which interaction tool to invoke, parameterize where and how to apply it, execute the
+tool in the environment, observe the resulting state, and use this feedback to decide the next step.
+This abstraction combines the semantic flexibility of foundation-model agents with robust learned
+physical interactions.
+Building on this idea, we present SkillWeaver, an agentic framework for scalable robot data gener-
+ation through exploration over Neural Interaction Skills. Given a task instruction and a simulated
+environment, a VLM agent reasons over the current scene and invokes parameterized NIS to ma-
+nipulate it. We instantiate NIS as model-free RL policies for contact-rich PICK, PLACE, OPEN,
+and CLOSE behaviors, while retaining motion planning for collision-free free-space motion. Rather
+than committing to a single predicted sequence, SkillWeaver treats demonstration generation as an
+embodied search problem and explores alternative compositions and parameterizations of its tools
+using tree search. A hierarchical verifier evaluates the physical consequences of each interaction,
+providing intermediate rewards and reflective feedback for re-planning, while semantic memory dis-
+tills successful strategies and failure modes to guide future exploration. Successful interaction traces
+are automatically verified and retained as robot demonstrations.
+This turns simulation from a passive source of randomized training examples into an environment
+in which an agent can actively search for its own training experience. Combined with scalable en-
+vironment generation, SkillWeaver produces 3.4K frames of multimodal embodied data per GPU
+hour and scales to 14.1K simulated scenes and 39.1K manipulation demonstrations (11.0M frames).
+We distill the generated experience into downstream visuomotor policies and evaluate them across
+simulation benchmarks and real-world Franka manipulation tasks. Training on SkillWeaver data en-
+ables robust zero-shot sim-to-sim and sim-to-real transfer and substantially improves generalization
+to novel objects, spatial configurations, tasks, and environments.
+2
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Our contributions are threefold: (1) We introduce Neural Interaction Skills, an interface that ex-
+poses learned closed-loop physical interaction policies as parameterized tools to a reasoning agent,
+and formulate scalable robot data generation as agentic exploration over these tools. (2) We in-
+troduce SkillWeaver, which combines VLM reasoning, verifier-guided tree search, reflection and
+semantic memory with learned interaction tools and scalable simulation to autonomously discover
+and verify long-horizon robot demonstrations. (3) We generate 39.1K demonstrations across 14.1K
+scenes and show that the resulting data substantially improves downstream visuomotor policy gen-
+eralization and enables zero-shot transfer across simulators and to the real world, without additional
+teleoperation.
+2
+Related Work
+Real-world Robot Datasets.
+While multiple industries pursue learning-from-demonstration
+(LfD) for robot training, such data remain largely proprietary due to the immense resources re-
+quired for collection. Open-sourced datasets such as DROID [17], RoboNet [18], RH20T [19],
+Open X-Embodiment [20], and Agibot World [21] span diverse robots, tasks, and embodiments, but
+real demonstrations remain costly to scale. Collecting such data typically requires robot hardware,
+human operators, repeated environment resets, and substantial engineering effort for calibration and
+maintenance. These costs make it difficult to systematically cover the long tail of object configu-
+rations, scene variations, and long-horizon behaviors needed for broad policy generalization, and
+motivate complementary approaches that shift part of the data-generation burden to simulation.
+Simulation-based Data Generation.
+Simulation provides controllable variation in tasks, scenes,
+and object configurations [22, 23, 24], but generating successful robot behavior within these envi-
+ronments often still requires substantial human engineering. Early systems rely on teleoperation or
+manually specified task programs [25, 26], while recent work increasingly automates different stages
+of the data-generation process. Gen2Sim [27], RoboGen [28], and GenSim [29] use foundation
+models to generate tasks, supervision, or executable programs. RoboCasa [30] and MimicGen [31]
+scale demonstrations by adapting a small set of human demonstrations to new scene configurations.
+More recent systems, including InternData-A1 [7], Genie Sim 3.0 [9], and MolmoBot [8], auto-
+mate demonstration generation at substantially larger scales using engineered motion-planning and
+control pipelines, demonstrating the value of synthetic experience for downstream robot learning.
+These approaches substantially reduce the cost of data collection, but behavior generation generally
+remains specified through source demonstrations, generated programs, or expert execution pipelines.
+SkillWeaver instead treats behavior generation itself as an embodied search problem, autonomously
+discovering long-horizon demonstrations through verifier-guided exploration over reusable learned
+interaction skills.
+Foundation Models and Agentic Tool Use for Robotics.
+Foundation models have been used
+throughout the robot decision-making hierarchy. At the task level, SayCan [13] selects among pre-
+defined robot skills, while TidyBot [32] uses language models for semantic household decisions.
+Other approaches use foundation models to produce lower-level geometric representations: LLM-
+TrajGen [33] predicts end-effector trajectories, while CoPA [34] predicts spatial constraints from
+which manipulation poses are derived. These approaches provide flexible semantic reasoning, but
+typically either directly predict robot behavior or reason over a fixed set of engineered robot ca-
+pabilities. A complementary line of work treats foundation models as agents that solve problems
+by invoking tools, observing their outcomes, and iteratively revising their decisions. In robotics,
+Code as Policies [14] generates executable programs that compose perception and control APIs,
+while recent systems such as CaP-X [35], RATs [15], and ASPIRE [16] close the loop by allow-
+ing coding agents to execute, verify, revise, or improve robot programs through interaction. These
+works demonstrate the power of agentic reasoning, but primarily expose robot capabilities through
+code, APIs, or generated programs. Compared with program-based robot agents, SkillWeaver offers
+a more scalable paradigm by extending the agentic tool-use paradigm from software tools to pa-
+rameterized, learned physical interaction. These learned skills provide closed-loop control, while
+3
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Figure 2: Overview of SkillWeaver. SkillWeaver generates robot experience through agentic ex-
+ploration over Neural Interaction Skills (NIS). At each exploration step, a VLM agent selects and
+parameterizes an NIS, executes it in the environment, and observes the resulting state. A hierarchical
+verifier evaluates the physical outcome and provides progress rewards and reflection, while semantic
+memory transfers experience across search episodes. Verifier-guided tree search explores alternative
+interaction strategies, and successful trajectories are retained as multimodal robot training data.
+verifier-guided tree search enables more extensive exploration over alternative behaviors and skill
+parameterizations.
+3
+SkillWeaver
+We formulate autonomous robot data generation as agentic exploration over learned physical in-
+teraction (Fig. 2). Given a task instruction and a simulated environment (Sec. 3.1), SkillWeaver
+interacts with the environment through a collection of Neural Interaction Skills (NIS) (Sec. 3.2).
+At each step, a VLM agent reasons about the current world state, selects a tool and its parameters,
+executes it, and observes its physical outcome. Instead of predicting a single behavior sequence per
+episode, SkillWeaver organizes these interactions into a search tree and explores alternative strate-
+gies using verifier feedback, reflection, and memories distilled from previous experience (Sec. 3.3).
+Successful interaction traces are automatically verified and transformed into richly annotated robot
+training examples (Sec. 3.4).
+3.1
+Interactive Simulation Environments for Exploration
+Agentic data generation requires diverse, physically interactive environments in which the agent can
+explore alternative manipulation strategies. We therefore construct an automated simulation pipeline
+that generates large-scale interactive scenes with diverse assets, layouts, and object configurations.
+We first build a simulatable asset database. Gemini [36] proposes common indoor object categories
+and synthesizes diverse object images, which are reconstructed into textured meshes using SAM3D-
+Objects [37]. CoACD [38] generates collision geometry, and the resulting assets are packaged as
+IsaacLab-compatible USD objects [39]. Each asset is further annotated with semantic and physical
+metadata—including the semantic meaning of canonical axes, approximate size, mass, friction, and
+so on to support planning.
+The environment generator supports two complementary modes of data generation: broad explo-
+ration across diverse synthetic environments and targeted exploration within reconstructed real-
+4
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+world scenes. The broad exploration mode procedurally composes diverse scenes by randomly
+sampling assets and layouts, making scene generation highly efficient, where a single process gen-
+erates ∼340 scenes per minute. The targeted exploration mode reconstructs environments from
+seed observations using 3D vision tools [37, 40, 41], instantiating them as physically interactive
+digital twins for targeted environments.
+Finally, we randomize visual appearance to improve robustness. We perturb lighting, textures, back-
+grounds, and camera viewpoints, encouraging downstream policies to learn behaviorally relevant
+interaction cues rather than overfitting to specific simulation statistics.
+3.2
+Neural Interaction Skills
+To interact with the physical environment, the reasoning agent requires capabilities that are both
+reusable across tasks and robust to local variation in physical state. We introduce Neural Inter-
+action Skills (NIS), learned closed-loop policies exposed to the agent through a structured, pa-
+rameterized interface. An NIS implements a reusable physical capability: the agent specifies what
+interaction to perform and its semantic/geometric parameters, while the learned policy determines
+how to realize that interaction through closed-loop control.
+This separation is particularly important for contact-rich manipulation. While motion planners pro-
+vide reliable collision-free motion through free space, interactions such as grasp acquisition, stable
+placement, and articulated-object manipulation require continuous adaptation to object geometry,
+contact, and the evolving physical state. We therefore use motion planning for free-space position-
+ing and instantiate NIS for contact-rich interaction using policies learned with model-free RL.
+Concretely, we train reusable PICK, PLACE, OPEN, and CLOSE NIS with PPO [42] in IsaacLab [39].
+Each policy receives robot proprioception and privileged object-centric observations, including tar-
+get pose, goal residuals, and local gripper–object geometry features, and outputs Cartesian end-
+effector deltas and gripper commands. Because effective interaction strategies vary across object
+geometries, poses, and articulation types, each NIS contains specialized sub-policies with tailored
+observations, rewards, and success conditions ; details are provided in Appendix G.
+NIS training and deployment share the same local interaction interface. During training, we random-
+ize object poses, joint states, and robot initialization within a local neighborhood of the target object
+or part. At deployment, the agent parameterizes the selected NIS with the target object and desired
+interaction outcome. A motion planner first brings the gripper to a local pre-interaction configura-
+tion, after which the corresponding learned policy performs the contact-rich interaction. This shared
+interface allows the same NIS to be invoked across objects, layouts, tasks, and search episodes.
+3.3
+Agentic Exploration over Neural Interaction Skills
+Tool Selection and Grounding.
+At each interaction step, the VLM agent observes the current
+environment state and reasons about which physical interaction should be attempted next. It predicts
+a structured action
+at = (gt, τt, ot, θt),
+where gt denotes the semantic subgoal, τt the selected Neural Interaction Skill, ot its target object or
+articulation part, and θt the tool-specific geometric parameters, such as a target position, orientation,
+or joint state.
+For orientation-sensitive interactions, directly predicting unconstrained 3D rotations from a VLM is
+often unstable and geometrically inconsistent. We instead parameterize orientation through seman-
+tic axis alignment. Given pre-annotated canonical object axes, the agent predicts semantic axis
+correspondences, from which the target rotation is computed analytically (see App. H.4).
+Executing a tool invocation produces a physical state transition. A motion planner [12] first moves
+the robot to a local pre-interaction configuration near the selected object or target region. The se-
+lected NIS then executes the contact-rich portion of the interaction conditioned on its grounded pa-
+5
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+rameters. The resulting simulator state and execution observations are returned to the agent, closing
+the loop between reasoning and physical interaction.
+Embodied Tool Search.
+A single sequence of tool predictions can fail because of incorrect high-
+level decisions, geometric grounding errors, or unexpected physical outcomes. Rather than com-
+mitting to the first predicted sequence, SkillWeaver explicitly explores alternative tool invocations
+through interaction within the simulator.
+We organize agent–environment interactions into a search tree. Each node represents a simulator
+state together with its interaction history, verifier feedback, and retrieved memory, while each outgo-
+ing edge represents the execution of a parameterized NIS. Expanding an edge therefore corresponds
+to an actual physical experiment: the agent proposes a tool invocation, executes it in simulation, and
+observes the resulting world state.
+We use Monte Carlo Tree Search (MCTS) to allocate exploration toward promising branches while
+preserving alternative strategies. At each expansion, the VLM proposes candidate tool invocations
+conditioned on the current state and previous feedback; the corresponding NIS are executed, and the
+resulting states are inserted into the tree. Successful prefixes can thus be reused while unsuccessful
+branches trigger alternative tool choices or parameterizations.
+Outcome Verification and Reflection.
+Agentic exploration requires feedback about whether an
+attempted physical interaction succeeded and moved the system closer to the overall task goal. Stan-
+dard MCTS estimates newly expanded nodes through downstream rollouts, which would require
+repeatedly executing additional physical interactions before receiving a terminal reward, which is
+expensive for long-horizon manipulation. We therefore introduce a hierarchical verifier that directly
+evaluates the outcome of each newly expanded node and provides intermediate feedback for search.
+Verification is decomposed into two levels to provide more reliable progress estimation. A sub-
+goal verifier assesses whether the latest skill achieved its local objective, while a progress verifier
+aggregates preceding subgoal outcomes to estimate overall task progress, producing a scalar score
+(rt ∈[0, 100]) and a natural-language reflection on failures or corrective actions. These reflections
+condition subsequent planner prompts for adaptive re-planning. Reliable verification also requires
+accurate spatial and physical reasoning, yet VLMs remain brittle with embodied and spatial tasks
+from visual observations alone [43, 44]. We therefore complement rendered observations with privi-
+leged simulator states, including object poses, contacts, and spatial relations, providing explicit cues
+that may be ambiguous from RGB alone.
+Together, these design choices allow the verifier to serve three roles in SkillWeaver: it provides
+intermediate rewards that prioritize promising regions of the search tree, supplies natural-language
+feedback that conditions subsequent reasoning, and determines which discovered trajectories are
+successful to enter the training dataset.
+Experience Memory.
+Independent search episodes often encounter recurring physical and se-
+mantic failure modes. To transfer experience across episodes, SkillWeaver distills completed search
+trajectories into compact semantic memories. Each memory associates a scenario or interaction
+pattern with a reusable strategy, failure explanation, or verification rule.
+Before proposing a new tool invocation and parameterization, a selector VLM retrieves the top-
+K memories most relevant to the current task and subgoal. The retrieved experience is included
+in the agent context, allowing future searches to reuse previously discovered strategies and avoid
+repeatedly exploring known failure modes. See Appendix H.5 for details on the memory design.
+3.4
+From Exploration to Robot Training Data
+Successful trajectories discovered during exploration are automatically converted into training ex-
+amples. Because the agent interacts with a simulator, each trajectory provides not only state–action
+6
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+sequences but also synchronized multimodal observations and privileged semantic and geometric
+supervision.
+For each trajectory, we retain semantic task descriptions, object attributes, spatial relations, execu-
+tion traces, and verifier feedback. We augment language supervision with VLM-generated para-
+phrases and grounded object descriptions synthesized from asset metadata. Privileged simulator
+state further provides object poses, contacts, support relations, orientations, and temporal geometric
+relationships. RGB, depth, segmentation masks, robot state, object state, contacts, and language
+annotations are therefore naturally synchronized without additional human labeling.
+The resulting dataset is used to train deployable visuomotor policies, distilling behaviors discovered
+through agentic exploration into a policy that no longer requires search, privileged state, or access
+to the NIS library at deployment.
+4
+Experiments
+We evaluate SkillWeaver around four questions. First, can agentic exploration over Neural Inter-
+action Skills (NIS) autonomously discover successful robot behaviors and generate experience at
+scale? Second, does the resulting experience improve downstream visuomotor policy generalization
+and transfer across simulated environments? Third, which components of SkillWeaver—learned
+closed-loop NIS, branching search, hierarchical verification, and experience memory—are impor-
+tant for efficient and reliable behavior discovery? Finally, can policies trained on SkillWeaver-
+generated simulation experience transfer to real-world manipulation without any real-world teleop-
+eration data?
+4.1
+Agentic Exploration and Data Generation at Scale
+We first evaluate whether SkillWeaver can autonomously discover successful behaviors across di-
+verse manipulation problems and generate robot experience at scale.
+For broad in-the-wild data generation, we consider five task families requiring increasingly rich
+physical interaction or reasoning complexity. Pick tasks require grasping and lifting an object, while
+Place additionally requires transporting it to a specified target. Orientation-aware tasks require
+reasoning about the desired final object pose, such as straightening a lying object or inserting an
+elongated object into a narrow container. Articulation tasks require opening or closing prismatic and
+revolute parts such as drawers and cabinet doors. Finally, Long-horizon tasks compose multiple NIS
+and may require discovering prerequisite interactions that are not explicitly stated in the instruction.
+Appendix H.1 provides detailed task definitions, example instructions, and interaction sequences.
+In addition to in-the-wild exploration, we use SkillWeaver to generate demonstrations for
+benchmark-derived tasks from LIBERO-PRO [45] and SIMPLER-WidowX [46] that can be ex-
+pressed through the current NIS library, as well as task-specific data for reconstructed real-world
+environments.
+Table 1 summarizes both the behavior-discovery process and the resulting dataset. Across task fam-
+ilies, SkillWeaver discovers successful trajectories in 81.5% of search runs overall. Long-horizon
+tasks require substantially deeper exploration and remain the most challenging, with 59.9% search
+success and an average successful trajectory depth of 4.29. Our data generation is highly paralleliz-
+able, with throughput scaling linearly with the increase of compute. On 8 NVIDIA A6000 GPUs,
+SkillWeaver produces 14.95 × 24 × 8 ≈2.9K successful trajectories per day. In total, SkillWeaver
+generates 39.1K verified demonstrations across 14.1K simulated scenes, comprising 11.0M frames
+or 153.1 robot hours. Per-task search success rates for benchmark-derived tasks are reported in
+App. A.
+4.2
+Learning from SkillWeaver-Generated Experience
+7
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+(a) Tree search statistics.
+Task
+Breadth Depth Expansions Success (%) Trajectories/GPU-hour Frames/GPU-hour
+Pick
+2
+1.00
+1.00
+84.2
+27.24
+3.7K
+Place
+2
+2.00
+2.37
+77.8
+11.07
+3.0K
+Orientation-aware
+2
+2.13
+2.29
+81.5
+12.52
+3.6K
+Articulation
+2
+1.00
+1.16
+90.0
+22.15
+5.4K
+Long-horizon
+2
+4.29
+4.62
+59.9
+5.58
+3.2K
+Overall
+2
+1.64
+1.79
+81.5
+14.95
+3.4K
+(b) Data statistics.
+Source
+#Scenes
+#Trajectories
+#Frames
+Robot Hours
+In-the-wild
+9.4K
+16.9K
+3.7M
+50.9
+LIBERO-PRO
+4.3K
+19.5K
+6.8M
+94.7
+SIMPLER
+0.2K
+1.9K
+0.4M
+5.6
+Real-world post-training
+0.2K
+0.8K
+0.1M
+1.8
+Total
+14.1K
+39.1K
+11.0M
+153.1
+Table 1: Agentic exploration and generated data statistics. (a) Search statistics and generation
+throughput across task families: tree breadth, average successful-trajectory depth, expansions per
+successful trajectory, search success rate, and successful trajectories and frames generated per GPU-
+hour. (b) Scale of the resulting verified dataset across in-the-wild exploration, benchmark-derived
+tasks, and reconstructed real-world environments.
+Generated experience improves OOD generalization.
+We first test whether experience discov-
+ered by SkillWeaver improves the generalization of downstream VLAs. We evaluate on LIBERO-
+PRO [45], an augmented version of LIBERO [47] designed to test generalization under language,
+object, position, task, and environment perturbations.
+Figure 3: OOD success rate on the LIBERO-
+PRO [45] Object suite improves with data
+scaling, averaged over the Position, Task,
+and Environment perturbations.
+We reconstruct the LIBERO environments in Isaa-
+cLab,
+systematically vary objects,
+layouts,
+vi-
+sual appearance, and task specifications, and use
+SkillWeaver to autonomously generate demonstra-
+tions in the resulting environments. This produces
+a dataset approximately 10× larger than the original
+one. We then train Pi0.5 [6] either on the original
+LIBERO data alone or augmented with SkillWeaver-
+generated trajectories, and evaluate on 33 pick-and-
+place tasks across the four LIBERO-PRO suites.
+Details on environment generation, data collection,
+training, and evaluation are provided in Appendix B.
+Table 2 shows that adding SkillWeaver experience
+yields large gains under distribution shifts requiring
+new spatial grounding or behavior. The strongest im-
+provements occur under Position and Task perturba-
+tions: for example, on the Object suite, success increases from 0.0% to 77.0% under Position shifts
+and from 10.0% to 43.2% under Task shifts. Performance under Environment perturbations also
+improves across all four suites.
+Following LIBERO-PRO [45], we treat apparent robustness to isolated Language and Object per-
+turbations with caution, as these dimensions can preserve exploitable correlations from the original
+benchmark. We therefore focus the main table on Position, Task, and Environment perturbations
+and report Language/Object results together with all per-task results in Appendix C. Figure 3 fur-
+ther shows that OOD performance improves steadily as more SkillWeaver-generated experience is
+added.
+8
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Object
+Spatial
+Method
+Pos.
+Task
+Env.
+Pos.
+Task
+Env.
+GT only
+0.0
+10.0
+48.8
+46.6
+49.4
+52.4
+SkillWeaver Data + GT
+77.0 (+77.0)
+43.2 (+33.2)
+82.6 (+33.8)
+71.6 (+25.0)
+72.4 (+23.0)
+72.4 (+20.0)
+Goal
+10
+Method
+Pos.
+Task
+Env.
+Pos.
+Task
+Env.
+GT only
+11.3
+18.7
+74.7
+4.3
+4.6
+20.3
+SkillWeaver Data + GT
+60.3 (+49.0)
+50.7 (+32.0)
+78.7 (+4.0)
+43.4 (+39.1)
+33.4 (+28.8)
+43.4 (+23.1)
+Table 2: Success rate (%) under the Position, Task, and Environment perturbations of all four
+LIBERO-PRO [45] suites, with and without our generated data.
+Method
+L+O
+L+P
+L+T
+L+E
+O+P
+GT only
+97.8
+0.0
+10.0
+39.8
+0.0
+SkillWeaver Data + GT
+89.4 (−8.4)
+78.4 (+78.4)
+40.8 (+30.8)
+77.1 (+37.3)
+82.6 (+82.6)
+Method
+O+T
+O+E
+P+T
+P+E
+T+E
+GT only
+10.0
+40.2
+0.0
+19.4
+9.8
+SkillWeaver Data + GT
+34.0 (+24.0)
+57.3 (+17.1)
+73.0 (+73.0)
+70.6 (+51.2)
+50.6 (+40.8)
+Table 3: Stress test on the Object suite of LIBERO-PRO [45] under pairwise augmentation combina-
+tions with or without our data. L = Language, O = Object, P = Position, T = Task, E = Environment.
+We further stress-test compositional generalization by applying two perturbations simultaneously
+(Table 3). Adding SkillWeaver experience improves success across all nine pairwise combinations
+containing at least one of Position, Task, or Environment, with gains as large as 82.6 percentage
+points. The only degradation occurs for the Language+Object combination, consistent with the
+caveat above regarding these two LIBERO-PRO [45] perturbation dimensions.
+Generated experience enables zero- and few-shot cross-simulator transfer.
+We next ask
+whether behaviors discovered in IsaacLab provide useful training experience for deployment in in-
+dependently constructed simulation benchmarks.
+On LIBERO-Object [47], we train Pi0.5 [6] exclusively on SkillWeaver trajectories generated in
+IsaacLab.
+Without any LIBERO demonstrations, the resulting policy achieves 66.0% success.
+Adding only 5 in-domain demonstrations per task increases success to 82.2%, compared with 95.0%
+when training on all 50 ground-truth demonstrations per task (Fig. 4).
+We further instantiate SkillWeaver with a WidowX embodiment and generate experience for four
+SIMPLER-WidowX [46] tasks in IsaacLab. Training Pi0.5 solely on this generated experience yields
+77.1% average success when deployed zero-shot in SIMPLER (Fig. 5). Together, these results show
+that SkillWeaver-generated experience transfers beyond the simulator in which it was collected.
+4.3
+What Enables Effective Agentic Exploration?
+We isolate four components that enable SkillWeaver to efficiently discover successful behaviors:
+robust physical execution through learned NIS, branching exploration through tree search, outcome
+verification and reflection, and experience memory. Details on task/asset selection and experimental
+setup are provided in Appendix E.
+NIS provide robust contact-rich execution.
+Agentic exploration requires physical skills that ex-
+ecute reliably across diverse interaction states. We compare our learned PICK NIS against an engi-
+neered pipeline combining GraspGen [10] with a motion planner [12]. We evaluate on 170 assets
+excluded from NIS training and spanning diverse geometry and pose regimes (see App. E.1).
+9
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Figure 4: Zero-/few-shot sim-to-
+sim transfer to LIBERO-Object.
+Figure 5: Zero-shot transfer to
+SIMPLER-WidowX.
+Figure 6: Common failure modes
+of grasp proposers.
+As shown in Table 4(a), the learned NIS achieves 97.4% overall pick success compared with 65.1%
+for the scripted pipeline, with particularly large gains for flat objects and concave objects with thin
+rims. Figure 6 illustrates common failure modes of the engineered pipeline: proposed grasps can be
+unreachable or incompatible with the surrounding geometry, for example penetrating the table with
+side grasps or targeting structures exceeding the gripper aperture. Learned closed-loop execution
+instead adapts throughout the contact-rich interaction.
+Branching exploration improves data-generation efficiency.
+We compare MCTS against linear
+skill sequencing, corresponding to a degenerate search tree with breadth one, on five long-horizon
+tasks under the same simulation budget (task details in App. E.2). Both methods use the same
+agent and NIS library; they differ in whether alternative interaction branches can be explored while
+preserving successful prefixes.
+As shown in Table 4(b), branching search reduces the average number of expansions per successful
+trajectory from 6.74 to 3.60 and wall-clock time from 891s to 645s. Explicitly maintaining alter-
+native physical strategies therefore enables more efficient discovery than committing to a single
+evolving skill sequence.
+(a) Pick success rate: NIS vs. scripted planning.
+Method
+round
+flat
+elongated upright concave concave lying Overall
+Scripted
+87.0
+55.6
+93.2
+6.0
+2.0
+65.1
+NIS (Ours)
+99.0
+94.0
+99.6
+97.0
+98.0
+97.4
+(b) Exploration efficiency: MCTS vs. linear skill sequencing.
+Method Breadth Max Depth Simulation Budget Expansions / Success Traj. Time / Success Traj. (s)
+Linear
+1
+20
+20
+6.74
+891
+MCTS
+2
+4
+20
+3.60
+645
+Table 4: Physical execution and exploration ablations. (a) Pick-up success rate (%) across ge-
+ometry/pose profiles for our learned PICK NIS versus an engineered grasp-proposal and motion-
+planning pipeline. (b) Search efficiency of branching MCTS versus linear skill sequencing on five
+long-horizon tasks under the same simulation budget.
+Hierarchical verification guides exploration and filters data.
+We ablate two distinct roles of the
+verifier in SkillWeaver: providing intermediate feedback that guides exploration and determining
+whether discovered trajectories should enter the training dataset.
+For search guidance, verifier feedback is particularly valuable under tight exploration budgets. At
+K ≤4, verifier-guided search succeeds on 58.3% of trials, compared with 8.3% without interme-
+diate verifier rewards and 6.7% with standard rollout-based MCTS. The advantage persists as the
+search budget increases, while verifier-guided search also substantially reduces wall-clock time per
+successful trajectory (Table 5(a)).
+For dataset filtering, we compare verifier decisions against handcrafted task-specific success condi-
+tions. An image-only verifier reaches 78.8% overall accuracy, whereas exposing privileged simula-
+10
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+tor state raises accuracy to 99.5% (Table 5(b)). This highlights an important advantage of generating
+experience through agentic interaction in simulation: privileged physical state can provide reliable
+feedback during exploration and data generation, while the downstream policy is trained for deploy-
+ment from sensory observations.
+Appendix E.3 provides the exact configurations, evaluation tasks, and handcrafted success criteria.
+(a) Search guidance with intermediate rewards.
+w/ Verifier, w/o Rollout
+w/o Verifier, w/o Rollout
+w/o Verifier, w/ Rollout
+K≤4
+K≤5
+K≤6
+K≤4
+K≤5
+K≤6
+K≤4
+K≤5
+K≤6
+Avg. Success Rate (%)
+58.3
+76.7
+95.0
+8.3
+31.7
+50.0
+6.7
+21.7
+43.3
+Time / Success Traj (s)
+454
+943
+2872
+(b) Final success detection accuracy.
+Setting
+pick up
+place
+orientation aware
+straighten
+Overall
+Image-only
+85.7
+77.0
+76.0
+76.5
+78.8
++ Privileged States
+100.0
+100.0
+99.0
+99.0
+99.5
+Table 5: Top: verifier-guided MCTS uses verifier scores as intermediate rewards without rollouts;
+no-verifier MCTS performs uniform selection on frontier nodes; rollout-based search performs stan-
+dard MCTS rollouts. Bottom: verifier accuracy compared to handcrafted ground-truth labels across
+task types with and without privileged simulator states.
+Experience memory transfers discoveries across searches.
+Finally, we test whether strategies
+discovered during previous searches can improve future exploration. We evaluate four challenging
+tasks involving orientation adjustment, spatial reasoning, or implicit prerequisite discovery. As
+shown in Table 6, experience memory increases average search success from 37.5% to 85.0%.
+The effect is particularly striking when successful behavior requires an implicit prerequisite. For
+Toothbrush →Lying Cup, success increases from 0% without memory to 80% with memory: re-
+trieved experience informs the agent that the lying cup should first be placed upright before attempt-
+ing insertion. Thus, SkillWeaver can reuse abstractions learned from previous interaction rather than
+rediscovering successful strategies independently in every search.
+Method
+Pudding →Side
+Bottle Upright
+Toothbrush →Cup
+Toothbrush →Lying Cup
+Avg.
+w/o Memory
+20.0
+50.0
+80.0
+0.0
+37.5
+w/ Memory
+100.0
+60.0
+100.0
+80.0
+85.0
+Table 6: MCTS success rate (%) with and without memory on challenging tasks involving orienta-
+tion adjustment, spatial reasoning, or implicit prerequisite discovery.
+4.4
+Transfer to Real-World Manipulation
+Finally, we ask whether experience autonomously generated by SkillWeaver in simulation can im-
+prove real-world robot policies without any real-world teleoperation.
+Our training pipeline has two stages. During large-scale simulation training (LST), SkillWeaver
+explores diverse in-the-wild scenes and generates broad manipulation experience. During post-
+training (PT), we reconstruct the target real-world environment in simulation and use SkillWeaver
+to generate additional task-specific trajectories in the reconstructed scene. Both stages therefore use
+simulation-generated demonstrations; no real-world demonstrations are used for training. We deploy
+the resulting Pi0.5 policies zero-shot on a real Franka Panda. Details are provided in Appendix D.
+We evaluate object, color, and spatial grounding in pick-and-place tasks under the original real-
+world setup and two distribution shifts: swapped object positions and a changed tablecloth. Table 7
+11
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+compares policies trained using only target-environment post-training data (PT) against policies
+additionally trained on large-scale SkillWeaver experience (LST+PT).
+Original
+Swap Objects
+Change Background
+Instruction
+PT
+LST+PT
+PT
+LST+PT
+PT
+LST+PT
+Object Recognition pick up the apple
+40 [26.4,54.8] 82 [68.6,91.4]
+0 [0.0,7.1]
+86 [73.3,94.2] 32 [19.5,46.7] 50 [35.5,64.5]
+pick up the banana
+82 [68.6,91.4] 66 [51.2,78.8] 10 [3.3,21.8]
+80 [66.3,90.0] 78 [64.0,88.5] 44 [30.0,58.7]
+place the apple in the bowl
+4 [0.5,13.7]
+94 [83.5,98.7]
+0 [0.0,7.1]
+60 [45.2,73.6]
+0 [0.0,7.1]
+78 [64.0,88.5]
+place the lemon in the bowl
+0 [0.0,7.1]
+50 [35.5,64.5]
+0 [0.0,7.1]
+48 [33.7,62.6]
+0 [0.0,7.1]
+76 [61.8,86.9]
+Spatial Recognition pick up the fruit on the left
+36 [22.9,50.8] 80 [66.3,90.0]
+0 [0.0,7.1]
+72 [57.5,83.8] 16 [7.2,29.1]
+44 [30.0,58.7]
+pick up the fruit on the right
+72 [57.5,83.8] 58 [43.2,71.8]
+0 [0.0,7.1]
+58 [43.2,71.8] 18 [8.6,31.4]
+20 [10.0,33.7]
+place the fruit at the front in the bowl
+0 [0.0,7.1]
+26 [14.6,40.3]
+0 [0.0,7.1]
+6 [1.3,16.5]
+0 [0.0,7.1]
+26 [14.6,40.3]
+place the fruit at the back in the bowl
+0 [0.0,7.1]
+18 [8.6,31.4]
+0 [0.0,7.1]
+30 [17.9,44.6]
+0 [0.0,7.1]
+30 [17.9,44.6]
+Color Recognition
+pick up the red fruit
+50 [35.5,64.5] 90 [78.2,96.7]
+0 [0.0,7.1]
+82 [68.6,91.4] 34 [21.2,48.8] 58 [43.2,71.8]
+pick up the yellow fruit
+84 [70.9,92.8] 52 [37.4,66.3]
+6 [1.3,16.5]
+78 [64.0,88.5] 16 [7.2,29.1]
+18 [8.6,31.4]
+place the red fruit in the bowl
+0 [0.0,7.1]
+76 [61.8,86.9]
+0 [0.0,7.1]
+50 [35.5,64.5]
+0 [0.0,7.1]
+50 [35.5,64.5]
+place the yellow fruit in the bowl
+2 [0.1,10.6]
+58 [43.2,71.8]
+0 [0.0,7.1]
+36 [22.9,50.8]
+0 [0.0,7.1]
+6 [1.3,16.5]
+Average
+30.8
+62.5 (+31.7)
+1.3
+57.2 (+55.8)
+16.2
+41.7 (+25.5)
+Table 7: Per-task real-world success rates (%) where entries report the pooled success rate across 50
+trials with the 95% Clopper–Pearson exact confidence interval.
+Large-scale SkillWeaver experience substantially improves average real-world success in all three
+settings: from 30.8% to 62.5% in the original environment, from 1.3% to 57.2% after swapping
+object positions, and from 16.2% to 41.7% after changing the background. The particularly large
+gain under object swaps suggests that broad simulation experience reduces reliance on the specific
+object configurations encountered during target-environment post-training. While individual tasks
+remain challenging—particularly spatially specified placement—the overall results show that agent-
+generated simulation experience can substantially improve real-world robustness without additional
+real-world teleoperation. Additional qualitative results are provided in Appendix J.3.
+5
+Limitations and Future Work
+SkillWeaver currently explores over a small library of Neural Interaction Skills (NIS), instantiated
+as learned closed-loop policies for PICK, PLACE, OPEN, and CLOSE. While these tools support a
+broad range of manipulation tasks, the space of behaviors that the agent can discover is ultimately
+bounded by the physical capabilities exposed through its tool library. Extending SkillWeaver to
+non-prehensile manipulation, tool use, bimanual coordination, deformable objects, and richer em-
+bodiments such as dexterous hands will require learning a broader and more compositional repertoire
+of interaction tools. An exciting direction is to move beyond a fixed tool library and allow the agent
+to continually acquire, refine, or compose new Neural Interaction Skills from experience.
+The quality of autonomously generated experience also depends on both the fidelity of the simulated
+environment and the reasoning capabilities of the agent. Improving simulation fidelity, reasoning
+and verification, and extending agentic exploration to incorporate real-world interaction are therefore
+important directions for future work.
+It is also worth investigating more expressive forms of distillation, such as hierarchical policies that
+preserve the tool-use structure of SkillWeaver, as well as continual data-generation loops in which
+downstream policy failures trigger targeted agentic exploration and additional data collection.
+6
+Conclusion
+We presented SkillWeaver, a framework for scalable robot data generation through agentic explo-
+ration over Neural Interaction Skills (NIS). Rather than relying on teleoperation, scripted execution
+pipelines, or task-specific program generation, SkillWeaver equips a reasoning agent with learned
+closed-loop physical capabilities and allows it to explore their composition and parameterization
+12
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+through interaction with simulation. Hierarchical verification, reflection, and semantic memory
+guide this exploration, enabling the autonomous discovery of successful long-horizon manipulation
+behaviors that are retained as robot training data.
+Across LIBERO [47], LIBERO-PRO [45], SIMPLER-WidowX [46], and real-world Franka manip-
+ulation, the resulting data substantially improves downstream visuomotor policy generalization and
+enables robust sim-to-sim and sim-to-real transfer. More broadly, our results suggest a path toward
+robot learning systems in which agents not only learn from demonstrations provided to them, but
+also actively generate their own training experience by reasoning, acting, verifying, and exploring
+in interactive worlds.
+13
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Appendix Contents
+A
+Additional Tree Search Statistics
+15
+A.1
+Per-skill Success Rates during Tree Search . . . . . . . . . . . . . . . . . . . . . . . . .
+15
+A.2
+Per-task Success Rates for LIBERO-PRO tasks . . . . . . . . . . . . . . . . . . . . . . .
+15
+A.3
+Per-task Success Rates for SIMPLER-WidowX tasks . . . . . . . . . . . . . . . . . . . .
+17
+B
+Implementation Details on Simulation Experiments
+17
+B.1
+Simulation Environment Generation for Benchmark-derived Tasks . . . . . . . . . . . . . .
+17
+B.2
+Data Collection for Benchmark-derived Tasks
+. . . . . . . . . . . . . . . . . . . . . . .
+18
+B.3
+Policy Training
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+18
+B.4
+Policy Deployment and Evaluation . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+18
+C
+Additional Results on Simulation Experiments for the Trained Policy
+19
+C.1
+Per-task VLA Success Rates on all 4 LIBERO-PRO Suites . . . . . . . . . . . . . . . . .
+19
+D
+Implementation Details on Real-world Experiments
+21
+D.1
+Policy Training and Evaluation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+21
+D.2
+Large-Scale Simulation Pre-training
+. . . . . . . . . . . . . . . . . . . . . . . . . . . .
+21
+D.3
+Post-training for Target Environments
+. . . . . . . . . . . . . . . . . . . . . . . . . . .
+21
+E
+Implementation Details on Ablation Study
+22
+E.1
+Hand-Designed Tools vs. Neural Interaction Skills . . . . . . . . . . . . . . . . . . . . .
+22
+E.2
+MCTS vs. No MCTS . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+22
+E.3
+Verifier vs. No Verifier
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+23
+E.4
+Memory vs. No Memory
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+24
+F
+Automated Simulation Environment Pipeline
+25
+F.1
+Asset Generation
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+25
+F.2
+Scene Generation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+26
+F.3
+Environment Randomization . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+26
+G
+Neural Interaction Skill Learning
+27
+H
+Implementation Details on MCTS-based Data Collection
+30
+H.1
+Task Designs
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+30
+H.2
+MCTS Hyperparameters . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+31
+H.3
+Data Modality and Representations . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+32
+H.4
+Goal Orientation Prediction through Axis Alignment . . . . . . . . . . . . . . . . . . . .
+32
+H.5
+Memory Module . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+33
+I
+VLM Prompts
+34
+I.1
+Asset Generation and Annotation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+34
+I.2
+VLM Agent in MCTS . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+36
+I.3
+VLM Verifier in MCTS . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+38
+I.4
+Memory Module . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+40
+J
+Qualitative Results
+42
+J.1
+Qualitative Results for Collected Trajectories . . . . . . . . . . . . . . . . . . . . . . . .
+42
+J.2
+Qualitative Results for Axis Alignment . . . . . . . . . . . . . . . . . . . . . . . . . . .
+47
+J.3
+Qualitative Results for Real-world Deployment . . . . . . . . . . . . . . . . . . . . . . .
+48
+14
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+A
+Additional Tree Search Statistics
+A.1
+Per-skill Success Rates during Tree Search
+Pick
+Place
+Open prismatic
+Open revolute
+Close prismatic
+Close revolute
+Success rate (%)
+89.9
+79.6
+53.7
+78.3
+69.5
+72.9
+Table A1: Success rates (%) for each of the learned NIS computed over all tree search nodes that
+executed the skill.
+A.2
+Per-task Success Rates for LIBERO-PRO tasks
+We report the tree search success rate of every LIBERO-PRO [45] task for which we collected data,
+i.e., the fraction of search runs that yield at least one successful trajectory, pooled over all runs
+of the task. Task ID i denotes the i-th original LIBERO [47] task of each suite, and i-Tk its k-
+th LIBERO-PRO task augmentation. Tasks involving pushing or turning, and augmented variants
+without collected data, are omitted.
+Instruction
+Task ID
+Type
+Succ. (%)
+pick up the alphabet soup and place it in the basket
+0
+Original
+77.0
+pick the cream cheese and place it in the basket
+0-T1
+Augmented
+74.6
+pick up the cream cheese and place it in the basket
+1
+Original
+63.2
+pick the alphabet soup and place it in the basket
+1-T1
+Augmented
+69.6
+pick up the salad dressing and place it in the basket
+2
+Original
+82.3
+pick the tomato sauce and place it in the basket
+2-T1
+Augmented
+84.6
+pick up the bbq sauce and place it in the basket
+3
+Original
+81.2
+pick the ketchup and place it in the basket
+3-T1
+Augmented
+82.9
+pick up the ketchup and place it in the basket
+4
+Original
+72.5
+pick the milk and place it in the basket
+4-T1
+Augmented
+81.5
+pick up the tomato sauce and place it in the basket
+5
+Original
+75.1
+pick the bbq sauce and place it in the basket
+5-T1
+Augmented
+82.9
+pick up the butter and place it in the basket
+6
+Original
+69.3
+pick the orange juice and place it in the basket
+6-T1
+Augmented
+85.1
+pick up the milk and place it in the basket
+7
+Original
+64.0
+pick the butter and place it in the basket
+7-T1
+Augmented
+82.9
+pick up the chocolate pudding and place it in the basket
+8
+Original
+72.2
+pick the salad dressing and place it in the basket
+8-T1
+Augmented
+69.1
+pick up the orange juice and place it in the basket
+9
+Original
+72.5
+pick the chocolate pudding and place it in the basket
+9-T1
+Augmented
+72.4
+Table A2: Per-task tree search success rates (%) on the LIBERO-PRO-Object tasks, covering
+original tasks and LIBERO-PRO task augmentations.
+Instruction
+Task ID
+Type
+Succ. (%)
+pick up the black bowl between the plate and the ramekin and place
+it on the plate
+0
+Original
+94.3
+pick the akita black bowl not between the plate and the ramekin
+and place it on the plate
+0-T1
+Augmented
+96.2
+pick up the black bowl next to the ramekin and place it on the plate
+1
+Original
+97.1
+pick the akita black bowl next to the cookie box and place it on the
+plate
+1-T1
+Augmented
+72.4
+pick up the black bowl from table center and place it on the plate
+2
+Original
+90.9
+pick the akita black bowl next to the plate and place it on the plate
+2-T1
+Augmented
+96.2
+pick up the black bowl on the cookie box and place it on the plate
+3
+Original
+81.2
+pick the akita black bowl on the top of the cabinet and place it on
+the plate
+3-T1
+Augmented
+91.4
+15
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Instruction
+Task ID
+Type
+Succ. (%)
+pick up the black bowl in the top drawer of the wooden cabinet and
+place it on the plate
+4
+Original
+0.0
+pick the akita black bowl on the top of the wooden cabinet and
+place it on the plate
+4-T1
+Augmented
+89.2
+pick up the black bowl on the ramekin and place it on the plate
+5
+Original
+93.7
+pick the akita black bowl on the cookie box and place it on the
+plate
+5-T1
+Augmented
+99.3
+pick up the black bowl next to the cookie box and place it on the
+plate
+6
+Original
+68.9
+pick the akita black bowl on the stove and place it on the plate
+6-T1
+Augmented
+95.5
+pick up the black bowl on the stove and place it on the plate
+7
+Original
+89.4
+pick the akita black bowl on the top of the cabinet and place it on
+the plate
+7-T1
+Augmented
+97.4
+pick up the black bowl next to the plate and place it on the plate
+8
+Original
+93.0
+pick the akita black bowl next to the ramekin and place it on the
+plate
+8-T1
+Augmented
+98.0
+pick up the black bowl on the wooden cabinet and place it on the
+plate
+9
+Original
+87.2
+pick the akita black bowl on the stove and place it on the plate
+9-T1
+Augmented
+95.5
+Table A3: Per-task tree search success rates (%) on the LIBERO-PRO-Spatial tasks, covering
+original tasks and LIBERO-PRO task augmentations.
+Instruction
+Task ID
+Type
+Succ. (%)
+open the middle drawer of the cabinet
+0
+Original
+28.9
+open the top drawer of the cabinet
+0-T2
+Augmented
+79.1
+put the bowl on the stove
+1
+Original
+73.0
+put the plate on the stove
+1-T1
+Augmented
+29.9
+put the wine bottle on top of the cabinet
+2
+Original
+62.0
+put the wine bottle in the bowl
+2-T1
+Augmented
+63.2
+open the top drawer and put the bowl inside
+3
+Original
+35.4
+open the top layer of the drawer and put the cream cheese inside
+3-T1
+Augmented
+54.1
+open the middle layer of the drawer and put the bowl inside
+3-T2
+Augmented
+14.3
+put the bowl on top of the cabinet
+4
+Original
+76.7
+put the plate on the top of the drawer
+4-T1
+Augmented
+26.7
+put the cream cheese in the bowl
+6
+Original
+72.3
+put the wine bottle in the bowl
+6-T1
+Augmented
+67.2
+put the bowl on the plate
+8
+Original
+92.6
+put the wine bottle on the plate
+8-T1
+Augmented
+66.2
+put the wine bottle on the rack
+9
+Original
+56.9
+put the wine bottle on the stove
+9-T2
+Augmented
+71.4
+Table A4: Per-task tree search success rates (%) on the LIBERO-PRO-Goal tasks, covering original
+tasks and LIBERO-PRO task augmentations.
+Instruction
+Task ID
+Type
+Succ. (%)
+put both the alphabet soup and the tomato sauce in the basket
+0
+Original
+74.7
+put both the cream cheese and the tomato sauce in the basket
+0-T1
+Augmented
+48.3
+put both the alphabet soup and the cream cheese in the basket
+0-T2
+Augmented
+52.4
+put both the cream cheese box and the butter in the basket
+1
+Original
+54.2
+put both the alphabet soup and the butter in the basket
+1-T1
+Augmented
+69.5
+put both the cream cheese box and the alphabet soup in the basket
+1-T2
+Augmented
+62.8
+put the black bowl in the bottom drawer of the cabinet and close it
+3
+Original
+30.6
+put the bottle in the bottom drawer of the cabinet and close it
+3-T1
+Augmented
+19.5
+put the white mug on the left plate and put the yellow and white
+mug on the right plate
+4
+Original
+87.8
+put the yellow and white mug on the left plate and put the white
+mug on the right plate
+4-T1
+Augmented
+80.6
+16
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Instruction
+Task ID
+Type
+Succ. (%)
+pick up the book and place it in the back compartment of the caddy
+5
+Original
+75.2
+pick up the book and place it in the front compartment of the caddy
+5-T2
+Augmented
+95.9
+put the white mug on the plate and put the chocolate pudding to
+the right of the plate
+6
+Original
+78.1
+put the red mug on the plate and put the chocolate pudding to the
+right of the plate
+6-T1
+Augmented
+78.3
+put the white mug on the plate and put the chocolate pudding to
+the left of the plate
+6-T2
+Augmented
+66.7
+put both the alphabet soup and the cream cheese box in the basket
+7
+Original
+85.0
+put both the ketchup and the cream cheese box in the basket
+7-T1
+Augmented
+89.8
+put both the alphabet soup and the ketchup in the basket
+7-T2
+Augmented
+93.2
+put both moka pots on the stove
+8
+Original
+48.8
+put the left moka pot on the stove
+8-T1
+Augmented
+73.4
+put the right moka pot on the stove
+8-T2
+Augmented
+73.2
+put the yellow and white mug in the microwave and close it
+9
+Original
+25.7
+put the white mug in the microwave and close it
+9-T1
+Augmented
+25.5
+Table A5: Per-task tree search success rates (%) on the LIBERO-PRO-10 tasks, covering original
+tasks and LIBERO-PRO task augmentations. For task 4, LIBERO-PRO’s T1 and T2 augmentations
+share the same goal and are listed once.
+A.3
+Per-task Success Rates for SIMPLER-WidowX tasks
+Instruction
+Success rate (%)
+put carrot on plate
+92.3
+put eggplant into yellow basket
+93.1
+put the spoon on the towel
+42.3
+stack the green block on the yellow block
+78.7
+Table A6: Per-task tree search success rates on the SIMPLER-WidowX [46] tasks, measured as the
+fraction of search runs that yield at least one successful trajectory.
+B
+Implementation Details on Simulation Experiments
+B.1
+Simulation Environment Generation for Benchmark-derived Tasks
+Reference scene reconstruction.
+For each benchmark task, we sample an initial state from the benchmark and render an image of it.
+We then reconstruct the 3D geometry and layout of the objects from this image with the targeted
+exploration mode (App. F), which serves as the reference scene for the task. The background is
+reconstructed differently for the two benchmark families. LIBERO [47] and LIBERO-PRO [45]
+scenes consist of textured walls, tables, and floors, so we prompt GPT to generate texture maps
+for these surfaces from the rendered image. For SIMPLER [46] scenes, we extract the foreground
+from our rendering with the per-object segmentation masks provided by the simulator, and overlay
+it onto a background image of the benchmark scene, which we obtain by prompting GPT to erase
+the foreground objects from the rendered benchmark image.
+Scene augmentation.
+Starting from the reference scenes, we augment LIBERO [47] and LIBERO-PRO [45] tasks along
+the following axes. Object size: each reconstructed benchmark object is rescaled anisotropically,
+with independent scale factors along its three axes. Object position: we apply local jitter around the
+reference layout, resample object poses globally over the table, and swap the positions of objects.
+Object replacement: for LIBERO-PRO [45], we also render the scenes of its object augmentations
+and reconstruct the replaced objects with the targeted exploration mode. Environment: we render all
+17
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+LIBERO [47] scenes, prompt GPT to erase their foregrounds, and generate textured walls, tables,
+and floors from the resulting images; this LIBERO-derived background pool is shared across all
+tasks and further mixed with a large in-the-wild background pool, in which the walls are images
+of living rooms, kitchens, and offices generated by GPT, the floors are textures generated by GPT,
+and the tables use textures downloaded from the Internet. Task: we broaden LIBERO [47] tasks by
+replacing the source and target objects, or articulation parts, in their instructions. Finally, we ran-
+domize lighting, camera poses, and robot initialization as described in App. F.3. For SIMPLER [46]
+tasks, we only augment object sizes and positions.
+B.2
+Data Collection for Benchmark-derived Tasks
+For benchmark-derived tasks, all augmentations described above are applied jointly when gener-
+ating each scene, rather than generating a separate set of scenes for each type of perturbation as
+in LIBERO-PRO [45]. As a result, our training distribution covers a much wider range of object
+sizes, layouts, appearances, backgrounds, and task specifications, while the individually perturbed
+LIBERO-PRO evaluation scenes remain out-of-distribution for our dataset. The same data is also
+used in the sim-to-sim transfer experiments on LIBERO [47]: although it is not constructed to match
+the LIBERO evaluation distribution, the policy trained on it still achieves 66.0% zero-shot success
+on LIBERO-Object. In total, we collect about 10× as many LIBERO-style trajectories as the orig-
+inal benchmark provides, and about 475 trajectories per task for the four SIMPLER-WidowX [46]
+tasks.
+B.3
+Policy Training
+All SkillWeaver training trajectories are collected in IsaacLab [39] with a Franka Panda robot for
+LIBERO [47] and LIBERO-PRO [45], and a WidowX robot for the SIMPLER [46] tasks. The
+LIBERO ground-truth demonstrations are recorded as end-effector delta commands, so we first re-
+play them in simulation to obtain joint-space actions. Starting from each demonstration’s initial
+state, we drive the arm with the same absolute joint position controller used at evaluation (App. B.4),
+commanding the recorded joint positions of the next frame together with the original gripper com-
+mand, and record the reached joint angles, the target finger positions, and re-rendered camera im-
+ages. We keep only the replays that still complete the task.
+For policy distillation, robot arm actions are represented as k-dimensional joint positions relative to
+the start of each action chunk, where k is the DoF of the arm: for a chunk beginning at frame t0, the
+action at frame t is
+at = qt −qt0,
+(A1)
+where qt denotes the robot joint position at frame t. Gripper open/close commands are represented
+as continuous signals indicating the target finger positions, appended to the end of the action vector.
+For each comparison reported, all policies use this same action representation and are trained with
+the same number of steps and batch size, specifically 256, on 8 NVIDIA H100 GPUs.
+B.4
+Policy Deployment and Evaluation
+Robot controllers.
+In LIBERO [47] and LIBERO-PRO [45], the default robosuite controller is OSC POSE, which takes
+end-effector delta poses and a binary gripper command at 20 Hz. We replace it with robosuite’s
+JOINT POSITION controller to take in the absolute 7-DoF joint targets predicted by the policy di-
+rectly. For finger control, we convert the policy’s continuous finger position outputs to LIBERO’s
+binary gripper command by its sign relative to the current finger position. We keep the benchmark’s
+20 Hz control rate and replan every 5 steps.
+In SIMPLER-WidowX [46], we similarly write the predicted 6-DoF joint targets and a continuous
+gripper target directly to the simulator’s PD joint drives, keeping the robot’s default stiffness and
+damping. We apply a 20 Hz control rate and an action chunk length of 10.
+18
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Evaluation Setups
+LIBERO-PRO.
+We evaluate on the 33 pick-and-place tasks of the four LIBERO-PRO [45] suites: 10 in Object, 10
+in Spatial, 6 in Goal, and 7 in LIBERO-10. For each perturbation type, we generate the perturbed
+task definitions with the generation script released by LIBERO-PRO. The script samples each task’s
+perturbation from a predefined candidate pool, e.g., alternative object placements for Position, alter-
+native goals for Task, and alternative scenes for Environment. We then regenerate the initial states
+for the perturbed scenes and evaluate each task with 50 trials, each starting from a different initial
+state. We use the same step budget for all compared policies.
+To isolate the effect of our data, we train the GT-only baseline ourselves with the same action
+representation, training steps, and batch size as our model, and evaluate all policies with the same
+controller, step budget, and perturbed tasks. Absolute success rates may thus differ from those
+reported in LIBERO-PRO, while the comparison between policies remains fair.
+LIBERO and SIMPLER-WidowX.
+For the sim-to-sim transfer experiments, we follow the benchmarks’ standard evaluation setups and
+change only the robot controller described above. On LIBERO-Object [47], each of the 10 tasks is
+evaluated on its 50 predefined initial states. On SIMPLER-WidowX [46], each of the 4 tasks is eval-
+uated on its 24 predefined episode configurations, with the benchmark’s default scene, camera, and
+real-image overlay. We use a stricter success criterion than the benchmark: besides the benchmark’s
+own condition that the object is placed on the target, we also require the gripper to have released the
+object at the same step, since the original criterion also counts episodes where the robot places the
+object but never lets go.
+We note that simulation results for the same checkpoint can vary across evaluation runs, due to
+stochastic action sampling and the sensitivity of contact-rich physics. This variance is more pro-
+nounced in SIMPLER-WidowX [46], where each task is evaluated on only 24 episodes and a single
+episode changes the success rate by about 4 percentage points. For each checkpoint, we run the
+evaluation multiple times and report the best run.
+C
+Additional Results on Simulation Experiments for the Trained Policy
+C.1
+Per-task VLA Success Rates on all 4 LIBERO-PRO Suites
+We report per-task success rates (%) of the Pi0.5 model on the pick-and-place tasks of all four
+LIBERO-PRO [45] suites in Tabs. A7–A10. Each suite is evaluated under the original setting and all
+five out-of-distribution (OOD) perturbations (Language, Object, Position, Task, and Environment).
+Within every block, the left sub-column (GT) is Pi0.5 [6] trained on the original LIBERO ground-
+truth demonstrations only, and the right sub-column (SW+GT) additionally uses our SkillWeaver-
+generated data to train with the same number of steps.
+Orig.
+Lang.
+Obj.
+Pos.
+Task
+Env.
+Task
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+Alphabet soup →Basket
+92.0
+92.0
+98.0
+98.0
+100.0
+84.0
+0.0
+100.0
+0.0
+68.0
+8.0
+80.0
+Cream cheese →Basket
+94.0
+98.0
+76.0
+100.0
+96.0
+96.0
+0.0
+98.0
+100.0
+98.0
+52.0
+90.0
+Salad dressing →Basket
+96.0
+100.0
+98.0
+100.0
+92.0
+100.0
+0.0
+74.0
+0.0
+4.0
+100.0
+92.0
+BBQ sauce →Basket
+100.0
+94.0
+94.0
+92.0
+100.0
+94.0
+0.0
+100.0
+0.0
+0.0
+100.0
+98.0
+Ketchup →Basket
+92.0
+100.0
+100.0
+100.0
+100.0
+94.0
+0.0
+6.0
+0.0
+42.0
+34.0
+94.0
+Tomato sauce →Basket
+100.0
+98.0
+100.0
+88.0
+98.0
+80.0
+0.0
+88.0
+0.0
+0.0
+90.0
+88.0
+Butter →Basket
+94.0
+100.0
+98.0
+98.0
+96.0
+100.0
+0.0
+98.0
+0.0
+0.0
+14.0
+60.0
+Milk →Basket
+92.0
+98.0
+100.0
+100.0
+100.0
+88.0
+0.0
+94.0
+0.0
+74.0
+0.0
+36.0
+Chocolate pudding →Basket
+92.0
+78.0
+88.0
+94.0
+94.0
+84.0
+0.0
+30.0
+0.0
+84.0
+0.0
+92.0
+Orange juice →Basket
+98.0
+100.0
+100.0
+100.0
+98.0
+100.0
+0.0
+82.0
+0.0
+62.0
+90.0
+96.0
+Average
+95.0
+95.8
+95.2
+97.0
+97.4
+92.0
+0.0
+77.0
+10.0
+43.2
+48.8
+82.6
+Table A7: Per-task success rates (%) on the LIBERO-PRO-Object suite. GT: GT only; SW+GT:
+SkillWeaver Data + GT.
+19
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Orig.
+Lang.
+Obj.
+Pos.
+Task
+Env.
+Black bowl location
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+Between plate & ramekin
+100.0
+100.0
+92.0
+94.0
+96.0
+96.0
+90.0
+96.0
+0.0
+2.0
+96.0
+96.0
+Next to ramekin
+100.0
+100.0
+100.0
+98.0
+100.0
+98.0
+6.0
+88.0
+100.0
+98.0
+4.0
+96.0
+From table center
+100.0
+100.0
+100.0
+100.0
+100.0
+100.0
+100.0
+100.0
+0.0
+48.0
+98.0
+100.0
+On cookie box
+98.0
+100.0
+100.0
+100.0
+100.0
+100.0
+0.0
+12.0
+2.0
+96.0
+96.0
+94.0
+In top drawer of cabinet
+84.0
+90.0
+86.0
+94.0
+82.0
+84.0
+74.0
+82.0
+0.0
+14.0
+14.0
+56.0
+On ramekin
+98.0
+96.0
+100.0
+98.0
+86.0
+90.0
+96.0
+98.0
+100.0
+100.0
+0.0
+6.0
+Next to cookie box
+100.0
+98.0
+100.0
+100.0
+100.0
+88.0
+0.0
+0.0
+100.0
+100.0
+96.0
+98.0
+On stove
+98.0
+100.0
+98.0
+100.0
+100.0
+100.0
+0.0
+98.0
+66.0
+96.0
+20.0
+42.0
+Next to plate
+98.0
+100.0
+88.0
+90.0
+94.0
+94.0
+100.0
+100.0
+26.0
+72.0
+96.0
+94.0
+On wooden cabinet
+88.0
+92.0
+94.0
+88.0
+98.0
+90.0
+0.0
+42.0
+100.0
+98.0
+4.0
+42.0
+Average
+96.4
+97.6
+95.8
+96.2
+95.6
+94.0
+46.6
+71.6
+49.4
+72.4
+52.4
+72.4
+Table A8: Per-task success rates (%) on the LIBERO-PRO-Spatial suite. GT: GT only; SW+GT:
+SkillWeaver Data + GT.
+Orig.
+Lang.
+Obj.
+Pos.
+Task
+Env.
+Task
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+Bowl →stove
+100.0
+100.0
+100.0
+100.0
+94.0
+56.0
+62.0
+60.0
+0.0
+38.0
+100.0
+100.0
+Wine bottle →top of cab.
+92.0
+82.0
+94.0
+94.0
+96.0
+84.0
+2.0
+18.0
+30.0
+60.0
+60.0
+90.0
+Bowl →top of cabinet
+100.0
+98.0
+100.0
+96.0
+38.0
+30.0
+0.0
+86.0
+0.0
+26.0
+86.0
+100.0
+Cream cheese →bowl
+96.0
+98.0
+96.0
+94.0
+46.0
+70.0
+0.0
+82.0
+28.0
+68.0
+100.0
+96.0
+Bowl →plate
+100.0
+100.0
+100.0
+100.0
+78.0
+32.0
+4.0
+72.0
+24.0
+34.0
+100.0
+84.0
+Wine bottle →rack
+90.0
+38.0
+90.0
+42.0
+36.0
+42.0
+0.0
+44.0
+30.0
+78.0
+2.0
+2.0
+Average
+96.3
+86.0
+96.7
+87.7
+64.7
+52.3
+11.3
+60.3
+18.7
+50.7
+74.7
+78.7
+Table A9: Per-task success rates (%) on the LIBERO-PRO-Goal suite. GT: GT only; SW+GT:
+SkillWeaver Data + GT.
+Orig.
+Lang.
+Obj.
+Pos.
+Task
+Env.
+Task
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+GT
+SW+GT
+Alphabet soup & tomato sauce →basket
+84.0
+58.0
+86.0
+74.0
+94.0
+56.0
+6.0
+70.0
+2.0
+86.0
+32.0
+36.0
+Cream cheese & butter →basket
+88.0
+98.0
+94.0
+100.0
+82.0
+96.0
+10.0
+88.0
+8.0
+62.0
+4.0
+82.0
+White & yellow-white mugs →plates
+86.0
+30.0
+92.0
+56.0
+98.0
+46.0
+0.0
+44.0
+0.0
+10.0
+4.0
+22.0
+Book →caddy compartment
+84.0
+56.0
+96.0
+56.0
+56.0
+10.0
+6.0
+48.0
+0.0
+0.0
+84.0
+68.0
+White mug →plate, choc. pudding →right
+94.0
+72.0
+94.0
+74.0
+98.0
+40.0
+8.0
+14.0
+0.0
+10.0
+0.0
+28.0
+Alphabet soup & cream cheese →basket
+36.0
+70.0
+50.0
+84.0
+60.0
+68.0
+0.0
+40.0
+0.0
+58.0
+18.0
+68.0
+Both moka pots →stove
+48.0
+12.0
+28.0
+4.0
+50.0
+16.0
+0.0
+0.0
+22.0
+8.0
+0.0
+0.0
+Average
+74.3
+56.6
+77.1
+64.0
+76.9
+47.4
+4.3
+43.4
+4.6
+33.4
+20.3
+43.4
+Table A10: Per-task success rates (%) on the LIBERO-PRO-10 suite. GT: GT only; SW+GT:
+SkillWeaver Data + GT.
+20
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+D
+Implementation Details on Real-world Experiments
+D.1
+Policy Training and Evaluation
+Training trajectories are collected in IsaacLab [39] with a Franka Panda robot. On the real Franka
+we use joint impedance control via frankapy, also at 10 Hz. The policy is trained in the same
+setting as in simulation (App. B.3), replanning every 10 steps during inference.
+D.2
+Large-Scale Simulation Pre-training
+Environment and Task Generation.
+We create 11K scenes with the broad exploration mode for
+task types illustrated in Sec. H.1. Scene distributions over task types are shown in Tab. A11.
+Task Type
+# Scenes
+Pick
+5000
+Place
+3500
+Orientation-Aware
+2000
+Long-Horizon
+500
+Total
+11000
+Table A11: Distribution of pre-training scenes generated with the broad exploration mode across
+task types.
+Language Augmentation and Annotation.
+We efficiently augment each trajectory’s language
+along four axes, using either Gemini [36] or privileged information easily accessible from simula-
+tion.
+(i) Task expression: we generate multiple semantics-preserving paraphrases (e.g., Place the oil bottle
+into the bucket →Deposit the oil bottle so it lands in the bucket).
+(ii) Object attributes: we substitute referenced objects with fine-grained visual descriptions from
+asset metadata (e.g. the red apple, the round basket).
+(iii) Spatial relationships: from per-rollout object poses, we annotate discriminative references
+among same-category objects along the front–back and left–right axes (e.g., “the cup on the left”)
+based on initial 3D coordinates easily captured in simulation.
+(iv) Size relations: within a category, we annotate relative size when object volumes differ enough
+(e.g., “the small bowl”) based on asset meshes.
+All candidates form an instruction pool for diverse sampling during training, which enables general-
+ization to various language expressions and robust grounding of object references during inference.
+D.3
+Post-training for Target Environments
+Given a single image of a target environment, we reconstruct the scene in IsaacLab [39] using the
+targeted exploration mode. We align the camera parameters implicitly by matching the rendered
+image to the reference, and apply mild randomization to object poses, background, lighting, and
+head/wrist camera poses, bridging the sim-to-real gap while preserving the scene layout prior. We
+then collect 100 trajectories per task and apply the same policy distillation pipeline to adapt the
+pre-trained policy to the target environment and tasks.
+Note that scenes in large-scale simulation pre-training and target environment post-training are built
+from the broad exploration mode and the targeted exploration mode, respectively, as illustrated in
+Sec. F.
+21
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+E
+Implementation Details on Ablation Study
+E.1
+Hand-Designed Tools vs. Neural Interaction Skills
+In this part, we provide more details on the hand-designed tools, which include a grasp proposer
+[10] plus a motion planner [12], and our NIS used in the ablation study in Sec. 4.3.
+Asset selection.
+We sample 170 assets from the SceneGen asset database across five geometry/-
+pose profiles—round, flat, elongated upright, concave, and concave lying—that together stress the
+pick-up difficulty for a parallel-jaw gripper. Within each profile we sample 10 assets per category
+and 1 −5 categories per profile (Tab. A12). Per-trial pose initialization is profile-specific: any
+physics-settled orientation drawn from the asset’s pose bank can be used for round and flat; upright
+(canonical long axis aligned with world +z, filtered from the same bank) for elongated upright and
+concave, so that tall bottles and concave containers stand on the table; and lying for concave lying,
+where the containers lie on their side. All 170 assets are out of the training set of the NIS.
+Profile
+Geometry / Pose
+Categories (Scenario)
+#Assets
+round
+squat, low-aspect convex
+apothecary jar, moisturizer jar, pill bottle, storage
+canister
+40
+flat
+thin, flat
+butter box, cream cheese box, chocolate pudding
+box, cookie box, tea box
+50
+elongated upright
+long axis vertical
+shampoo, conditioner, lotion, cologne, perfume
+bottles
+50
+concave
+open container, standing up
+cup, green bowl
+20
+concave lying
+open container, on its side
+cup
+10
+Total
+170
+Table A12: Asset selection for different geometry/pose profiles.
+Hand-designed pick-up pipeline.
+For each trial we run a fixed three-stage pipeline. (i) Grasp
+proposal: we render the object’s point cloud in the world frame and query GraspGen [10], which
+returns up to ∼150 candidate 6-DoF panda-hand grasps with confidence scores. (ii) Motion plan-
+ning: we sort candidates by score descending and iterate; for each candidate we call cuRobo [12] to
+plan a collision-free trajectory from the robot’s home configuration to the grasp pose (with the table
+and the object registered as obstacles), and accept the first candidate whose IK is reachable. If every
+candidate fails we mark the trial as a no-IK failure. (iii) Execution: we play back the planned joint
+trajectory with the gripper open, close the gripper for 30 control steps to engage the object, then plan
+and execute a second cuRobo trajectory that lifts the panda-hand by 25 cm along the world +z axis
+with the gripper held closed. Success is determined by the same criterion as the PICK NIS: the object
+must rise by at least 15 cm above its initialization height while a fingertip contact is maintained for
+3 consecutive control steps.
+E.2
+MCTS vs. No MCTS
+In this part, we present details of the 5 long-horizon tasks used in the MCTS vs. linear planning
+ablation of Sec. 4.3 in Tab. A13.
+22
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+#
+Task Description
+Ideal Subgoal Sequence
+Minimum Depth
+1
+Place the cream cheese and the but-
+ter into the basket.
+(i) pick cream cheese box →(ii) place into basket
+→(iii) pick butter box →(iv) place into basket.
+4
+2
+Place the white mug on the left plate
+and the yellow-and-white mug on
+the right plate.
+(i) pick white mug →(ii) place on left plate →
+(iii) pick yellow and white mug →(iv) place on
+right plate.
+4
+3
+Straighten the lying mug and place
+a fork inside it.
+(i) pick lying mug →(ii) place upright on table →(iii)
+pick fork →(iv) place into mug.
+4
+4
+Straighten the lying cup and place a
+toothbrush inside it.
+(i) pick lying cup →(ii) place upright on table →(iii)
+pick toothbrush →(iv) place into cup.
+4
+5
+Straighten the lying utensil holder
+and place a butter knife inside it.
+(i) pick lying utensil holder →(ii) place upright on
+table →(iii) pick butter knife →(iv) place into
+utensil holder.
+4
+Table A13: The 5 long-horizon tasks used in the MCTS vs. linear planning ablation. All tasks
+require at least 4 skill steps to complete.
+E.3
+Verifier vs. No Verifier
+Elaboration on evaluated settings.
+Search guidance. Under matched maximum-depth budgets K ∈{4, 5, 6}, we compare three con-
+figurations: (i) w/ Verifier, w/o Rollout — the verifier scores every newly expanded node from the
+visual observations and the structured scene description, and that score is back-propagated along the
+path as the node’s reward; UCB selection is performed over all frontier nodes and no skill rollouts
+are taken; (ii) w/o Verifier, w/o Rollout — no intermediate reward is provided, and frontier selection
+degenerates to uniform-random; (iii) w/o Verifier, w/ Rollout — the standard MCTS recipe: each
+new node is value-estimated by executing the downstream skill sequence until a terminal state, and
+the terminal value is back-propagated. All three configurations share the same VLM agent and NIS
+library, searched 10 times per K, and we report mean success rate together with wall-clock time per
+successful trajectory.
+Success detection. We evaluate two conditions: (i) Image-only — the prompt contains only the task
+instruction and rendered front and top views of the initial and final scenes, four 512×512 images
+in total; (ii) + Privileged States — on top of the same four images we append privileged simulation
+information, including per-object 3D center coordinates, 3D axis-aligned bounding boxes, and the
+gripper’s current contact list.
+Task selection.
+Search guidance. We use the 6 long-horizon tasks listed in Tab. A14. All require at least 4 skill
+steps and combine different objects, so that pick, place, and straighten subgoals must interleave. Per
+configuration, each task is searched 10 times.
+Success Detection. For pick, place, orientation-aware place (e.g. pen into pen holder), and straighten
+objects up, we sample 50 tasks each for success detection accuracy evaluation, performing one
+search per task.
+Hand-crafted GT Success Labels.
+To avoid using the verifier’s own judgment as the ground
+truth, we hand-label success for each of the evaluated trajectories by matching their final states
+against hand-designed rules tailored to their task type.
+• Pick up rule: objects must be lifted by at least 15 cm above their initial height, and a
+fingertip contact must be maintained between the gripper and the object.
+• Place rule: The center of the source object must be within the target container’s bounding
+box.
+23
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+#
+Task
+Ideal Subgoal Sequence
+Min. Depth
+1
+Fork →Lying Mug
+(i) pick lying mug →(ii) place upright on table →
+(iii) pick fork →(iv) place into mug
+4
+2
+Toothbrush →Lying Cup
+(i) pick lying cup →(ii) place upright on table →
+(iii) pick toothbrush →(iv) place into cup
+4
+3
+Knife →Lying Utensil Holder
+(i) pick lying utensil holder →(ii) place upright
+on table →(iii) pick butter knife →(iv) place
+into utensil holder
+4
+4
+Two Boxes →Basket
+(i) pick cream cheese box →place into basket
+→(ii) pick butter box →place into basket
+4
+5
+Two Mugs →Two Plates
+(i) pick white mug →place on left plate
+→(ii) pick yellow and white mug →place on
+right plate
+4
+6
+Pudding →Side; Mug →Plate
+(i) pick chocolate pudding box →place on side
+→(ii) pick mug →place on plate
+4
+Table A14: The 6 long-horizon tasks used in the verifier search-guidance ablation. Each task is
+searched 10 times per budget K ∈{4, 5, 6}.
+• Orientation-related rule: in orientation-related scenarios, such as placing elongated objects
+into thin containers or straightening lying objects, we also require the object’s local z-axis
+to be aligned with the world +z axis within a cosine-similarity threshold.
+E.4
+Memory vs. No Memory
+We ablate the memory module on 4 challenging tasks listed in Tab. A15, all of them chosen to stress
+orientation reasoning and spatial reasoning.
+For each task we compare MCTS w/ Memory against w/o Memory under a fixed maximum search
+depth K =6 and 10 independent searches per configuration. Both runs share the same VLM agent,
+verifier, NIS library, and per-search compute budget.
+#
+Task
+Ideal Subgoal Sequence
+Why Challenging
+Min. Depth
+1
+Pudding →Side
+(LIBERO-10 task 6)
+(i) pick chocolate pudding →(ii)
+place on the designated side of the ref-
+erence object
+the spatial relation “side” must be
+resolved relative to the reference
+object’s front; ambiguous from the
+agent’s egocentric view alone
+2
+2
+Bottle Upright
+(i) pick lying bottle →(ii) place up-
+right on table
+requires
+selecting
+the
+place with orientation
+skill
+and a narrow upright drop pose;
+place alone is not sufficient
+2
+3
+Toothbrush →Cup
+(i) pick toothbrush →(ii) place into
+upright cup
+thin tall object into a narrow open-
+ing; only a near-vertical insertion
+succeeds geometrically
+2
+4
+Toothbrush →
+Lying Cup
+(i) pick lying cup →(ii) place upright
+on table →(iii) pick toothbrush
+→(iv) place into cup
+requires the non-obvious prerequi-
+site of standing the cup up before
+placing; an agent without memory
+keeps proposing direct “place into
+lying cup” and exhausts the budget
+4
+Table A15: Tasks used in the memory ablation. All searches use K =6 and 10 independent runs per
+configuration. The first three are depth-2 tasks whose failure is local (orientation / skill selection);
+the fourth is depth-4 and requires discovering a prerequisite step.
+24
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+F
+Automated Simulation Environment Pipeline
+F.1
+Asset Generation
+Generating Simulation-ready Assets from Scratch.
+For each of two indoor scenarios, Kitchen
+and Bathroom, we prompt Gemini-2.5-Flash [48] to propose object categories serving as manipu-
+lated objects or containers, synthesize multiple diverse instance images per category with Nano-
+Banana [36], and reconstruct each into a 3D visual mesh with SAM3D-Objects [37]. We then
+decompose every visual mesh into convex collision components with CoACD [38], which preserves
+the functionality of concave objects (e.g., mugs, bowls) for accurate contact simulation.
+We restrict the categories to objects whose geometry and physical size are suitable for manipulation
+by a single-arm robot equipped with a parallel-finger gripper. Specifically, manipulated objects are
+required to have at least one graspable dimension below 8 cm, or to contain thin graspable structures
+such as rims, handles, or elongated parts that can be reliably grasped by parallel fingers. The asset
+library also contains assets reconstructed from images in the LIBERO-PRO benchmark [45].
+The asset generation pipeline and examples of both visual and collision meshes are illustrated in
+Fig. A1. We also present statistics of the resulting asset library in Tab. A16 and Gemini prompts in
+Sec. I.1.
+Table A16: Asset library statistics. We list representative categories for each scenario and the num-
+ber of reconstructed assets per category.
+Scenario
+Example Categories (# assets)
+Total Categories
+Total Assets
+Kitchen
+apple (15), avocado (15), banana (15), beer bottle
+(100), bell pepper (15), bottle opener (15), bowl (100),
+butter dish (15), butter knife (65), cereal box (100),
+cheese grater (15), coffee pot (27), cutting board (12),
+digital scale (15), drinking glass (100), food can (100),
+gravy boat (15), basket (50), bucket (50), hot sauce
+bottle (50), jam jar (100), juice carton (100), milk
+carton (100), ...
+84
+4306
+Bathroom
+aftershave bottle (50), apothecary jar (50), beard oil
+bottle (50), cologne bottle (100), conditioner bottle
+(100), contact lens case (50), eye drops bottle (50),
+face wash bottle (100), foundation bottle (50), hair
+brush (100), hair dryer (100), ...
+44
+3300
+LIBERO
+alphabet soup can (160), white mug (100), bbq sauce
+bottle (140), book (20), butter (120), chocolate
+pudding (130), cookie box (50), ...
+31
+2586
+Total
+–
+159
+10192
+Figure A1: Left: Our pipeline for generating directly simulatable assets from scratch. Right: A
+subset of our asset library.
+25
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Asset Annotation.
+We prompt Gemini [48] to annotate each reconstructed asset with the seman-
+tic, geometric, and physical metadata required for scene composition, physics simulation, and skill
+learning. The annotations are produced in a staged pipeline in which later prompts consume earlier
+outputs, and are stored in each asset’s metadata:
+• Fine-grained visual attributes. From the object image, the VLM produces short shape/-
+color/texture phrases (e.g., a rectangular milk carton, white milk carton, and cow-graphed
+milk carton).
+• Metric size. The VLM estimates a plausible real-world range for the object’s longest axis
+while reasoning explicitly about graspability by the small Panda gripper; we sample a size
+within this range to rescale the mesh and inject scale diversity (e.g., an apple at ∼0.065 m
+versus a wine bottle at ∼0.18 m).
+• Physical properties. Conditioned on the estimated size, the VLM assigns a mass and
+friction coefficient that are written directly into the simulation asset (e.g., a teapot at 0.5 kg
+with friction 1.0).
+• Canonical axis semantics. We render three orthographic views (front/top/side) and ask the
+VLM to describe the geometric meaning of each positive axis, enabling semantic orienta-
+tion alignment across instances of a category (e.g., for a teapot +X points from the handle
+through the body to the spout and +Z from the base to the lid knob).
+• Stable Orientation. Reasoning over the axis descriptions, the VLM determines stable
+ways to orient the object on a table (e.g., a bowl should be placed upright to hold objects,
+while a wine bottle can either stand upright or lie on its side). Based on this prior, we
+sample a valid orientation library for each asset.
+F.2
+Scene Generation
+Broad Exploration Mode.
+To efficiently generate diverse scenes at scale, we compose tabletop
+layouts procedurally. For each scene, we randomly extract a set of assets from the annotated asset
+library, spanning multiple object categories. Each sampled object is assigned a random location on
+the table and an orientation drawn from its valid orientation library, to be placed in a physically stable
+pose. To guarantee a physically valid arrangement, we run oriented bounding-box (OBB) collision
+detection between all objects via a separating-axis test, and resample the location and orientation of
+any colliding object until a collision-free layout is obtained. This procedure is highly efficient and
+generates tens of thousands of distinct scenes within half an hour.
+Targeted Exploration Mode.
+To enable data collection in a specific environment of interest, we
+reconstruct manipulatable objects with SAM3D-Objects [37] directly from a single image of that
+environment. A scale-aware pose estimation model [40] is then applied to further align the absolute
+scale and 6-DoF pose of each reconstructed object. We use [41] to acquire depth maps required for
+pose recovery. We empirically find that in challenging scenarios, the position estimation is generally
+more accurate than orientation, and therefore discard the estimated orientation and instead sample
+random orientations from the valid library obtained in asset annotation, while keeping the estimated
+position fixed.
+F.3
+Environment Randomization
+To further diversify the simulation environments and ensure the downstream policies’ robustness to
+distribution shift, we introduce a structured environment randomization pipeline that systematically
+perturbs the scene by decomposing the environment into seven independently controllable com-
+ponents: scene layout, object assets, background, lighting, camera pose, robot initialization, and
+task specification. Each factor is randomized while preserving task semantics, enabling controlled
+diversity without breaking physical or functional consistency.
+26
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Factor
+What is randomized
+Range / distribution
+Scene Layout
+6-DoF object poses are drawn from a pre-
+computed collision-free layout bank, to-
+gether with the table and floor heights.
+Robot
+frame
+position
+x
+∈
+[−0.3, 0.27], y ∈[−0.38, 0.38]
+Orientation:
+category
+dependent,
+sampled from a valid orientation
+library
+Table height ∼U(−0.05, 0.0) m
+Floor height ∼U(−1.0, −0.7) m
+Asset Attributes
+For each category a different reconstructed
+instance is sampled, varying geometry, tex-
+ture, and size along with VLM-annotated
+physical properties.
+Per-category instance sampling
+Size Random Scale ∼U(0.8, 1.5)
+Mass: [0.025, 1.5]kg
+Friction: [0.8, 1.1]
+Background
+Floor, wall, and table assets are swapped per
+scene from large pools split into train/test.
+Floor Variants: 5
+Wall Variants: 3122
+Table Variants: 89
+Lighting
+A dome light varies global illumination in
+strength, direction, and textures sourced
+from public CC0 HDRI libraries.
+Intensity ∼U(1500, 4000) nits
+Yaw ∼U(−π, π)
+HDRI Texture Variants: 20
+Color tint per Channel ∼U(0.6, 1.4)
+Camera Pose
+The head camera is sampled on a forward-
+facing spherical sector around the table cen-
+ter, keeping the workspace in frame.
+Radius ∼T (0.8, 1.0, 1.4) m
+Azimuth ∼T (−20, 0, 20)
+Elevation ∼T (15, 30, 50)◦
+Robot Initialization
+The initial arm configuration is drawn from
+pools of valid IK solutions obtained by per-
+turbing the end-effector pose of a default
+arm configuration.
+EE position noise std ≤5 cm
+Gripper direction deviation ≤30◦
+Task Instruction
+A VLM paraphrases each task instruction
+into diverse natural-language expressions.
+-
+Table A17: Factorized augmentation dimensions in the environment generation pipeline. Each factor
+is randomized per asset or scene. U denotes a uniform and T (a, c, b) a triangular distribution with
+support [a, b] and mode c.
+G
+Neural Interaction Skill Learning
+In this section, we provide additional details on the design and training of the NIS with PPO [42].
+Implementation Details of PPO Policies.
+Each NIS is a closed-loop PPO policy trained with
+rl games. Pick adopts an 80-D observation, while Place appends the goal pose and its residual for a
+94-D observation. Open and Close reuse the robot and keypoint terms of Pick, but replace the object
+position with the center of the handle or of the movable part. They further append articulation-
+related observations, making up an 87-D observation for prismatic drawers and 93-D for revolute
+doors.
+We also train Pick and Place policies on the WidowX robot to solve the SIMPLER-WidowX [46]
+tasks, with the joint-related observation terms adjusted to its 6-DoF arm.
+All skills output a 7-D action, namely a 6-D end-effector delta pose and a 1-D gripper command,
+executed at 20 Hz, and share the PPO hyperparameters listed in Tab. A18.
+Tailored Skill Designs for Different Object Geometry, Pose, and Articulation Regimes.
+As in-
+troduced in Sec. 3.2, we split each skill into geometry-, pose-, and articulation-specific sub-policies,
+since no single interaction strategy is optimal across objects: a round or horizontally lying object
+is best grasped from above, an upright elongated object from the side to avoid tipping, an open
+container around its rim, and a tool by its handle. Articulated parts further differ in joint type and
+27
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Observation component
+Dim
+Joint position (normalized)
+9
+Joint velocity
+9
+Joint position target
+9
+Hand state (pose + twist)
+13
+Finger / grasp-site positions
+9
+Object / part center position
+3
+Keypoint–surface distance
+6
+Keypoint closest-point direction
+18
+Fingertip contact flags
+4
+Pick
+80
+Goal pose (Place)
+7
+Goal pose residual (Place)
+7
+Place
+94
+Part joint pos./goal/err./vel. (Open/Close)
+4
+Motion direction (Drawer)
+3
+Hinge axis / radial / tangent (Door)
+9
+Open/Close (drawer / door)
+87 / 93
+Action (all skills): 7
+EE delta pose / gripper
+6 / 1
+PPO hyperparameter
+Value
+Parallel envs
+4096
+Horizon length
+8
+Minibatch size
+1024
+Mini-epochs
+5
+Learning rate
+5×10−4
+LR schedule (KL target)
+adaptive (0.016)
+Discount γ
+0.99
+GAE λ
+0.95
+Clip ϵ
+0.2
+Entropy coef.
+10−3
+Critic coef.
+4
+Gradient norm
+1.0
+MLP units
+512-512-256-128
+Activation
+swish
+Norm. (obs/val/adv)
+yes
+Max epochs
+20000
+Table A18: NIS policy I/O and PPO hyperparameters. Rows marked (Place) are appended only
+for the Place policy (+14); rows marked (Open/Close), (Drawer), and (Door) are appended for the
+articulation policies (+7 for prismatic drawers and +13 for revolute doors). All other observation
+terms are shared by all skills, where Open and Close use the handle or movable-part center as the
+object position.
+interaction mode: a drawer slides along its joint axis while a door swings about its hinge, and open-
+ing requires pulling a firmly grasped handle, whereas closing is more robustly achieved by pushing
+the part with any gripper surface.
+Tab. A19 details the resulting PICK, PLACE, OPEN, and CLOSE sub-policies, where each row gives
+a sub-policy, the object/pose regime it handles, and its tailored object-centric observation and reward
+design.
+Skill
+Sub-policy
+Object / Pose Regime
+Policy Design
+Pick
+General
+Round or horizontally elon-
+gated
+objects
+that
+can
+be
+grasped from above (e.g., ap-
+ple, sponge, short can)
+Top-grasp policy with rewards for
+contact and lifting
+Upright
+Vertically
+elongated
+objects
+standing upright (e.g., wine
+bottle, milk carton)
+Side-grasp policy with tilt penalty
+and upright-orientation success
+constraint
+Concave
+Open
+containers
+grasped
+around the rim (e.g., bowl,
+mug, utensil holder)
+Object-centric
+observation
+ex-
+poses near-rim points
+Concave Lying
+Open containers resting on
+their side,
+grasped by ap-
+proaching the opening from
+the side (e.g., toppled mug or
+cup)
+Object-centric
+observation
+ex-
+poses the side-facing opening/rim
+points
+Handle
+Objects with a graspable han-
+dle (e.g., moka pot)
+Object-centric
+observation
+ex-
+poses
+VLM-segmented
+handle
+points
+28
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Skill
+Sub-policy
+Object / Pose Regime
+Policy Design
+Place
+General
+Objects placed at a target po-
+sition without strict orientation
+constraints (e.g., apple on ta-
+ble, onion on plate)
+Reward
+encourages
+reduc-
+ing goal-position residual and
+stable
+release;
+orientation
+is
+unconstrained
+Upright
+Objects whose goal pose re-
+quires an upright orientation
+(e.g., place wine bottle up-
+right)
+Additional upright-orientation re-
+ward and success constraint
+Open
+Drawer
+Prismatic
+parts
+opened
+by
+pulling
+the
+handle
+along
+the joint axis (e.g., cabinet
+drawer)
+Starts from a gripper pose near
+a sampled handle grasp; opening
+reward requires a stable pinch,
+and losing the grasp terminates
+the episode
+Door
+Revolute
+parts
+opened
+by
+pulling the handle along the
+hinge arc (e.g.,
+microwave
+door, cabinet door)
+Starts from a gripper pose near
+a sampled handle grasp; hinge-
+aware observation and a start-
+state curriculum annealed from
+near-open to closed
+Close
+Drawer
+Prismatic
+parts
+closed
+by
+pushing the front surface (e.g.,
+cabinet drawer)
+Starts from a gripper pose near a
+sampled push pose on the front;
+rewards contact by any grip-
+per surface, pays closing rewards
+only while engaged in the press-
+ing pose, and terminates on de-
+tachment
+Door
+Revolute parts closed by push-
+ing the door face (e.g., mi-
+crowave door, cabinet door)
+Same push design as the drawer,
+with hinge-aware observation
+Table A19: Specialized NIS sub-policies categorized by object geometry, pose, and articulation
+type, together with their corresponding policy designs.
+Reward Formulations.
+We present the core reward terms for all skills in Tab. A20, where w(·) are scalar weights and (·)+ =
+max(·, 0). Progress terms are measured against running extrema (mt−1, Mt−1) from previous steps,
+so each term pays only for new progress. po, pe are the object-center and grasp-site positions, ℓis
+the object’s height gain, nc is the fingertip-contact count, and ¯d is the mean fingertip–object distance.
+For articulated parts, q and q∗are the normalized joint position and its goal, π indicates a two-sided
+pinch on the handle, ˆd is the target motion direction, and dg is the distance from the gripper surface
+to the part. Remaining symbols denote indicator flags or auxiliary geometric quantities, as named
+by the term labels.
+Skill
+Reward terms
+Pick (non-upright)
+Roe = woe (mt−1 −∥po −pe∥)+
+(approach)
+Rc = wc clip(nc, 0, 2) · g
+(contact)
+Rℓ= wℓ(ℓ−Mt−1)+ ⊮[nc > 0] xy ok
+(lift progress)
+Rlifted = w1⊮[rawxy ∧¬f] + w2⊮
+
+posexy ∧u
+
++ w3⊮
+
+posexy ∧¬f ∧u
+
+(lift milestones)
+29
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Skill
+Reward terms
+Pick (upright)
+Same terms as Pick, with the contact gate g = ⊮[s ≥sthr]
+enforcing a side approach (s = 1 −|ˆn · ˆz|),
+plus a wrist-tilt penalty and an upright success constraint.
+Place
+Rpos = wp
+ mp
+t−1 −∥∆pxy∥
++
+(goal position)
+Rdist = wd clip( ¯d, 0, 0.25)
+(hold/grasp)
+Place (upright)
+Same terms as Place, plus an upright tilt reward
+Rtilt = wr (mr
+t−1 −δtilt)+ ,
+δtilt = ∠(ˆzo, ˆz)
+constraining only the object up-vector to within a small
+tilt tolerance of vertical (no full-orientation match).
+Open (drawer / door)
+Rc = wc clip(nc, 0, 2) (1 + π) + wπ π
+(contact/pinch)
+Rdist = wd clip( ¯d, 0, 0.25)
+(reach handle)
+Ropen = wo (q −Mt−1)+ ⊮[π ∧dir ok]
+(open progress)
+Ropened = w1⊮[q ≥q∗∧¬f] + w2⊮[q ≥q∗]
+(open milestones)
+Ralign = wF cos ∠(Fo, ˆd)
+(force direction)
++ e−αdmin wn ˆn·(−ˆd) + w⊥(1 −| ˆ
+f ·ˆh|)
+
+(grasp pose)
+Close (drawer / door)
+Rclose = wcl (mt−1 −q)+ γ
+(close progress)
+Rclosed =
+ w1⊮[q ≤q∗∧¬f] + w2⊮[q ≤q∗]
+
+γ
+(close milestones)
+Rtouch = wt ⊮[dg < ϵt]
+(touch)
+Rapp = −wa clip(dg, 0, dmax)
+(press on part)
+Rhold = wR cos θR + wω ∥arot∥
+(pose hold)
+γ = ⊮[dg < dgate] ⊮[cos θR ≥cgate]
+(engagement gate)
+Table A20: Core reward terms per skill. Pick (non-upright) covers the General, Concave, Concave-
+lying, and Handle sub-policies, which share the same reward and differ only in their object-centric
+observation. For Open, doors replace the force-direction term with the normalized torque about the
+hinge axis; Close uses identical rewards for drawers and doors.
+H
+Implementation Details on MCTS-based Data Collection
+H.1
+Task Designs
+SkillWeaver generates in-the-wild demonstrations across 5 task families:
+• Pick: grasp an object and lift it above a height threshold.
+• Place: pick up an object and place it at a specified location, e.g., on or inside a target object,
+without orientation requirements.
+• Orientation-aware: bring an object to a specific final orientation inferred by the agent, e.g.,
+straightening up a lying bottle, pouring from a cup, or inserting a thin object into a narrow
+holder with aligned long axes.
+• Articulation: open or close a prismatic or revolute part, such as a drawer or a cabinet or
+microwave door.
+• Long-horizon: chain multiple steps from the above families. A task becomes long-horizon
+either because the instruction explicitly involves multiple subgoals (e.g., “put the apple in
+the microwave and close the door”), or because it carries implicit requirements that the
+agent must infer: e.g., for “put the toothpaste tube into the mug” with the mug lying on its
+side, the agent must first straighten up the mug, although the instruction never mentions it.
+30
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Tab. A21 lists example language instructions and the corresponding skill chains for each family.
+Family
+Example instruction
+Skill chain
+Pick
+Pick up the peanut butter jar.
+(i) pick peanut butter jar
+Pick up the cheese grater.
+(i) pick cheese grater
+Pick up the utensil holder.
+(i) pick utensil holder
+Place
+Put the dental floss case inside the
+food storage container.
+(i) pick dental floss case →(ii) place into
+food storage container
+Set down the orange inside the
+saucer.
+(i) pick orange →(ii) place into saucer
+Place the butter dish on the digital
+scale.
+(i)
+pick
+butter dish
+→
+(ii)
+place
+on
+digital scale
+Orientation-aware
+Make the lying food can stand up-
+right.
+(i) pick food can →(ii) place upright on
+table orient
+Set the hot sauce bottle upright.
+(i) pick hot sauce bottle →(ii) place upright
+on table orient
+Position the butter knife inside the
+utensil holder.
+(i)
+pick
+butter knife
+→
+(ii)
+place
+into
+utensil holder with aligned long axes orient
+Pour from the moka pot into the
+mug.
+(i) pick moka pot →(ii) move above mug and tilt
+to pour orient
+Articulation
+Open the middle drawer of the
+wooden cabinet.
+(i) open drawer of wooden cabinet
+Push in the bottom drawer of the
+white cabinet.
+(i) close drawer of white cabinet
+Swing the microwave door open.
+(i) open door of microwave
+Close the microwave door.
+(i) close door of microwave
+Long-horizon
+Put the toothpaste tube into the mug.
+(mug initially lying; straightening
+must be inferred)
+(i)
+pick
+mug
+→
+(ii)
+place
+upright
+on
+table orient→(iii) pick toothpaste tube →
+(iv) place into mug with aligned long axes orient
+Pour from the green cup into the cup.
+(cup initially lying;
+straightening
+must be inferred)
+(i)
+pick
+cup
+→
+(ii)
+place
+upright
+on
+table orient→(iii) pick green cup →(iv)
+move above cup while holding orientation →(v)
+tilt to pour orient
+Open the top drawer of the cabinet
+and put the black bowl inside.
+(i) open drawer of wooden cabinet →(ii) pick
+black bowl →(iii) place into drawer
+Put the black bowl in the bottom
+drawer of the cabinet and close it.
+(i) pick black bowl →(ii) place into drawer →
+(iii) close drawer of white cabinet
+Put the apple in the microwave and
+close the door.
+(i) pick apple →(ii) place into microwave
+with aligned gripper orient→(iii) close door of
+microwave
+Table A21: Example language instructions and the corresponding skill chains for each task family.
+Skills executed by NIS are in bold, and steps that use orientation alignment are marked with orient.
+H.2
+MCTS Hyperparameters
+Tab. A22 lists the MCTS search and VLM sampling hyperparameters shared by all tasks. The search
+budget varies with the number of skill steps a task family requires and is listed in Tab. A23.
+31
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Hyperparameter
+Value
+Description
+MCTS search
+c puct
+0.5
+UCB exploration constant
+num children per expand
+2
+Branching factor per expansion
+n simulations
+Tab. A23
+Number of MCTS iterations
+max depth
+Tab. A23
+Maximum search depth (skill steps)
+VLM sampling
+temperature
+1.0
+Sampling temperature
+top p
+0.95
+Nucleus sampling threshold
+top k
+10
+Top-k sampling
+max new tokens
+8192
+Max tokens generated per prompt
+Table A22: MCTS search and VLM sampling hyperparameters shared by all tasks.
+Task family
+Representative tasks
+n simulations
+max depth
+Pick
+Pick up an object
+1
+1
+Place / Insert / Straighten-up
+Place into or onto a target, insert into a narrow
+holder, straighten up a lying object
+3
+2
+Pour
+Pour from a cup into a bowl
+3–5
+2–3
+Articulation
+Open or close a drawer or door
+3
+1
+Articulation + Place
+Put an object into a drawer or microwave and
+close it; open a drawer and place an object in-
+side
+4–6
+3
+Long-horizon
+Straighten up a lying container before inserting
+or pouring into it; place multiple objects
+6–7
+4–6
+Benchmark pick-and-place
+LIBERO-Object,
+LIBERO-Spatial,
+LIBERO-
+Goal, and SIMPLER-WidowX tasks
+3
+2
+Table A23: MCTS search budget per task family. Ranges cover tasks within the same family that
+require different numbers of skill steps.
+H.3
+Data Modality and Representations
+Each trajectory is recorded step by step in IsaacLab [39]. At every timestep we store:
+Observations.
+Five RGB camera streams—four head cameras with varying viewpoints and one
+wrist-mounted camera—providing both global context and a close-up, hand-centric view.
+State.
+The proprioceptive state at the current timestep, i.e., the 7 arm joint angles and the gripper
+finger position.
+Action.
+The resulting robot configuration after executing the step, again represented as the 7 joint
+angles and the finger position. Depending on the phase, the action is produced either by a mo-
+tion planner for collision-free mid-air transfer, or by an NIS for contact-rich manipulation; both are
+recorded in the same joint-space format so the downstream policy sees a unified action representa-
+tion.
+Auxiliary information.
+For downstream applications, we can additionally log accurate 3D-related
+information extracted from simulation, such as per-step depth maps or the 6-DoF pose of each object.
+H.4
+Goal Orientation Prediction through Axis Alignment
+Directly regressing 3D rotations with a VLM is unstable and often geometrically inconsistent, so we
+represent goal orientations through semantic axis alignment. Each asset is annotated in its canonical
+frame with the semantic meaning of its positive x, y, and z axes (App. F), and these descriptions are
+provided to the VLM agent together with the object list.
+32
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+For an orientation-aware skill, the agent predicts an alignment tuple (ah, at, s) with ah, at ∈
+{x, y, z} and s ∈{+, −}, requiring that, at the end of the skill, axis ah of the held object points in
+the same (+) or opposite (−) direction as axis at of the target. For example, straightening up a lying
+bottle on a table uses (z, z, +), aligning the bottle’s up axis with the table’s up axis. When the target
+is a movable part, such as an opened door, at is expressed in the part’s current link frame, which
+moves with the joint.
+Given the current world orientations Rh and Rt of the held object and the target, the goal orientation
+of the held object is computed analytically as
+u = Rh eah,
+v = s Rt eat,
+R⋆
+h = Rot(u→v) Rh,
+(A2)
+where ea is the unit vector along axis a and Rot(u→v) is the minimal rotation mapping u onto v,
+obtained in closed form from Rodrigues’ rotation formula. The motion planner then moves the held
+object to the goal orientation R⋆
+h.
+We also allow the agent to instead align an axis of the gripper frame (e.g., its approach axis) with
+an axis of the target for placements where the approach direction of the gripper matters, such as
+inserting an object into a side-opening container like a microwave. We apply the same computation
+to the end-effector orientation Ree to obtain R⋆
+ee, and convert it into the held-object goal through the
+rigid grasp, R⋆
+h = R⋆
+eeR−1
+ee Rh.
+Fig. A12 in App. J.2 visualizes predicted alignments on successful trajectories.
+H.5
+Memory Module
+The memory module accumulates reusable experience across search episodes in two libraries. Most
+of the time, we distill experience into General rules that capture insights that transfer across tasks,
+objects, and scenes. However, when the task is too difficult to solve with general guidance alone,
+we convert past experience into task-specific strategies that give a step-by-step recipe for one task.
+After a search episode, we give a VLM the extracted trajectory, including the initial object layout,
+the available skill primitives, and each step’s subgoal, reasoning, action parameters, and resulting
+image, together with only the final outcome, and ask it to distill 1–2 general rules or one task strategy.
+For a failed trajectory, we prompt the VLM to trace the failure back to the earliest decision that made
+it inevitable and prescribe an alternative.
+At planning time, a selector VLM retrieves the top-k relevant entries for the current instruction and
+subgoal, which are injected into the agent’s subgoal-planning and action-grounding prompts and the
+verifier prompts. (see prompts for memory distillation and retrieval in App. I.4)
+Tab. A24 shows representative entries, each a (key, memory) pair where the key is a short retrieval
+handle and the memory is the full guidance in text.
+33
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Key
+Memory
+General rules
+place beside target
+Put a source object to a certain side of the target means to put the source onto the vacant spot on the
+supporting surface beside the target, NOT on the target.
+align elongated ob-
+ject for insertion
+When placing a thin, elongated object (spoon, pen, toothbrush) into a narrow-mouth container (cup,
+mug, vase), the actor’s phase-2 grounder MUST align the object’s long axis with the container’s
+vertical axis. The judge MUST verify the object’s final horizontal bounding box is contained within
+the container’s opening.
+prepare container be-
+fore insertion
+When the destination container (cup, mug, bowl) is lying on its side, the actor’s phase-1 planner
+MUST first create subgoals to pick it up and place it upright. BEFORE attempting to insert another
+object, the judge MUST verify the container’s pose flag is “upright”.
+straighten up objects
+When straightening up an object, you should align the upright axis of the object with the world’s
+vertical axis, and make sure the object is placed back to its original position on the supporting
+surface.
+lay tall objects down
+in shallow drawers
+When placing a tall object like a bottle into a shallow drawer, if its upright height exceeds the
+available clearance, the actor’s grounder MUST orient it to lie on its side. Its long axis MUST be
+aligned horizontally, and the judge must verify its new vertical dimension (i.e., its diameter) fits.
+place
+into
+side-
+opening container
+When placing an object into a container with a side opening like a microwave or oven, the actor’s
+planner MUST select a skill that controls the gripper’s approach direction from the side. Standard
+top-down place skills are unsuitable and MUST be avoided as they will collide with the container’s
+top.
+partition surface for
+multi object place-
+ment
+When an instruction requires placing multiple objects onto a single surface like a stove or tray, the
+planner MUST partition the surface area first. For two objects, it should derive placements near the
+1/3 and 2/3 marks along the x and y axes, not just slightly off-center.
+Task-specific strategies
+strategy: place mug
+into microwave and
+close door
+1. pick the yellow and white mug.
+2. place with gripper orientation drop into the
+microwave, aligning the gripper’s W-axis opposite to the microwave’s opening axis (its U-axis).
+Target a point on the microwave’s U-W center plane, positioned 1/4 of the way deep from the
+opening. Judge: verify the mug is fully inside, clear of the door’s path. 3. close door on the
+microwave. Judge: verify the door is fully shut.
+Table A24: Example memory entries distilled from search trajectories: general rules (top) and task-
+specific strategies (bottom).
+I
+VLM Prompts
+We list the verbatim prompt templates used throughout our pipeline. Curly-brace tokens such as
+{instruction} are runtime placeholders, and [IMG] marks where rendered images are inserted
+into the multimodal prompt.
+I.1
+Asset Generation and Annotation
+We first prompt Gemini to propose object categories for each scenario, then annotate each generated
+asset with its visual description, function, size range, physical properties, canonical axis directions,
+and resting pose.
+Asset category proposal
+You are an expert asset librarian for robotics simulation.
+Scenario: {scenario}
+Generate two lists of VALID asset categories for this scenario:
+1) Manipulanda List: objects suitable for a gripper to pick or move.
+2) Container List: objects that can hold or contain other objects.
+Return exactly {manipulanda_count} manipulanda items and {container_count} container items.
+Guidelines:
+34
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+- Use generic category names (no brands).
+- Use singular nouns or short noun phrases.
+- Keep items realistic for the scenario.
+- Avoid duplicates or near-duplicates across both lists.
+- AVOID SOFT items that are hard to simulate (e.g., cloth, liquids).
+- Assign a level (1, 2, or 3) to each category based on how common
+and how diverse (i.e. usually displays a wide range of shapes or appearance) the category is (more
+,→common/diverse => higher level).
+Level meaning:
+- Level 1: very common and very diverse category
+- Level 2: common or moderately diverse category
+- Level 3: niche or limited diversity category
+Output JSON only with this schema:
+{
+"manipulanda": [{"category": "item1", "level": 1}, ...],
+"containers": [{"category": "item1", "level": 2}, ...]
+}
+Fine-grained visual description
+You are given an image of a single object.
+Object category: {category}
+You should use 1-2 words to describe each of the following three attributes of the object:
+shape, color, texture (e.g. patterns/markings/branding info/logos/...).
+Then return JSON only with this schema:
+{"fine_grained_visual":["..."]}
+["..."] is a list of concise noun phrases combining these attributes.
+Make sure you include all combinations of these attributes in the list.
+Example output list: ["thin soda can", "green soda can", "sprite can", "thin, green soda can", "green,
+,→
+sprite can", "thin, green, sprite can"]
+Size-range estimation
+You are given an image of a single object.
+Object category: {category}
+The function label of this object is: {functions}
+Please estimate a valid size range (meters) for the longest axis with the following criteria:
+- Use common sense.
+- If manipulanda is true, make sure the asset can be picked up and held steadily with a Franka-Panda
+,→arm. (Assets CANNOT be TOO BIG.) But if the asset serves as static container/surface, this can be
+,→overlooked.
+Return JSON only with this schema:
+{"reasoning": "reasoning for the size estimate especially about graspability by the Panda gripper", "
+,→long_axis_min_m":0.05,"long_axis_max_m":0.15}
+Physical properties (mass and friction)
+You are given an image of a single object.
+Object category: {category}
+The estimated longest axis (m) of this object is: {long_axis_length}
+Assign plausible mass (kg) and friction coefficient (0.8-1.2).
+Return JSON only with this schema:
+{"mass_kg":0.2,"friction":1.0}
+Canonical axis annotation
+You are an expert of spatial reasoning.
+Your task is to describe the geometric meaning of the positive direction of the three primary axes (X,
+,→
+Y, Z) of the given object.
+***** Input *****
+1. Object name: {object_name}
+2. Front view image: [IMG]
+The front view is looking at the object from the front along -X. In the front view image,
++X axis points outwards to the front of this image.
++Y axis points to the right side of this image.
++Z axis points upwards in this image.
+3. Top view image: [IMG]
+35
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+The top view is looking at the object from the top along -Z. In the top view,
++X axis points downwards in this image.
++Y axis points to the right side of this image.
++Z axis points outwards to the front of this image.
+4. Side view image: [IMG]
+The side view is looking at the object from the side along +Y. In the side view,
++X axis points to the right side of this image.
++Y axis points inwards into the image.
++Z axis points upwards in this image.
+***** Output *****
+Provide the annotation in the following JSON format:
+{
+"Reasoning": "<brief reasoning about how to determine the axis directions based on the object
+,→shape and features>",
+"X_axis": "<description of the X axis direction (from which part to which part)>",
+"Y_axis": "<description of the Y axis direction (from which part to which part)>",
+"Z_axis": "<description of the Z axis direction (from which part to which part)>"
+}
+Upright resting-pose annotation
+What is the 'upright pose' of a {category} to stand UPRIGHT and STEADILY on the table?
+The {category}'s axes in its canonical frame are annotated as follows:
+- x axis: {x_axis}
+- y axis: {y_axis}
+- z axis: {z_axis}
+Which axis should be aligned with the z+ axis of the world frame? (choose from +x, -x, +y, -y, +z, -z)
+Provide the annotation in the following JSON format:
+{
+"Reasoning": "<reason about how to determine the axis alignment>",
+"Alignment": "<axis, direction>(e.g. (x, +)/(z, -)/(y, -)/...)"
+}
+I.2
+VLM Agent in MCTS
+At each node, the agent first selects the next subgoal and skill primitive, and then grounds the chosen
+skill into concrete parameters (target asset and 3D location) with a per-skill prompt.
+Subgoal planning
+# Overall Instruction
+You are an expert roboticist tasked with solving a long-horizon manipulation task: {instruction} by
+,→breaking it into subgoals.
+This task involves multiple turns of sequential subgoal planning, choosing the next skill primitive to
+,→
+execute until completion.
+# Input
+## Scene Information
+### Multi-view Visual Observations
+You have access to visual observations of the scene from the following viewpoints:
+{view_list}
+Here is the current visual observation of the scene rendered from all viewpoints available:
+{visual_observations}
+### Object Layout
+The scene is composed of multiple objects with the following properties:
+{object_information}
+### Contact Information
+{contact_information}
+### History Information
+{history_information}
+### Skill Primitives
+You have access to the following skill primitives to manipulate the scene:
+{skill_primitives}
+# Output
+Your output must include EXACTLY one Thinking Phase and one Answer Phase.
+36
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+## Thinking Phase
+### Scene state analysis
+Describe the current state of the scene shown in different views with a concise paragraph. Pay
+,→attention to critical information in each view.
+{reflection_instruction}
+### Subgoal Planning
+Choose the most promising next subgoal from the list of skill primitives provided above. Justify your
+,→choice in a concise paragraph.
+### View Selection
+Choose the single view that best supports the chosen subgoal and asset.
+Prefer the view that
+(1) makes the relevant object or part easiest to identify
+(2) most clearly exposes the contact surface and keypoints(e.g. container bottom for place, handles
+,→for articulated object manipulation, ...).
+You MUST pick the view from the list provided above only. Output ONLY the integer index from the view
+,→list.
+Please enclose the reasoning for this phase in a set of <thinking></thinking> tags.
+An example thinking output:
+<thinking>
+reasoning content
+</thinking>
+## Answer Phase
+Based on your Thinking Phase analysis, output the relevant information for the next subgoal:
+- Subgoal: use one sentence to describe the next subgoal.
+- Skill: the integer index of skill primitive chosen from the given list.
+- View: the integer index of the chosen view from the provided list.
+An example answer output:
+<answer>
+Subgoal: Pick up the mug from the table.
+Skill: 1
+View: 2
+</answer>
+The skill-grounding prompts share a common structure; we show the grasp and orientation-aware
+place skill prompts as examples.
+Grasp grounding
+{coordinate_system}You are an assistant tasked with predicting critical parameters for one step(a
+,→subgoal) in a long-horizon robotic manipulation task.
+The overall task is '{instruction}', and the current subgoal is '{subgoal}'.
+Your task is to determine the target asset to grasp in the scene based on the current state of the
+,→scene.
+You MUST pick the target asset from the provided object list only. Output ONLY the integer index from
+,→the list.
+Asset list:
+{object_information}
+Please provide your answer in the following format:
+<thinking>
+reasoning content.
+</thinking>
+<answer>
+Asset: the id of the object to grasp (integer index from the object list).
+</answer>
+Example answer:
+<thinking>
+The target asset is the red apple on the table as the subgoal requires picking up the apple.
+</thinking>
+<answer>
+Asset: 3
+</answer>
+Orientation-aware Place grounding
+{coordinate_system}You are an assistant tasked with predicting critical parameters for one step(a
+,→subgoal) in a long-horizon robotic manipulation task.
+The overall task is '{instruction}', and the current subgoal is '{subgoal}'.
+Your task is to:
+1. Determine the target object serving as place destination.
+37
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+2. Determine the goal position in 3D space for the center of the held object, which is usually in a
+,→local region relative to the target object.
+3. Align the held object orientation with respect to the target object.
+For asset identification, you MUST pick the asset from the provided object list only. Output ONLY the
+,→integer index from the list.
+For orientation alignment, we select one primary axis (x, y, or z) in the canonical object frame for
+,→both the held asset and the target asset, and align the selected axes in the same direction.
+Thus, you need to specify which axis to use for both objects and the alignment direction (same,
+,→represented with '+', or opposite, represented with '-').
+e.g. (x, z, +) means aligning the x axis of the held object with the z axis of the target object in
+,→the same direction;
+(x, y, -) means aligning the x axis of the held object with the y axis of the target object in the
+,→opposite direction at the END STATE of this task.
+The meaning of the axes in the canonical object frame is described in the asset list below.
+Held Asset:
+{contact_information}
+Asset list:
+{object_information}
+Please provide your answer in the following format:
+<thinking>
+## Reasoning about asset identification
+## Reasoning about point grounding
+## Carefully reasoning about orientation alignment
+</thinking>
+<answer>
+Asset: the id of the object as place destination (integer index from the object list).
+Point: (x, y, z) in meters in the world frame.
+Alignment: (Held_Axis, Target_Axis, Direction)
+</answer>
+Example answer:
+<thinking>
+The target asset is the mug as the subgoal requires putting the carrot into the mug.
+To ensure the carrot fits into the mug, I will align the z axis of the carrot with the z axis of the
+,→mug in the same direction.
+</thinking>
+<answer>
+Asset: 4
+Point: (0.5, 0.5, 0.1)
+Alignment: (z, z, +)
+</answer>
+I.3
+VLM Verifier in MCTS
+The verifier operates at two granularities: it checks whether the current subgoal was completed (and
+whether the action was safe), and it scores overall task progress, whose reflection text is reused as a
+planning hint. Safety-free variants of both prompts are also available.
+Subgoal completion and safety check
+You are an expert roboticist. The robot is performing the task of '{instruction}', and the current
+,→subgoal is {subgoal}.
+Your task is to determine whether the subgoal is completed safely by analyzing the provided visual
+,→observations, object layout, and contact information.
+{coordinate_system}***** Input *****
+This is the initial state of the scene.
+(1) Visual Observations:
+{init_visual_observations}
+(2) Object Layout:
+{init_object_information}
+(3) Contact Information:
+{init_contact_information}
+From the initial state, the robot has made some progress, resulting in the following current state of
+,→the scene.
+(1) Visual Observations:
+{current_visual_observations}
+(2) Object Layout:
+{current_object_information}
+(3) Contact Information:
+{current_contact_information}
+38
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+***** Output *****
+## Thinking
+1. Propose the criteria for subgoal completion and safety based on the subgoal.
+2. Analyze the Initial State:
+(1) Examine the initial visual observations
+(2) Examine the initial object layout
+(3) Examine the initial gripper-object contact information
+to understand the starting conditions of the scene.
+3. Analyze the Current State:
+(1) Examine the current visual observations
+(2) Examine the current object layout
+(3) Examine the current gripper-object contact information
+to assess the changes that have occurred since the initial state.
+4. Compare States: Identify the differences between the initial and current states by careful
+,→comparison, focusing on changes relevant to the subgoal. If the relevant object is missing from
+,→view(e.g. occluded by other objects or some container), you should infer its position based on
+,→other information.
+5. Apply Criteria: Please match the scene transitions with the proposed criteria above one by one
+,→before making decisions.
+6. Conclusion - Completion: Decide whether this subgoal is completed.
+7. Conclusion - Safety: Decide whether the robot's action is safe(i.e. no other objects being knocked
+,→over or SEVERELY damaged).
+## Summary
+Summarize the image content with one sentence.
+## Subgoal Completion and Safety
+Whether the subgoal is completed and the robot's action is safe.
+Make sure you use '## Thinking', '## Summary', and '## Subgoal Completion and Safety' as section
+,→headers in your response.
+Overall task-progress scoring
+You are an expert roboticist. The robot is performing the task of '{instruction}'.
+Your task is to evaluate the robot's progress towards completing the overall task by analyzing the
+,→provided initial/current scene states and robot action trajectory.
+{coordinate_system}***** Input *****
+This is the initial state of the scene.
+(1) Visual Observations:
+{init_visual_observations}
+(2) Object Layout:
+{init_object_information}
+(3) Contact Information:
+{init_contact_information}
+From the initial state, the robot has made progress represented by the following trajectory:
+{history_information}
+Such progress results in the current state of the scene.
+(1) Visual Observations:
+{current_visual_observations}
+(2) Object Layout:
+{current_object_information}
+(3) Contact Information:
+{current_contact_information}
+***** Output *****
+Based on the above information, please do the following:
+## Reflection
+Evaluate the overall progress of the robot toward completing the task by analyzing the trajectory and
+,→comparing initial and current scene state.
+Are the subgoals reasonable? Is the robot making meaningful progress towards the final goal?
+## Progress Score
+Predict a task completion percentage between 0 and 100.
+- In the initial state, the task completion percentage is 0.
+- If all necessary steps are completed, the task completion percentage is 100.
+- The score should increase when a **meaningful** subgoal is completed.
+and should decrease if an action **undoes or degrades** a previously completed meaningful subgoal.
+- The score should also decrease if the robot's action causes SEVERE damage to other objects in
+,→the environment(Minor disturbance is acceptable and can be ignored).
+- **OVERRIDE**: If the overall task is fully completed at the current state, output 100 even if
+,→some unsafe actions occurred along the trajectory. Safety penalties only reduce the score when the
+,→task is INCOMPLETE.
+In this part, just provide one score and one concise explaining sentence.
+39
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Make sure you use '## Reflection' and '## Progress Score' as section headers in your response.
+Please use EXACTLY ONE number between 0 and 100 for the Progress Score.
+I.4
+Memory Module
+We use two prompts to distill general rules and task-specific strategies from search trajectories, and
+a third prompt to select memory keys at planning time.
+General rule distillation
+You are extracting reusable robot-manipulation rules from a single MCTS-style
+search trajectory. The trajectory shows a robot trying to satisfy a
+natural-language instruction. You are given the initial object layout (3D
+centers and axis-aligned bounding boxes, in meters), the robot's available
+skill primitives and their descriptions, and for each step:
+- the subgoal the actor proposed
+- the actor's reasoning (phase 1: subgoal planning; phase 2: action grounding)
+- the action parameters that were executed
+- the resulting scene image
+You are NOT shown any verification verdicts -- only whether the trajectory as a
+whole ended in SUCCESS or FAILURE. Treat the actor's reasoning as claims, not
+facts: a confident justification may itself be the mistake that caused the
+final result. Using the AVAILABLE SKILL PRIMITIVES descriptions, re-examine
+for each step whether the chosen skill was the right one.
+IF THE TRAJECTORY RESULT IS FAILURE, follow this protocol before writing rules:
+1. Determine what the failure was from the step images and the instruction,
+then trace backwards to the EARLIEST decision that made it inevitable.
+That is often NOT the step where the failure became visible, but an
+earlier step whose downstream consequence was never checked.
+2. Check the actor's claims against the INITIAL OBJECT LAYOUT geometry.
+A claim that contradicts these numbers is the prime root-cause suspect.
+3. The rule you write MUST PREVENT that root-cause decision. NEVER restate a
+decision from this failed trajectory as a prescription -- if a choice was
+followed by downstream failure, prescribe the alternative instead.
+Your job: extract 1-2 highly SPECIFIC, GENERALIZABLE rules that capture the
+NON-OBVIOUS insight a naive policy would have missed. Quality over quantity.
+Each rule should compress into 2-3 short sentences (~40-60 words) and cover:
+- TRIGGER CONDITION ("When the destination container is lying on its side...",
+"When placing a thin elongated object into a narrow-mouth container...").
+Use concrete object categories (e.g. "cup, mug, vase, bottle") not abstract
+nouns ("container").
+- PRESCRIPTIVE ORDERING with MUST / SHOULD / BEFORE / NOT. Name WHO acts
+(actor's phase-1 planner, actor's phase-2 grounder, or judge).
+- VERIFICATION CRITERION the judge can actually check from observations:
+axis alignment, bounding-box containment, pose flag (upright / lying),
+contact, position delta. Not "looks correct".
+- Optionally one short clause for an exclusion ("propped on rim doesn't
+count") OR a fallback ("drop directly from above if the gripper can't
+fit") -- pick at most one of the two, only if it's load-bearing.
+OUTPUT FORMAT -- return ONLY a single JSON object. Each top-level key is the
+rule's short title (3-6 lowercase words separated by spaces, no quotes).
+Each value is:
+{
+"value":
+"<2-3 sentences, ~40-60 words. Terse, prescriptive prose.>",
+"tags":
+[<subset of "actor_phase_1", "actor_phase_2", "judge">]
+}
+Tag meanings:
+- actor_phase_1: subgoal planning (deciding WHAT to do next and WHICH
+skill primitive to use)
+- actor_phase_2: action grounding (deciding HOW: which asset/point, which
+orientation alignment)
+- judge:
+verifying subgoal completion and safety
+STYLE EXAMPLE (illustrative only -- invent a DIFFERENT rule on a DIFFERENT
+topic for the actual trajectory below; do not copy wording or topic).
+Note the length and density -- aim for this:
+{
+40
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+"stow knife into block slot": {
+"value": "When the destination is a slotted knife block, the actor MUST first align the held tool'
+,→s long axis with the slot's long axis BEFORE the place action, targeting the slot center (not the
+,→block's top face). The judge MUST verify both that the tool's long axis is within ~10 deg of the
+,→slot's axis and that its lower bounding-box z is below the slot opening's z. A tool resting on the
+,→block's top face does NOT count.",
+"tags": ["actor_phase_2", "judge"]
+}
+}
+RULES FOR YOUR OUTPUT:
+- Output 1-2 rules. NEVER more than 2.
+- Stay within ~40-60 words per rule. If you go over 70 words, you have
+too many clauses -- cut the weakest one.
+- Each rule MUST name a specific trigger condition, not a generic principle.
+- Each rule MUST include a verification criterion expressed in concrete
+geometric / pose terms (axis alignment, bounding-box containment, pose
+flag, contact).
+- Do NOT mention specific asset names from this scene (no instance ids like
+'spoon_0057' or 'mug_0073'). Use category names ("cup, mug, vase").
+- Do NOT produce generic safety rules ("avoid disturbing nearby objects",
+"don't collide"). The safety judge already handles these.
+- Do NOT produce trivia rules ("use the appropriate view", "plan multiple
+subgoals", "the robot has a gripper").
+- Failure mode -> describe what should have been done differently (often a
+BEFORE-ordering or a judge-rejection rule).
+- Success -> describe the non-obvious invariant that made it work and that
+a naive policy would have skipped.
+- No markdown, no commentary, no code fences. Return JUST the JSON object.
+Task-specific strategy distillation
+You are distilling ONE concrete, task-specific execution strategy from a single
+MCTS-style search trajectory of a robot following a natural-language instruction.
+You are given the initial object layout (3D centers and axis-aligned bounding
+boxes, in meters), the robot's available skill primitives and their descriptions,
+and for each step: the subgoal, the actor's reasoning (phase 1: subgoal planning
+incl. skill choice; phase 2: action grounding), the executed action parameters,
+and the resulting scene image.
+You are NOT shown any verification verdicts -- only whether the trajectory as a
+whole ended in SUCCESS or FAILURE. Treat the actor's reasoning as claims, not
+facts. Using the AVAILABLE SKILL PRIMITIVES descriptions, re-examine for each
+step whether the chosen skill and parameters were right. Steps may list "other
+branches attempted from the same parent state": entries with invalid=True and a
+term_reason are parameter choices that FAILED -- your recipe MUST NOT reuse
+those parameter values; contrast them with what worked to bracket the feasible
+range. If the trajectory FAILED, your strategy must PRESCRIBE what would have
+succeeded (fix the root causes evidenced in the trajectory), not restate what
+was tried.
+Output ONE strategy entry for THIS task (not a general rule):
+- Unlike general rules, you SHOULD name the concrete objects and containers of
+this task (e.g. "the mug", "the microwave") and the exact skill primitive
+names from the AVAILABLE SKILL PRIMITIVES list.
+- Give a step-by-step recipe covering the full task: which skill at each step,
+the alignment expressed in the TARGET OBJECT'S OWN frame axes, and the
+target point for each placement.
+- HARD CONSTRAINT: NO absolute world coordinates. Scene layout is randomized
+between episodes, so every position MUST be a formula relative to quantities
+readable at run time: AABB faces/centers, the cavity opening direction, the
+held object's own dimensions, clearance margins in cm.
+- State what the judge should verify at the critical steps.
+OUTPUT FORMAT -- return ONLY a single JSON object with exactly ONE top-level key:
+the task signature as a short lowercase phrase starting with "strategy:" (e.g.
+"strategy: place mug into microwave and close door"). Its value is:
+{
+"value":
+"<the recipe, <=120 words, terse imperative prose, numbered steps>",
+"tags":
+["actor_phase_1", "actor_phase_2", "judge"]
+}
+No markdown, no commentary, no code fences. Return JUST the JSON object.
+Memory key selection at planning time
+41
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+You are a memory key selector for a robot manipulation policy.
+Given the current task instruction and subgoal, select the most relevant memory keys from the provided
+,→
+key list.
+Instruction:
+{instruction}
+Subgoal:
+{subgoal}
+Object poses (only whitelisted objects show a pose):
+{pose_info}
+Available memory keys:
+{keys}
+Rules:
+- Select the {k} most relevant keys from the available memory keys to the current instruction/subgoal.
+- Do not invent a new key.
+- Output one key per line, no extra text, no numbering, no quotes.
+J
+Qualitative Results
+J.1
+Qualitative Results for Collected Trajectories
+We visualize representative trajectories collected by our pipeline for each task type. Each strip shows
+six frames uniformly sampled from a single trajectory, including its first and last frames, with the
+corresponding language instruction below it. Figs. A2–A9 show in-the-wild tasks, while Figs. A10
+and A11 show tasks derived from LIBERO [47] and SIMPLER-WidowX [46].
+“Grasp the pickle jar.”
+“Take hold of the lemon.”
+“Pick up the banana.”
+“Lift the green cup.”
+42
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Figure A2: Collected trajectories for Pick tasks.
+“Put the bell pepper in the plate.”
+“Place the orange into the bowl.”
+“Deposit the apple in the food storage container.”
+“Settle the aftershave bottle in the bucket.”
+Figure A3: Collected trajectories for Place tasks.
+“Straighten up the lying oil bottle.”
+“Upright the lying perfume bottle.”
+“Make the lying mug stand straight up.”
+43
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+“Set the cup upright.”
+Figure A4: Collected trajectories for Straighten-up tasks.
+“Place the toothpaste tube into the utensil holder.”
+“Rest the spoon inside the utensil holder.”
+“Deposit the fork into the cup.”
+“Pick up the butter knife and place it into the mug.”
+Figure A5: Collected trajectories for Insert tasks.
+“Pour from the cup into the bowl.”
+“Pour from the green cup into the pink cup.”
+44
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Figure A6: Collected trajectories for Pour tasks.
+“Open the microwave door.”
+“Open the middle drawer of the cabinet.”
+Figure A7: Collected trajectories for Open tasks.
+“Close the microwave door.”
+“Close the bottom drawer.”
+Figure A8: Collected trajectories for Close tasks.
+“put the yellow-white mug on the left plate and the white mug on the right plate”
+“put the chocolate to the left of the plate and white mug on the plate”
+45
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+“put the fork inside the mug”
+“put the toothbrush in the green cup”
+Figure A9: Collected trajectories for Long-horizon tasks.
+“put both the milk and the orange juice in the basket”
+“put the red coffee mug on the left plate and put the white mug on the right plate”
+“insert the bottle into the lower drawer and close it”
+“open the top drawer and place the cream cheese inside”
+Figure A10: Collected trajectories for LIBERO-derived tasks.
+“put eggplant into yellow basket”
+46
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+“put carrot on plate”
+“put the spoon on the towel”
+“stack the green block on the yellow block”
+Figure A11: Collected trajectories for SIMPLER-derived tasks.
+J.2
+Qualitative Results for Axis Alignment
+Fig. A12 visualizes the predicted axis alignment (App. H.4) on three successful search trajectories.
+Subgoal: “Place the butter knife into the utensil holder with a vertical orientation.”
+Predicted alignment:
+(y, z, +)
+The knife is rotated so that its long axis matches the vertical axis of the holder before insertion.
+Subgoal: “Place the wine bottle on its side into the bottom drawer of the white cabinet.”
+Predicted
+alignment: (z, y, +)
+The bottle is laid along the left–right axis of the drawer so that it fits into the shallow drawer.
+47
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+Subgoal: “Place the yellow and white mug into the microwave.”
+Predicted alignment: (z, x, −)
+The gripper reaches in against the opening direction of the microwave, so that the mug is inserted into the
+cavity from the front.
+Figure A12: Predicted axis alignment on successful trajectories. Each row shows the start of the
+alignment step, the aligned moment, and the end of the step. Red: aligned axis ah of the held object
+(top, middle) or of the gripper (bottom); blue: signed target axis s at. Labels in the first panel give
+the semantic meaning of each aligned axis from the canonical axis annotation.
+J.3
+Qualitative Results for Real-world Deployment
+We show real-world rollouts across our tasks. Each strip shows six frames uniformly sampled from
+a single trajectory, with the corresponding language instruction below it. Large-scale simulation
+pre-training plus target-oriented post-training enables robust zero-shot sim-to-real transfer across
+various tasks and distribution shifts, including object swaps and background changes (Figs. A13–
+A15). We further increase the complexity of the real-world scenes by introducing diverse, unseen
+distractor objects and by varying the object layout across trials (Fig. A16). The policy still adapts
+zero-shot to these cluttered scenes, grounding the target object among objects never seen during
+training.
+“pick up the apple”
+“pick up the banana”
+“place the apple in the bowl”
+48
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+“place the lemon in the bowl”
+Figure A13: Real-world rollouts on the original setup.
+“pick up the banana”
+“place the apple in the bowl”
+Figure A14: Real-world rollouts under object swaps.
+“pick up the apple”
+“place the lemon in the bowl”
+Figure A15: Real-world rollouts under background changes.
+“place the apple in the bowl”
+49
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+“place the apple in the bowl”
+“place the apple in the bowl”
+“place the lemon in the bowl”
+Figure A16: Real-world rollouts with diverse, unseen distractor objects and varied layouts, among
+objects that never appear in training.
+References
+[1] C. Chi, S. Feng, Y. Du, Z. Xu, E. Cousineau, B. Burchfiel, and S. Song. Diffusion policy:
+Visuomotor policy learning via action diffusion. In Robotics: Science and Systems, 2023.
+[2] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, X. Chen, K. Choromanski, T. Ding, D. Driess,
+A. Dubey, C. Finn, P. Florence, C. Fu, M. G. Arenas, K. Gopalakrishnan, K. Han, K. Hausman,
+A. Herzog, J. Hsu, B. Ichter, A. Irpan, N. Joshi, R. Julian, D. Kalashnikov, Y. Kuang, I. Leal,
+L. Lee, T.-W. E. Lee, S. Levine, Y. Lu, H. Michalewski, I. Mordatch, K. Pertsch, K. Rao,
+K. Reymann, M. Ryoo, G. Salazar, P. Sanketi, P. Sermanet, J. Singh, A. Singh, R. Soricut,
+H. Tran, V. Vanhoucke, Q. Vuong, A. Wahid, S. Welker, P. Wohlhart, J. Wu, F. Xia, T. Xiao,
+P. Xu, S. Xu, T. Yu, and B. Zitkovich. Rt-2: Vision-language-action models transfer web
+knowledge to robotic control. arXiv preprint arXiv:2307.15818, 2023.
+[3] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair, R. Rafailov, E. P. Foster,
+P. R. Sanketi, Q. Vuong, T. Kollar, B. Burchfiel, R. Tedrake, D. Sadigh, S. Levine, P. Liang,
+and C. Finn. OpenVLA: An open-source vision-language-action model. In Conference on
+Robot Learning (CoRL), pages 2679–2713, 2024.
+[4] Octo Model Team, D. Ghosh, H. Walke, K. Pertsch, K. Black, O. Mees, S. Dasari, J. Hejna,
+T. Kreiman, C. Xu, J. Luo, Y. L. Tan, L. Y. Chen, Q. Vuong, T. Xiao, P. R. Sanketi, D. Sadigh,
+C. Finn, and S. Levine. Octo: An open-source generalist robot policy. In Robotics: Science
+and Systems (RSS), 2024. doi:10.15607/RSS.2024.XX.090.
+[5] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, L. Groom, K. Haus-
+man, B. Ichter, S. Jakubczak, T. Jones, L. Ke, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair,
+K. Pertsch, L. Shi, L. Smith, J. Tanner, Q. Vuong, A. Walling, H. Wang, and U. Zhilinsky.
+π0: A vision-language-action flow model for general robot control. In Robotics: Science and
+Systems (RSS), 2025. doi:10.15607/RSS.2025.XXI.010.
+[6] Physical Intelligence et al. π0.5: a vision-language-action model with open-world generaliza-
+tion. arXiv preprint arXiv:2504.16054, 2025.
+50
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+[7] Y. Tian, Y. Yang, Y. Xie, Z. Cai, X. Shi, N. Gao, H. Liu, X. Jiang, Z. Qiu, F. Yuan, et al.
+InternData-A1: Pioneering high-fidelity synthetic data for pre-training generalist policy. arXiv
+preprint arXiv:2511.16651, 2025.
+[8] A. Deshpande, M. Guru, R. Hendrix, S. Jauhri, A. Eftekhar, R. Tripathi, M. Argus, J. Salvador,
+H. Fang, M. Wallingford, W. Pumacay, Y. Kim, Q. Pfeifer, Y.-C. Lee, P. Wolters, O. Rayyan,
+M. Zhang, J. Duan, K. Farley, W. Han, E. Vanderbilt, D. Fox, A. Farhadi, G. Chalvatzaki,
+D. Shah, and R. Krishna. MolmoB0T: Large-scale simulation enables zero-shot manipulation.
+arXiv preprint arXiv:2603.16861, 2026.
+[9] C. Yin, D. Huang, D. Yang, J. Wang, N. Zhao, C. Xu, W. Sun, L. Hou, Z. Li, J. Wu, Z. Liu,
+Z. Xiao, S. Zhang, L. Bao, R. Feng, Z. Pang, J. Li, Q. Wang, and M. Yao. Genie sim 3.0 :
+A high-fidelity comprehensive simulation platform for humanoid robot, 2026. URL https:
+//arxiv.org/abs/2601.02078.
+[10] A. Murali, B. Sundaralingam, Y.-W. Chao, W. Yuan, J. Yamada, M. Carlson, F. Ramos,
+S. Birchfield, D. Fox, and C. Eppner. Graspgen: A diffusion-based framework for 6-dof grasp-
+ing with on-generator training. arXiv preprint arXiv:2507.13097, 2025.
+[11] H.-S. Fang, C. Wang, H. Fang, M. Gou, J. Liu, H. Yan, W. Liu, Y. Xie, and C. Lu. Anygrasp:
+Robust and efficient grasp perception in spatial and temporal domains. IEEE Transactions on
+Robotics, 39(5):3929–3945, 2023.
+[12] B. Sundaralingam, S. K. S. Hari, A. Fishman, C. Garrett, K. Van Wyk, V. Blukis, A. Millane,
+H. Oleynikova, A. Handa, F. Ramos, N. Ratliff, and D. Fox. curobo: Parallelized collision-free
+minimum-jerk robot motion generation. arXiv preprint arXiv:2310.17274, 2023.
+[13] M. Ahn, A. Brohan, N. Brown, Y. Chebotar, O. Cortes, B. David, C. Finn, K. Gopalakrishnan,
+K. Hausman, A. Herzog, et al. Do as i can, not as i say: Grounding language in robotic
+affordances. arXiv preprint arXiv:2204.01691, 2022.
+[14] J. Liang, W. Huang, F. Xia, P. Xu, K. Hausman, B. Ichter, P. Florence, and A. Zeng. Code as
+policies: Language model programs for embodied control. In IEEE International Conference
+on Robotics and Automation (ICRA), pages 9493–9500, 2023. doi:10.1109/ICRA48891.2023.
+10160591.
+[15] J. Zhang, J. Ge, H. Yoo, L. Fu, Z. Yang, Y. Liu, R. Saravanan, S. Yin, J. Yu, D. Niu, Z. Wang,
+R. Herzig, K. Goldberg, Y. Bai, D. M. Chan, I. Stoica, A. Kanazawa, J. Lei, H. Feng, and
+T. Darrell. Playful agentic robot learning. arXiv preprint arXiv:2606.19419, 2026.
+[16] R. Lu, Y. Wu, E. Kou, L. Fu, W. Xiao, A. Mandlekar, Y. Xu, G. Shi, K. Goldberg, A. Chen,
+M. Chowdhury, Y. Zhu, L. Fan, and G. Wang. ASPIRE: Agentic /Skills discovery for robotics.
+arXiv preprint arXiv:2607.00272, 2026.
+[17] A. Khazatsky, K. Pertsch, S. Nair, A. Balakrishna, S. Dasari, S. Karamcheti, S. Nasiriany,
+M. K. Srirama, L. Y. Chen, K. Ellis, et al. Droid: A large-scale in-the-wild robot manipulation
+dataset. In Robotics: Science and Systems (RSS), 2024.
+[18] S. Dasari, F. Ebert, S. Tian, S. Nair, B. Bucher, K. Schmeckpeper, S. Singh, S. Levine, and
+C. Finn. Robonet: Large-scale multi-robot learning. arXiv preprint arXiv:1910.11215, 2020.
+[19] H.-S. Fang, Z. Wang, M. Gou, K. Li, C. Fang, J. Wang, W. Xie, and C. Lu. Rh20t: A compre-
+hensive robotic dataset for learning diverse skills in one-shot. In IEEE International Confer-
+ence on Robotics and Automation (ICRA), 2024.
+[20] O. X.-E. Collaboration et al. Open x-embodiment: Robotic learning datasets and rt-x models.
+arXiv preprint arXiv:2310.08864, 2024.
+51
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+[21] Q. Bu, J. Cai, L. Chen, X. Cui, Y. Ding, S. Feng, S. Gao, X. He, X. Hu, X. Huang, et al. Agibot
+world colosseo: A large-scale manipulation platform for scalable and intelligent embodied
+systems. In IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS),
+2025.
+[22] J. Gu, F. Xiang, X. Li, Z. Ling, X. Liu, T. Mu, Y. Tang, S. Tao, X. Wei, Y. Yao, et al. Maniskill2:
+A unified benchmark for generalizable manipulation skills. arXiv preprint arXiv:2302.04659,
+2023.
+[23] S. James, Z. Ma, D. R. Arrojo, and A. J. Davison. Rlbench: The robot learning benchmark &
+learning environment. IEEE Robotics and Automation Letters, 2020.
+[24] O. Mees, L. Hermann, E. Rosete-Beas, and W. Burgard. Calvin: A benchmark for language-
+conditioned policy learning for long-horizon robot manipulation tasks. IEEE Robotics and
+Automation Letters, 2022.
+[25] S. James, Z. Ma, D. R. Arrojo, and A. J. Davison. Rlbench: The robot learning benchmark &
+learning environment, 2019.
+[26] T. Chen, Z. Chen, B. Chen, Z. Cai, Y. Liu, Z. Li, Q. Liang, X. Lin, Y. Ge, Z. Gu, et al.
+RoboTwin 2.0: A scalable data generator and benchmark with strong domain randomization
+for robust bimanual robotic manipulation. arXiv preprint arXiv:2506.18088, 2025.
+[27] P. Katara, Z. Xian, and K. Fragkiadaki. Gen2sim: Scaling up robot learning in simulation
+with generative models. In 2024 IEEE International Conference on Robotics and Automation
+(ICRA). IEEE, 2024.
+[28] Y. Wang, Z. Xian, F. Chen, T.-H. Wang, Y. Wang, K. Fragkiadaki, Z. Erickson, D. Held, and
+C. Gan. Robogen: Towards unleashing infinite data for automated robot learning via generative
+simulation. ICML, 2024.
+[29] L. Wang, Y. Ling, Z. Yuan, M. Shridhar, C. Bao, Y. Qin, B. Wang, H. Xu, and X. Wang.
+Gensim: Generating robotic simulation tasks via large language models, 2024. URL https:
+//arxiv.org/abs/2310.01361.
+[30] S. Nasiriany, A. Maddukuri, L. Zhang, A. Parikh, A. Lo, A. Joshi, A. Mandlekar, and Y. Zhu.
+Robocasa: Large-scale simulation of everyday tasks for generalist robots. In Robotics: Science
+and Systems (RSS), 2024.
+[31] A. Mandlekar, S. Nasiriany, B. Wen, I. Akinola, Y. Narang, L. Fan, Y. Zhu, and D. Fox.
+Mimicgen: A data generation system for scalable robot learning using human demonstrations,
+2023. URL https://arxiv.org/abs/2310.17596.
+[32] J. Wu, R. Antonova, A. Kan, M. Lepert, A. Zeng, S. Song, J. Bohg, S. Rusinkiewicz, and
+T. Funkhouser. Tidybot: Personalized robot assistance with large language models. arXiv
+preprint arXiv:2305.05658, 2023.
+[33] T. Kwon, N. Di Palo, and E. Johns. Language models as zero-shot trajectory generators. IEEE
+Robotics and Automation Letters, 2024.
+[34] H. Huang, F. Lin, Y. Hu, S. Wang, and Y. Gao. Copa: General robotic manipulation through
+spatial constraints of parts with foundation models. arXiv preprint arXiv:2403.08248, 2024.
+[35] L. Fu, J. Yu, K. El-Refai, E. Kou, H. Xue, H. Huang, W. Xiao, G. Wang, D. Niu, F.-F. Li, G. Shi,
+J. Wu, S. Sastry, Y. Zhu, K. Goldberg, and L. Fan. CaP-X: A framework for benchmarking and
+improving coding agents for robot manipulation. arXiv preprint arXiv:2603.22435, 2026.
+[36] Gemini Team. Gemini 2.5: Pushing the frontier with advanced reasoning, multimodality, long
+context, and next generation agentic capabilities. arXiv preprint arXiv:2507.06261, 2025.
+52
+
+
+Agentic Exploration over Neural Interaction Skills for Scalable Robot Data Generation
+[37] SAM 3D Team. Sam 3d: 3dfy anything in images. arXiv preprint arXiv:2511.16624, 2025.
+[38] X. Wei, M. Liu, Z. Ling, and H. Su. Approximate convex decomposition for 3d meshes with
+collision-aware concavity and tree search. ACM Transactions on Graphics (TOG), 41(4), 2022.
+[39] M. Mittal, P. Roth, J. Tigue, A. Richard, O. Zhang, P. Du, A. Serrano-Mu˜noz, X. Yao,
+R. Zurbr¨ugg, N. Rudin, et al. Isaac lab: A gpu-accelerated simulation framework for multi-
+modal robot learning. arXiv preprint arXiv:2511.04831, 2025.
+[40] Z. Geng, N. Wang, S. Xu, C. Ye, B. Li, Z. Chen, S. Peng, and H. Zhao. One view, many
+worlds: Single-image to 3d object meets generative domain randomization for one-shot 6d
+pose estimation. arXiv preprint arXiv:2509.07978, 2025.
+[41] G. Xu, H. Lin, H. Luo, X. Wang, J. Yao, L. Zhu, Y. Pu, C. Chi, H. Sun, B. Wang, G. Chen,
+H. Ye, S. Peng, and X. Yang. Pixel-perfect depth with semantics-prompted diffusion trans-
+formers. arXiv preprint arXiv:2510.07316, 2025.
+[42] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov. Proximal policy optimization
+algorithms. arXiv preprint arXiv:1707.06347, 2017.
+[43] Y. Luo, C.-K. Fan, M. Dong, J. Shi, X. Mi, M. Zhao, B.-W. Zhang, C. Chi, J. Liu, G. Dai,
+R. Zhang, R. An, K. Wu, Z. Che, S. Xie, G. Yao, Z. Zhao, P. Wang, G. Liu, Z. Wang, T. Huang,
+and S. Zhang. RoboBench: A comprehensive evaluation benchmark for multimodal large
+language models as embodied brain. arXiv preprint arXiv:2510.17801, 2025.
+[44] Z. Feng, Z. Kang, Q. Wang, Z. Du, J. Yan, S. Shi, C. Yuan, H. Liang, Y. Deng, Q. Li, R. Yang,
+A. An, L. Zheng, W. Wang, S. Chen, S. Xu, Y. Liang, J. Yang, and B. Guo. Seeing across
+views: Benchmarking spatial reasoning of vision-language models in robotic scenes. arXiv
+preprint arXiv:2510.19400, 2025.
+[45] X. Zhou, Y. Xu, G. Tie, Y. Chen, G. Zhang, D. Chu, P. Zhou, and L. Sun. Libero-pro: To-
+wards robust and fair evaluation of vision-language-action models beyond memorization. arXiv
+preprint arXiv:2510.03827, 2025.
+[46] X. Li, K. Hsu, J. Gu, K. Pertsch, O. Mees, H. R. Walke, C. Fu, I. Lunawat, I. Sieh, S. Kir-
+mani, S. Levine, J. Wu, C. Finn, H. Su, Q. Vuong, and T. Xiao. Evaluating real-world robot
+manipulation policies in simulation, 2024. URL https://arxiv.org/abs/2405.05941.
+[47] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone. Libero: Benchmarking knowl-
+edge transfer for lifelong robot learning. arXiv preprint arXiv:2306.03310, 2023.
+[48] G. T. et. al. Gemini: A family of highly capable multimodal models, 2024.
+53
