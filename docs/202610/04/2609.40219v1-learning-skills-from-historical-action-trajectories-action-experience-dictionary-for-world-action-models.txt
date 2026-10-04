@@ -1,0 +1,2506 @@
+Published as a conference paper at ICLR 2027
+LEARNING SKILLS FROM HISTORICAL ACTION TRA-
+JECTORIES: ACTION EXPERIENCE DICTIONARY FOR
+WORLD ACTION MODELS
+Qi Lyu1,∗, Jiahua Dong2,∗, Hao Shen3, Xudong Wang1, Hongyuan Yu4, Baichen Liu1,†,
+Henghui Ding5, Zhi Han1, Nicu Sebe6, Ivan Laptev2, Fahad Shahbaz Khan2, Salman Khan2
+1Shenyang Institute of Automation, Chinese Academy of Sciences
+2Mohamed bin Zayed University of Artificial Intelligence
+3Anhui University
+4Xiaomi Corporation
+5Fudan University
+6University of Trento
+∗Equal contributions
+†Corresponding Author
+ABSTRACT
+World Action Models (WAMs) couple visual dynamics prediction with action gen-
+eration, yet they do not explicitly support the reuse of action experience across
+manipulation tasks. Furthermore, existing WAMs struggle to capture underlying
+cross-task semantic relationships that could guide target action prediction, as re-
+dundant background elements interfere with the extraction of key visual informa-
+tion. To address these challenges, we develop a novel Action Experience Dictio-
+nary (AED) that encodes historical physical action trajectories into shared action
+embeddings to support skill reuse and model cross-task relationships. Specifically,
+we first aggregate historical actions to align with visual observations and retrieve
+action embeddings from the AED using a pretrained action tokenizer. Subse-
+quently, we visually condition the pooled embeddings through cross-attention and
+prepend them to noisy action tokens, providing interaction context and action in-
+tent for prediction. To model action-related motion and reduce reliance on irrele-
+vant background cues, we introduce a motion-aware transition loss that supervises
+visual feature change prediction over random temporal intervals. Experiments on
+simulation benchmarks and in real-world cross-embodiment settings verify the
+effectiveness of our AED. The anonymous project website is available at AED.
+1
+INTRODUCTION
+Rapid advances in large-scale foundation models (Touvron et al., 2023; Yang et al., 2025; Team
+Wan et al., 2025; DeepSeek-AI team, 2024) have spurred interest in transferring visual and lin-
+guistic knowledge to physical robots. Vision-Language-Action (VLA) models (Kim et al., 2025;
+Black et al., 2025b; Bai et al., 2026; Jia et al., 2026b) adapt pretrained vision-language represen-
+tations to map observations and instructions to actions, but their direct policy formulations often
+leave environmental dynamics implicit. To exploit dynamics in video data, World Action Models
+(WAMs) (An et al., 2026; Li et al., 2026; Jia et al., 2026a) couple action generation with future
+visual prediction, providing supervision on how environments evolve. Recent WAM advances span
+unified video-action architectures and efficient control pipelines.
+However, existing WAMs (Chen et al., 2026a; Yang et al., 2026) typically focus on learning task-
+specific behaviors, leaving the potential of cross-task semantic relationships to guide manipulation
+skill learning underexplored. In particular, such underlying relationships among manipulation tasks
+can help robots draw on action experience relevant to the target task, thereby improving manipula-
+tion performance. As illustrated in Fig. 1(a), a robot learning to place a can into a basket can build
+on experience in grasping, transporting, and releasing objects acquired from other pick-and-place
+tasks (e.g., placing a wine bottle on a shelf or opening a drawer and placing a bowl inside). By
+adapting these behaviors to the basket’s position and opening, the robot can learn the target manipu-
+lation task more effectively. Similarly, action experience gained from placing a can into a basket can
+also facilitate the learning of related actions in tabletop pick-and-place tasks. This practical example
+demonstrates that different tasks share reusable action experience despite their distinct goals and
+visual contexts, as depicted in Fig. 1(b). Nevertheless, simply retaining historical actions is insuffi-
+1
+arXiv:2609.40219v1  [cs.CV]  30 Sep 2026
+
+
+Published as a conference paper at ICLR 2027
+(a) Example of reusable action skills
+(c) 
+Place the black bowl on the plate
+Grasp
+Transport
+Dip
+Release
+Action Experience Dictionary 
+Put the can into the basket
+Open drawer and put the bowl inside
+Transport
+Release
+Dip
+Release
+Grasp
+Transport
+Release
+Grasp
+Transport
+Transport
+Release
+Transport
+Placing the wine bottle on the shelf
+(b) Visualization of Reusable Action Experience 
+Figure 1: (a) Example of reusable action skills. (b) Visualization of reusable action experience in
+the action experience dictionary (AED). f ⋆[0]–f ⋆[2] indicate the transporting action pattern,
+while f ⋆[3]–f ⋆[7] encode the dipping action pattern in the AED. The visualization of the cosine
+similarities among action embeddings in the AED shows that learning to place the bowl on the plate
+involves substantial reuse of both the transporting and dipping action patterns. (c) Gray and
+green lines show gripper height and its relative changes, respectively, during training to place the
+bowl on the plate, linking action patterns (e.g., transporting and dipping) to physical height.
+cient to make this knowledge reusable, since similar motions can serve different purposes depending
+on the objects being manipulated and their spatial relationships. Moreover, redundant background
+elements may hinder the extraction of action-relevant visual information. These challenges lead us
+to the central question: How can WAMs (Cai et al., 2026) use past action trajectories to model
+underlying relationships among tasks and facilitate skill learning for the target manipulation task?
+To address the above challenges, we propose a novel learnable Action Experience Dictionary (AED)
+that encodes historical manipulation trajectories as shared action embeddings for WAMs. First, we
+aggregate past physical actions over intervals aligned with visual observations and use a pretrained
+action tokenizer to retrieve task-relevant action embeddings from the AED. Second, the retrieved
+embeddings are pooled into compact temporal representations and conditioned on compressed his-
+torical visual features through cross-attention, enabling the resulting representations to capture both
+interaction context and action intent. Then, we prepend these visually conditioned action embed-
+dings to the noisy action tokens, enabling the action expert to exploit inter-task relationships when
+predicting subsequent action chunks. Third, we introduce a motion-aware transition loss that super-
+vises the prediction of visual feature changes over randomly sampled temporal intervals using the
+visual features at the start of each interval and the corresponding AED-conditioned hidden states.
+This loss encourages the retrieved action embeddings in AED to capture action-related motion while
+reducing reliance on irrelevant background. Finally, we evaluate the effectiveness of the proposed
+model by comparing it with baselines in simulation on LIBERO, RoboTwin, and LIBERO-Plus, as
+well as in real-world cross-embodiment experiments. The main contributions are listed below:
+• We propose a novel learnable Action Experience Dictionary (AED) that encodes histori-
+cal action experience into visually conditioned action embeddings, enabling our model to
+leverage underlying relationships among manipulation tasks to guide action prediction.
+• We incorporate action-relevant visual information into the action embeddings in the AED
+to obtain visually conditioned action embeddings, which combine task-related visual se-
+mantics with action experience to capture both task context and action intent.
+• We introduce a motion-aware transition loss that supervises visual feature change predic-
+tion over random temporal intervals, encouraging learned action embeddings in the AED
+to capture action-related motion and reducing reliance on irrelevant background cues.
+2
+RELATED WORK
+Vision Language Action (VLA): Recent VLAs increasingly explore structured action representa-
+tions and visual dynamics for transferable robot control. FAST (Pertsch et al., 2025) introduces
+2
+
+
+Published as a conference paper at ICLR 2027
+Learnable Queries �
+Action Experience Dictionary (AED)
+Grasp
+Transport
+Dip
+Release
+Place the  
+bowl on 
+the plate.
+Pick up the 
+alphabet 
+soup.
+Historical visual latents ��
+ℎ
+Pooling
+�
+��+1
+��’
+��’+�
+��+�
+�, �
+��
+��
+Historical actions
+Observation ��Noised observations 
+⋮
+Aggregate&
+Tokenize
+[39] [27] [...] [74]
+Demonstration Data
+Random 
+Sampling
+Self-attn
+Cross-attn
+FFN
+Hidden 
+state 
+�, �
+ Video Expert (5B)
+x30
+⋮
+Action Expert (1B) 
+x30
+��’
+��’+�
+Motion-aware 
+transition loss
+��’
+��’+�
+�, ��
+ Multihead
+Cross-attention
+ Cross-attention 
+Layers
+Vision 
+Encoder �
+��
+a�
+ℎ
+��
+�
+��
+VAE
+��’
+Δ
+⋮
+Figure 2: Overview of the proposed AED. After defining learnable action experience dictionary
+(AED) shared across tasks, we utilize the visually conditioned action embeddings to encode the task-
+relevant information and employ a motion-aware transition loss to encode action-relevant motion.
+frequency-space action tokenization for efficient VLA training, while UniVLA (Bu et al., 2025)
+and ViPRA (Routray et al., 2026) learn task- or motion-centric latent actions from heterogeneous
+videos to support transferable control. VLM2VLA (Hancock et al., 2026) represents robot actions
+in a language-compatible form to preserve pretrained VLM capabilities. DeFI (Zhang et al., 2026)
+decouples forward visual dynamics and inverse action learning. However, cross-task reuse of his-
+torical action experience remains underexplored. Unlike UniVLA and ViPRA, which primarily
+learn transferable latent action spaces, our method explicitly visually conditions the retrieved action
+embeddings from the AED, and supervises visual feature change prediction over random temporal
+intervals to capture action-related motion and facilitate skill patterns reuse across tasks.
+World Action Models (WAMs): World action models exploit visual prediction to capture physical
+and temporal structure for robot control. UniPi (Du et al., 2023) performs planning through text-
+conditioned video generation and action extraction, while GR-2 (Cheang et al., 2024) and DreamGen
+(Jang et al., 2025) leverage video generative priors for manipulation. More recent WAMs couple vi-
+sual dynamics and action generation more directly: UWM (Zhu et al., 2025) jointly models video
+and action diffusion, Motus (Bi et al., 2026) integrates understanding, video, and action experts,
+while LingBot-VA (Li et al., 2026) and (Yuan et al., 2026) shows that video co-training can benefit
+control without test-time video generation. Unlike existing WAMs that primarily learn task-specific
+behaviors through visual dynamics supervision, our method explicitly encodes historical action tra-
+jectories into shared action embeddings from AED to model underlying cross-task relationships,
+while using motion-aware transition supervision to emphasize action-related visual changes.
+3
+METHODOLOGY
+3.1
+PRELIMINARIES
+In embodied manipulation tasks (Li et al., 2026; Driess et al., 2023), robots aim to autonomously
+plan and make decisions based on task instructions c and visual observations ot at time t. Following
+FastWAM (Yuan et al., 2026), we adopt flow matching to train control policies with both video and
+action experts. Let xe (e ∈{v, a}) denote the clean target, where xv represents future video and xa
+represents an action chunk. Given a Gaussian noise sample ϵ ∼N(0, I) and a flow time τ ∈(0, 1),
+we construct xτ
+e = (1 −τ)xe + τϵ. Accordingly, the flow-matching objective LFM is defined as:
+LFM =
+X
+e∈{v,a}
+λeLe; Le = Exe,ϵ,τ
+h
+∥πθ(xτ
+e | ot, c, st) −(ϵ −xe)∥2
+2
+i
+,
+(1)
+3
+
+
+Published as a conference paper at ICLR 2027
+where πθ(·) denotes the policy parameterized by θ, st is the robot’s proprioceptive state at time t,
+and λe = 1.0 is the balancing factor. For joint training, we use πθ(·) to predict future video latents
+zt+1:t+V corresponding to V frames and an action chunk at:t+H−1 of horizon H to be executed.
+3.2
+ACTION EXPERIENCE DICTIONARY (AED)
+Generally, underlying relationships among manipulation tasks can provide valuable guidance for
+learning related skills. For example, when learning to place a cup on a shelf, a robot can draw
+on experience acquired from tabletop pick-and-place, such as grasping, transporting, and releasing
+objects, while adapting these behaviors to the target task. Conversely, experience gained from shelf
+placement can also benefit other tasks that involve these shared skills, enabling mutual knowledge
+transfer across related tasks. However, even during joint training, existing WAMs (Yuan et al., 2026;
+Li et al., 2026; Kim et al., 2026) often learn task-specific behaviors without explicitly leveraging
+inter-task relationships, overlooking the potential of cross-task semantic connections to facilitate the
+learning of manipulation skills. This limitation motivates us to investigate how to leverage reusable
+action experience shared across related tasks to improve manipulation performance.
+To address the above limitation, we develop a novel learnable action experience dictionary (AED)
+to learn manipulation skills from historical action trajectories, as depicted in Fig. 2. Specifically, the
+proposed AED encodes historical physical action trajectories as a sequence of action embeddings to
+capture latent relationships across skills. Subsequently, for each training batch, we retrieve action
+embeddings that are highly relevant to the target task from the AED. These action embeddings are
+aggregated and then conditioned on the corresponding temporal visual embeddings through trans-
+former blocks with cross-attention. Finally, we prepend the resulting action embeddings to the noisy
+action tokens within the action expert for prediction. This prepending strategy enables the model
+to exploit inter-task relationships for subsequent skill learning. To further encode action-relevant
+visual information into AED, we propose a motion-aware transition (MT) loss predicting temporal
+visual feature changes from the sampled observation and AED-guidance action hidden states.
+▷Construction of Action Experience Dictionary: Let D ∈RN×da denote a learnable Action
+Experience Dictionary (AED) containing N randomly initialized action embeddings, each of di-
+mension da. Notably, an action skill, such as grasping an object placed on a tabletop or inside
+a container, may comprise multiple action patterns with distinct motion characteristics, including
+approach direction, gripper height, displacement, and speed. Accordingly, each action embedding
+in the AED represents a specific action pattern, whereas a set of related action embeddings jointly
+characterizes the action skill. During training, the proposed AED is shared across all manipulation
+tasks to facilitate the reuse of action experience, thereby leveraging cross-task relationships to bene-
+fit the target task. To encode D, we use a pretrained action tokenizer Φ to convert historical physical
+action trajectories ah ∈RH×df into a sequence of indices for retrieving task-relevant action embed-
+dings from D, where df denotes the number of degrees of freedom. However, directly tokenizing
+these trajectories, each consisting of H actions, results in a temporal frequency mismatch with the
+V visual observations and incurs additional computational costs. To tackle this issue, we aggregate
+historical trajectories to obtain bah ∈RV ×df , and define the j-th aggregated action bah[j] ∈Rdf as:
+bah[j] =
+k
+X
+r=1
+ah[(j −1)k + r] ⊙m[(j −1)k + r] + ah[jk] ⊙(1 −m[jk]), ∀j = 1, · · · , V, (2)
+where k = H
+V is the number of historical actions between two consecutive observations, and m ∈
+{0, 1}H×df denotes a binary mask whose entries are set to 1 for the arm control dimensions and
+0 for the gripper dimensions. Here, m[(j−1)k+r] and m[jk] represent the ((j−1)k+r)-th and
+jk-th rows of m, respectively. The same indexing convention applies to a[(j−1)k+r] and a[jk]. In
+Eq. (2), we accumulate the arm commands to summarize the motion executed over the interval of
+observations while retaining the final gripper command to preserve the gripper’s terminal state.
+Subsequently, we adopt Φ to map the j-th aggregated action bah[j] to a sequence of indices ζj =
+Φ(bah[j]) ∈RM, where M denotes the number of retrieved action embeddings. Each index in ζj is
+then used to retrieve the corresponding action embedding from D. These embeddings are averaged
+4
+
+
+Published as a conference paper at ICLR 2027
+to obtain a compact action representation fj ∈Rd for the j-th (j = 1, . . . , V ) aggregated action bah
+j :
+fj = pj + 1
+M
+M
+X
+l=1
+D(ζj[l]),
+(3)
+where ζj[l] ∈R denotes the l-th index of ζj, and D(ζj[l]) ∈Rd represents the ζj[l]-th row of D.
+pj ∈Rda denotes the temporal positional encoding for the j-th action trajectory. Afterwards, we
+stack {fj}V
+j=1 in temporal order to obtain aggregated action embeddings f ⋆∈RV ×da:
+f ⋆= [f1, f2, . . . , fV ].
+(4)
+▷Visually Conditioned Action Embeddings: The action embeddings f ⋆obtained in Eq. (4) encode
+only the action patterns themselves (e.g., grasping and moving patterns), without capturing semantic
+information about task-relevant objects or their relationships with the target manipulation task. This
+may result in an incomplete understanding of the task context and action intent. To this end, we
+condition the action embeddings f ⋆on visual information. Specifically, the historical visual latent
+embeddings comprise R spatiotemporal patch tokens zh
+v ∈RR×dv, where dv denotes the dimension
+of visual embeddings. Since many of these tokens correspond to background content or content
+irrelevant to the interaction, directly feeding them into the action expert introduces redundancy and
+causes the input sequence length to grow with the observation horizon. Therefore, we compress zh
+v
+into a fixed number of latent visual tokens bzh
+v ∈RL×da using L learnable queries q ∈RL×da:
+bzh
+v = [A1 ⊕A2 ⊕· · · ⊕Aψ] wo, Ai = σ(qwq
+ zh
+vwk
+⊤
+p
+da/ψ
+)(zh
+vwv), ∀i = 1, . . . , ψ,
+(5)
+where ⊕denotes concatenation along the feature dimension, ψ is the number of cross-attention
+heads, and Ai ∈RL×(da/ψ) represents the i-th (i = 1, . . . , ψ) attention head. σ(·) is the softmax
+function. For each attention head, wq ∈Rda×(da/ψ), wk ∈Rdv×(da/ψ), and wv ∈Rdv×(da/ψ)
+denote the linear projection matrices for the query, key, and value. Furthermore, wo ∈Rda×da
+indicates the output projection matrix used to fuse the features from all attention heads.
+To incorporate the task-relevant visual context encoded in bzh
+v into f ⋆while preserving their action
+semantics, we fuse them using a dictionary encoder E, implemented as a one-layer Transformer
+encoder with cross-attention. Here, f ⋆serves as the query, while bzh
+v provides the keys and values.
+Using cross-attention, E generates visually conditioned action embeddings ev ∈RV ×da, which are
+then concatenated with the noisy action tokens an ∈RH×da to obtain a⋆∈R(H+V )×da:
+a⋆= [ev; an],
+ev = E(f ⋆,bzh
+v),
+(6)
+where [·; ·] denotes concatenation along the token dimension. After concatenation, we feed a⋆to the
+action expert for action chunk prediction. Using the formulation in Eq. (6), we integrate the task-
+relevant action experience retrieved from D and the associated visual information into the historical
+context, thereby enriching the context available for subsequent action prediction.
+▷Motion-Aware Transition Loss: Although visual conditioning incorporates historical scene in-
+formation into the retrieved action embeddings for action prediction via Eq. (6), the historical ob-
+servations contain action-relevant objects and background content, and the flow-matching objective
+does not explicitly distinguish visual cues associated with action-dependent motion from incidental
+scene appearance. Thus, the resulting action embeddings in the AED D may retain background
+correlations that are less useful when reusing action experience across tasks. To encourage using
+action-relevant visual information, as illustrated in Fig. 2, we develop a motion-aware transition
+(MT) loss that predicts temporal visual changes from the starting state and AED-conditioned action
+hidden states. Relatively stable background components can partially cancel in the feature differ-
+ence, providing a supervision signal highlighting observable changes. Conditioning this prediction
+on action hidden states encourages the representations to capture object motion associated with the
+actions, helping reduce reliance on irrelevant background cues during action chunk prediction.
+During training at time t, we randomly sample a future time step t′ ∈{t + 1, . . . , t + V −1} and
+use a visual encoder F (e.g., LingBot-Vision (Fu et al., 2026) or DINOv3 (Sim´eoni et al., 2025)) to
+extract latent features ht′ = F(ot′) ∈RB×dz from the future observation ot′. Here B is the number
+5
+
+
+Published as a conference paper at ICLR 2027
+of latent features and dz is the dimensionality of the latent features. We then sample a time window
+∆∼Unif{1, 2, . . . , t + V −t′}, where Unif is the discrete uniform distribution. After extracting
+the final-layer hidden states u∆
+t′ ∈R∆×da from the action expert over the interval from t′ to t′ + ∆,
+we propose the MT loss LMT that emphasizes visual objects whose motion is associated with the
+actions, thereby reducing the influence of irrelevant background cues on action chunk prediction:
+LMT =
+1
+Bdz
+∆bht′ −∆ht′
+
+2
+F , ∆bht′ = G(ht′, u∆
+t′ ), ∆ht′ = ht′+∆−ht′,
+(7)
+where ∆bht′ ∈RB×dz is the predicted visual feature change from time t′ to t′ + ∆. It is predicted
+using a three-layer predictor G with cross-attention between u∆
+t′ and ht′. Here, cross-attention uses
+ht′ as the query and u∆
+t′ as the keys and values. ∆ht′ ∈RB×dz is the ground-truth change in
+visual features from time t′ to t′ + ∆, and ht′+∆= F(ot′+∆) is the latent representation of the
+future observation ot′+∆. Since the encoding of hidden state u∆
+t′ incorporates the relevant action
+embeddings from D, optimizing Eq. (7) encourages D to capture action-related visual changes, focus
+on action-relevant objects, and reduce its reliance on irrelevant background during action prediction.
+Theorem 1 (Temporal Composition Error Bound) Let V ≥3 and assume consistent endpoint features
+from the same trajectory, with interval selection independent of the trajectory and auxiliary randomness. For
+any fixed parameters θ with finite transition risk, the sampled loss in Eq. (7) is an unbiased estimator of the
+sampling-weighted risk RMT(θ) defined below. The corresponding composition risk satisfies
+CMT(θ) ≤(V −1)(3V −4)RMT(θ).
+(8)
+Thus, vanishing expected MT loss implies vanishing mean-square composition error over the future intervals.
+Proof. Let X contain a trajectory and the auxiliary randomness defining its interval predictions,
+and let I = {(a, b) : t + 1 ≤a < b ≤t + V }. For (a, b) ∈I, define ∆bha:b = Gθ(ha, ub−a
+a
+),
+ra:b = ∆bha:b −(hb −ha), and ℓa:b(X; θ) = ∥ra:b∥2
+F /(Bdz). The sampling distribution satisfies
+pa:b = 1/[(V −1)(t + V −a)] ≥1/(V −1)2. Define ¯ℓMT(X; θ) = P
+(a,b)∈I pa:bℓa:b(X; θ)
+and RMT(θ) = EX[¯ℓMT(X; θ)]. For the sampled interval I = (t′, t′ + ∆), EI[ℓI(X; θ)|X] =
+¯ℓMT(X; θ), and taking expectation over X proves unbiasedness. For t + 1 ≤a < b < c ≤t + V ,
+define ra:b:c = ∆bha:b + ∆bhb:c −∆bha:c. Since the true feature differences telescope, ra:b:c =
+ra:b + rb:c −ra:c. Let κa:b:c = p−1
+a:b + p−1
+b:c + p−1
+a:c. Weighted Cauchy–Schwarz gives
+∥ra:b:c∥2
+F
+Bdz
+≤κa:b:c¯ℓMT(X; θ) ≤(V −1)(3V −4)¯ℓMT(X; θ).
+(9)
+Indeed, κa:b:c = (V −1)[3V −2(a −t) −(b −t)] ≤(V −1)(3V −4). Finally, define CMT(θ) =
+EX
+
+maxt+1≤a<b<c≤t+V ∥ra:b:c∥2
+F /(Bdz)
+
+. Taking the maximum in Eq. (9) and then expectation
+over X proves Eq. (8). Theorem 1 shows that the MT loss with randomly sampled intervals controls
+the temporal composition error of visual feature change predictions, providing a theoretical basis
+for consistent supervision across temporal scales. Lower compounding errors enable the model to
+better ignore extraneous disturbances that accumulate over long temporal horizons, such as changes
+in task-irrelevant objects arising from viewpoint shifts, manipulator motion, and incidental scene
+dynamics during task execution. Since these predictions depend on AED-conditioned action hidden
+states, AED learns the action experience by focusing on action-relevant visual information across
+different interaction stages and temporal scales through backpropagation.
+3.3
+TRAINING AND INFERENCE
+Training: We jointly train the video and action branches with the flow-matching objective LFM and
+the motion-aware transition loss LMT. Therefore, the overall optimization L is defined as follows:
+L = LFM + λmLMT,
+(10)
+where λm = 0.01 denotes the balancing weight. For LFM, we set λe = 1 (e ∈{v, a}) in Eq. (1).
+Inference: Video and action latents are initialized with Gaussian noise ϵ ∼N(0, I) and denoised
+using flow velocities predicted from the observation ot, proprioceptive state st, task instruction c,
+and AED embeddings f ⋆, with K Euler steps of the flow-matching ordinary differential equation
+(ODE) yielding an action chunk of length H. Deployment requires neither decoding the video
+latents into pixel-space frames nor evaluating the motion-aware transition predictor.
+6
+
+
+Published as a conference paper at ICLR 2027
+Cooking Bell Pepper and Tomato. (Cluttered Background)
+Put the mushroom and orange in the basket. (Low Light Condition)
+Put the mushroom and orange in the basket. (White Mushroom     Orange Mushroom)
+Swap red green peppers between plates. (Cluttered Background)
+Training
+Inference Under OOD Settings
+Start
+End
+White 
+mushroom
+Orange 
+mushroom
+Orange 
+mushroom
+Spirit AI MOZ1
+ROKAE AR5
+Figure 3: Visualization of manipulation tasks performed by our model in OOD settings.
+Pencil
+case
+Stove &
+pot
+White
+bowls
+Knife &
+spatula
+Mushroom
+& orange
+Pepper
+& tomato
+Paper
+bag
+Hold
+baskets
+Cooking
+Write
+Avg.
+10
+30
+50
+70
+90
+64
+72
+76
+72
+84
+64
+52
+92
+72
+20
+66.8
+56
+60
+64
+56
+80
+44
+36
+92
+68
+12
+56.8
+76
+84
+92
+80
+92
+72
+64
+96
+80
+44
+78
+Success rate (%)
+LingBot-VA
+Fast-WAM
+Ours
+(a) Comparison on the Spirit AI MOZ1 platform.
+Pepper &
+banana
+Toothbrush
+into cup
+Swap
+peppers
+Stack
+cups
+Block
+into box
+Avg.
+30
+50
+70
+90
+92
+36
+72
+44
+76
+64
+96
+64
+92
+68
+84
+80.8
+Success rate (%)
+Fast-WAM
+Ours
+(b) Comparison on ROKAE AR5 platform.
+clean
+cluttered
+background
+low
+light
+object
+change
+70
+80
+90
+100
+88
+84
+76
+80
+96
+88
+92
+92
+Success rate (%)
+Fast-WAM
+Ours
+(c) Comparison under different settings.
+Figure 4: Results on real-world manipulation tasks across robotic embodiments under OOD settings.
+4
+EXPERIMENTS
+4.1
+IMPLEMENTATION DETAILS
+Following Fast-WAM (Yuan et al., 2026), the video expert (5B) is initialized from Wan2.2 (Team
+Wan et al., 2025), retaining its video DiT, text encoder, and video VAE. The action expert (1B) adopts
+the same architectural design as the video branch, with its hidden dimension reduced to da = 1024.
+The action tokenizer follows the design of Pertsch et al. (2025). All trainable parameters are opti-
+mized using AdamW for 10 epochs on LIBERO with 8 NVIDIA A100 GPUs and for 5 epochs on
+RoboTwin 2.0 with 32 NVIDIA H100 GPUs. We report success rates on various benchmarks, in-
+cluding LIBERO (Liu et al., 2023), RoboTwin 2.0 (Chen et al., 2026b), and LIBERO Plus (Fei et al.,
+2025). Physical experiments are conducted on two robotic platforms, Spirit AI MOZ1 and ROKAE
+AR5. Additional implementation details and evaluation settings are provided in the appendix.
+4.2
+MAIN COMPARISON RESULTS
+Out-of-Distribution (OOD) Performance: Since real-world environments involve various types of
+perturbations, we evaluate our model under OOD settings using the Spirit AI MOZ1 and ROKAE
+AR5 platforms. As shown in Fig. 3, we consider three types of OOD conditions: cluttered back-
+grounds, low light conditions, and unseen objects during training. The visualization of manipulation
+7
+
+
+Published as a conference paper at ICLR 2027
+Table 1: Success rate (%) on LIBERO and RoboTwin 2.0. LIBERO averages 50 rollouts per task
+over ten tasks per suite, and RoboTwin 2.0 averages 100 trials per task over 50 tasks in the ‘Clean”
+and ‘Random” environments. “PT” indicates whether robotic policy pretraining is used.
+Method
+PT
+RoboTwin 2.0
+LIBERO
+Clean
+Random
+Avg.
+Spatial
+Object
+Goal
+Long
+Avg.
+OpenVLA (Kim et al., 2025)
+✓
+–
+–
+–
+84.7
+88.4
+79.2
+53.7
+76.5
+π0 (Black et al., 2025b)
+✓
+65.9
+58.4
+62.2
+96.8
+98.8
+95.8
+85.2
+94.1
+π0.5 (Black et al., 2025a)
+✓
+82.7
+76.8
+79.8
+98.8
+98.2
+98.0
+92.4
+96.9
+Motus (Bi et al., 2026)
+✓
+88.7
+87.0
+87.8
+96.8
+99.8
+96.6
+97.6
+97.7
+Fast-WAM (Yuan et al., 2026)
+✗
+91.9
+91.8
+91.8
+98.2
+100.0
+97.0
+95.2
+97.6
+LingBot-VA (Li et al., 2026)
+✓
+92.9
+91.6
+92.2
+98.5
+99.6
+97.2
+98.5
+98.5
+AED (Ours)
+✗
+93.2
+92.3
+92.8
+99.0
+100.0
+98.4
+97.8
+98.8
+Table 2: Success rates (%) under different perturbation types on LIBERO-Plus. “PT” indicates
+whether robotic policy pretraining is used. All success rates are computed over 10,030 trials.
+Method
+PT
+Cam.
+Robot.
+Lang.
+Light.
+Back.
+Noise.
+Layout.
+Avg.
+OpenVLA (Kim et al., 2025)
+✓
+0.8
+3.5
+23.0
+8.1
+34.8
+15.2
+28.5
+15.6
+π0 (Black et al., 2025b)
+✓
+13.8
+6.0
+58.8
+85.0
+81.4
+79.0
+68.9
+53.6
+π0.5 (Black et al., 2025a)
+✓
+75.4
+77.5
+85.6
+96.9
+94.6
+89.7
+85.7
+85.7
+Fast-WAM (Yuan et al., 2026)
+✗
+48.4
+75.7
+66.8
+96.6
+68.5
+70.1
+76.5
+70.8
+AED (Ours)
+✗
+93.4
+72.9
+72.3
+99.6
+83.1
+98.4
+85.3
+86.2
+Table 3: Results on LIBERO-10.
+Variant
+MT
+VC
+AED
+Avg.
+Ours
+✓
+✓
+✓
+97.4
+– MT
+✓
+✓
+96.8
+– VC
+✓
+95.6
+– AED
+94.8
+Table 4: Inference cost on LIBERO.
+Steps Latency (ms) Memory (GB)
+1
+167.3 ± 1.6
+24.1
+4
+284.6 ± 1.6
+24.1
+10
+521.2 ± 3.0
+24.1
+15
+708.5 ± 8.0
+24.1
+Table 5: Latency (ms) comparisons.
+Method
+LIBERO Goal MOZ1
+π0.5
+220.0
+494.9
+Motus
+2131.6
+2163.7
+Fast-WAM
+497.1
+513.8
+Ours
+518.7
+520.3
+tasks performed by our model demonstrates its robustness under these OOD conditions. Addition-
+ally, as shown in Fig. 4(a)(b), we compare the success rates of our model with those of state-of-
+the-art baselines (e.g., LingBot-VA and Fast-WAM) across different robotic embodiments under
+OOD settings. As shown in Fig. 4(c), we further report the success rates on a representative real-
+world manipulation task, i.e., “Put the mushroom and orange in the basket”, under different OOD
+conditions. Our model consistently achieves higher success rates than the existing methods across
+different embodiments and OOD conditions, demonstrating the effectiveness of the proposed AED.
+Benchmark Comparison: Tab. 1 shows that our method achieves the highest reported average suc-
+cess rates on both RoboTwin 2.0 (92.8%) and LIBERO (98.8%). On RoboTwin 2.0, our method
+achieves success rates of 93.2% under the Clean setting and 92.3% under the Random setting, yield-
+ing an average of 92.8%. These results outperform the strongest reported baseline for each metric
+by 0.3, 0.5, and 0.6 percentage points, respectively. On LIBERO, our method outperforms the
+strongest baseline, Fast-WAM (Yuan et al., 2026), by 1.2 percentage points on average, with im-
+provements of 0.8%, 1.4%, and 2.6% on Spatial, Goal, and Long, respectively, while matching its
+100.0% success rate on Object. Our method ranks first on Spatial and Goal and ties for first on Ob-
+ject. As shown in Tab. 2, our method achieves an overall success rate of 86.2% on LIBERO-Plus,
+outperforming both Fast-WAM and π0.5 without using embodied policy pretraining. It ranks first
+under the Camera, Light, and Noise perturbations and outperforms Fast-WAM in six of the seven
+categories, with Robot being the only exception. These results indicate that our robustness gains are
+concentrated in variations involving viewpoint, lighting, and sensor noise.
+4.3
+ABLATION STUDY AND EFFICIENCY ANALYSIS
+Ablation Study: To evaluate the effectiveness of each component, we conduct ablation studies on
+the proposed motion-aware transition (MT) loss, visually conditioned action embeddings (VC), and
+learnable action experience dictionary (AED). As presented in Tab. 3, our full model achieves the
+highest success rate of 97.4% on LIBERO-10. Removing the MT loss reduces the success rate
+8
+
+
+Published as a conference paper at ICLR 2027
+265
+266
+274
+280
+295
+300
+302
+304
+308
+309
+314
+319
+328
+358
+376
+400
+404
+421
+427
+455
+610
+ID of Action Embeddings in the AED Shared Across Tasks
+T1
+0
+0
+25
+25
+25
+75
+0
+0
+75
+75
+25
+0
+0
+25
+25
+0
+0
+0
+25
+25
+25
+25
+25
+0
+0
+0
+100
+25
+25
+0
+100
+75
+25
+0
+25
+25
+25
+0
+0
+75
+0
+0
+50
+0
+0
+0
+0
+25
+25
+25
+100
+0
+25
+25
+75
+0
+0
+25
+75
+25
+25
+50
+50
+0
+25
+75
+25
+25
+100
+0
+0
+100
+0
+0
+0
+25
+25
+25
+25
+25
+25
+0
+0
+25
+T1: Place the black bowl
+100 
+75
+50
+25
+0
+Retrieval frequency (%)
+on the plate
+T2: Place alphabet soup
+in the basket
+T3: Open the 
+middle drawer
+T4: Turn on 
+the stove
+T2 
+T3
+T4
+Figure 5: Analysis of reusing action experience embeddings across different manipulation tasks.
+AED (10 tasks)
+AED (5 tasks)
+Success rate (%)
+97.6
+94.0
+96
+98
+98
+98
+98
+96
+92
+94
+96
+92
+100
+95
+90
+85
+80
+plate
+Avg.
+Bowl on
+cabinet
+Bowl on
++ bowl inside
+Open top drawer
+stove
+Bowl on
+drawer
+Open middle
+(a) Quantitative Analysis of AED.
+Observation at time 𝑡ଷ
+Ground Truth
+Direct  𝑡ଷ
+Composed  𝑡ଵ→𝑡ଶ→𝑡ଷ
+Task from LIBERO Spatial
+(b) Direct versus composed transitions.
+Figure 6: (a) Quantitative performance evaluation of the proposed AED on LIBERO Goal. (b)
+Visualization of direct and composed transition predictions under supervision from the MT loss.
+to 96.8%, showing that MT loss supervision improves action prediction. Removing VC further
+degrades the performance, while further removing the AED results in a 2.6% lower success rate
+than that of the full model. These ablation studies demonstrate the effectiveness of our model in
+reusing action experience across tasks to facilitate the learning of target manipulation tasks.
+Efficiency Analysis: As shown in Tab. 4, we measure inference latency and peak GPU memory
+usage on LIBERO-10, with future frame decoding disabled and the transition predictor removed
+during inference. Increasing the number of denoising steps from 1 to 15 increases the latency from
+167.3 to 708.5 ms, while peak memory usage remains constant at 24.1 GB. Tab. 5 further compares
+the inference latency of our model on LIBERO Goal and a real-world robotic platform (e.g., Spirit AI
+MOZ1) against SOTA WAMs (Yuan et al., 2026) and VLA models Black et al. (2025a) using a single
+NVIDIA A100 GPU, demonstrating comparable efficiency and strong potential for both simulated
+and real-world deployment. While maintaining efficiency comparable to that of the baselines, our
+model achieves significant performance improvements (see Tabs. 1–2 and Fig. 4).
+4.4
+ANALYSIS OF ACTION EXPERIENCE DICTIONARY (AED)
+To analyze how different manipulation tasks reuse action embeddings (i.e., skill patterns) shared
+across tasks, Fig. 5 visualizes the reuse frequencies of shared embeddings across four randomly
+selected LIBERO tasks. We observe that many action embeddings are frequently reused across these
+tasks, indicating that the proposed AED can encode action-relevant skill patterns shared across tasks
+and leverage them to improve the performance of target manipulation tasks during training. A high
+frequency of reusing the same action embeddings across different tasks suggests stronger cross-
+task relationships. The proposed model captures such inter-task relationships through shared action
+embeddings in the AED and leverages them to facilitate future action chunk prediction.
+To quantitatively evaluate the efficacy of reusable action experience across tasks, as shown in
+Fig. 6(a), we randomly select five LIBERO Goal tasks as target tasks and treat the remaining five as
+auxiliary source tasks. Despite having different goals, these tasks share reusable skill patterns, such
+as grasping, transporting, and placing objects. We train one model on five target tasks and another
+on the same target tasks plus five auxiliary source tasks, evaluating both on the same target tasks. In
+Fig. 6(a), training the proposed AED on all ten tasks consistently yields higher success rates. Such
+improvement suggests positive transfer from the additional related tasks, i.e., shared skill patterns
+learned from the five auxiliary source tasks benefit the learning of the five target tasks.
+9
+
+
+Published as a conference paper at ICLR 2027
+4.5
+ANALYSIS OF MOTION-AWARE TRANSITION (MT) LOSS
+To qualitatively evaluate the MT loss, we visualize its compositional generalization ability in
+Fig. 6(b).
+“Direct t3” predicts the feature change from t1 to t3 directly, while “Composed
+t1 →t2 →t3” predicts it through two consecutive transitions. The two methods produce similar
+visualization results and identify action-relevant objects (e.g., grippers and bowls), indicating effec-
+tive transition composition. With the guidance of MT loss, the policy learns to suppress background
+interference. Additional analyses of sampling strategies, action aggregation, visual encoders, prefix
+designs, action experience embeddings, and learnable visual queries are provided in the appendix.
+5
+CONCLUSION
+In this paper, we propose a novel Action Experience Dictionary (AED) for learning skills from his-
+torical trajectories. AED encodes trajectories into shared action embeddings and conditions them
+on visual context to capture task-relevant interactions. We further propose a motion-aware transition
+loss that predicts visual feature changes over random temporal intervals, encouraging action-centric
+representations. Experiments across simulation benchmarks and real-world cross-embodiment eval-
+uations demonstrate improved manipulation performance over baseline approaches.
+AI USE STATEMENT
+Generative AI tools were used during the preparation of this manuscript to assist with literature or-
+ganization, experimental record organization, table formatting, language revision, and discussion of
+possible refinements to the methodology and evaluation protocol. AI-assisted suggestions were care-
+fully reviewed by the authors, and all equations, implementation details, experimental procedures,
+citations, reported results, and interpretations were independently checked. The authors remain fully
+responsible for the final methodology, experiments, results, code, and manuscript.
+ETHICS STATEMENT
+This work studies robotic manipulation in both simulated environments and real-world settings. The
+real-world experiments were conducted within bounded workspaces using predefined operating con-
+straints and appropriate human supervision. The study does not intentionally collect personal or sen-
+sitive information; visual observations are limited to the robot and its surrounding workspace. Public
+benchmark datasets and pretrained components are used according to their respective licenses, with
+the relevant sources identified in the manuscript and supplementary materials.
+REPRODUCIBILITY STATEMENT
+The main paper describes the proposed Action Experience Dictionary, visual conditioning mech-
+anism, motion-aware transition objective, and evaluation protocol. The supplementary material
+provides detailed model configurations, optimization settings, preprocessing procedures, inference
+parameters, per-task benchmark results, data-collection information, robot-platform details, ablation
+studies, and additional qualitative analyses. Anonymous code and robotic manipulation demonstra-
+tions are provided through the supplementary project page. Together, these materials document the
+settings and procedures required to reproduce the reported experiments.
+REFERENCES
+Tuo An, Jindou Jia, Gen Li, Jingliang Li, Chuhao Zhou, Pengfei Liu, Bofan Lyu, Jiaqi Bai, Xinying
+Guo, Geng Li, et al. Feedback world model enables precise guidance of diffusion policy. arXiv
+preprint arXiv:2605.15705, 2026.
+Jiaqi Bai, Jindou Jia, Yuxuan Hu, Gen Li, Xiangyu Chen, Tuo An, Kuangji Zuo, and Jianfei Yang.
+Flash: Efficient visuomotor policy via sparse sampling. arXiv preprint arXiv:2605.15492, 2026.
+10
+
+
+Published as a conference paper at ICLR 2027
+Hongzhe Bi, Hengkai Tan, Shenghao Xie, Zeyuan Wang, Shuhe Huang, Haitian Liu, Ruowen Zhao,
+Yao Feng, Chendong Xiang, Yinze Rong, et al. Motus: A unified latent action world model.
+In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp.
+35101–35113, 2026.
+Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail,
+Michael Robert Equi, Chelsea Finn, Niccolo Fusai, Manuel Y. Galliker, Dibya Ghosh, Lachy
+Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Devin
+LeBlanc, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Allen Z.
+Ren, Lucy Xiaoyang Shi, Laura Smith, Jost Tobias Springenberg, Kyle Stachowicz, James Tan-
+ner, Quan Vuong, Homer Walke, Anna Walling, Haohuan Wang, Lili Yu, and Ury Zhilinsky.
+π0.5: A Vision-Language-Action Model with Open-World Generalization. In Joseph Lim, Shuran
+Song, and Hae-Won Park (eds.), Proceedings of The 9th Conference on Robot Learning, volume
+305 of Proceedings of Machine Learning Research, pp. 17–40. PMLR, 27–30 Sep 2025a. URL
+https://proceedings.mlr.press/v305/black25a.html.
+Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Robert Equi, Chelsea Finn, Nic-
+colo Fusai, Lachy Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming
+Ke, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Lucy Xiaoyang
+Shi, Laura Smith, James Tanner, Quan Vuong, Anna Walling, Haohuan Wang, and Ury Zhilin-
+sky. π0: A Vision-Language-Action Flow Model for General Robot Control. In Proceedings of
+Robotics: Science and Systems, Los Angeles, CA, USA, June 2025b. doi: 10.15607/RSS.2025.
+XXI.010. URL https://www.roboticsproceedings.org/rss21/p010.html.
+Qingwen Bu, Yanting Yang, Jisong Cai, Shenyuan Gao, Guanghui Ren, Maoqing Yao, Ping Luo,
+and Hongyang Li. Learning to act anywhere with task-centric latent actions. In Proceedings of
+Robotics: Science and Systems, Los Angeles, CA, USA, June 2025. doi: 10.15607/RSS.2025.
+XXI.014. URL https://www.roboticsproceedings.org/rss21/p014.html.
+Jisong Cai, Long Ling, Shiwei Chu, Zhongshan Liu, Jiayue Kang, Zhixuan Liang, Wenjie Xu,
+Yinan Mao, Weinan Zhang, Xiaokang Yang, Ru Ying, Ran Zheng, and Yao Mu. Aha-wam:
+Asynchronous horizon-adaptive world-action modeling with observation-guided context routing,
+2026. URL https://arxiv.org/abs/2606.09811.
+Chi-Lam Cheang, Guangzeng Chen, Ya Jing, Tao Kong, Hang Li, Yifeng Li, Yuxiao Liu, Hong-
+tao Wu, Jiafeng Xu, Yichu Yang, Hanbo Zhang, and Minzhao Zhu.
+Gr-2: A generative
+video-language-action model with web-scale knowledge for robot manipulation, 2024.
+URL
+https://arxiv.org/abs/2410.06158.
+Jialei Chen, Kai Wang, Kang Chen, Shuaihang Chen, Feng Gao, Wenhao Tang, Zhiyuan Li, Weilin
+Liu, Zhuyu Yao, Boxun Li, Yuanbo Xu, and Chao Yu. Lawam: Latent world action models for
+efficient dynamics-aware robot policies, 2026a. URL https://arxiv.org/abs/2606.
+15768.
+Tianxing Chen, Zanxin Chen, Baijun Chen, Zijian Cai, Yibin Liu, Zixuan Li, Qiwei Liang, Xi-
+anliang Lin, Yiheng Ge, Zhenyu Gu, Weiliang Deng, Yubin Guo, Tian Nian, Xuanbing Xie,
+Qiangyu Chen, Kailun Su, Tianling Xu, Guodong Liu, Mengkang Hu, Huan ang Gao, Kaix-
+uan Wang, Zhixuan Liang, Yusen Qin, Xiaokang Yang, Ping Luo, and Yao Mu. Robotwin 2.0:
+A scalable data generator and benchmark with strong domain randomization for robust bimanual
+robotic manipulation. In Forty-third International Conference on Machine Learning, 2026b. URL
+https://openreview.net/forum?id=itonej9GIV.
+DeepSeek-AI team. Deepseek-v3 technical report, 2024. URL https://arxiv.org/abs/
+2412.19437.
+Danny Driess, Fei Xia, Mehdi SM Sajjadi, Corey Lynch, Aakanksha Chowdhery, Brian Ichter,
+Ayzaan Wahid, Jonathan Tompson, Quan Vuong, Tianhe Yu, et al. Palm-e: An embodied multi-
+modal language model. In Proceedings of the 40th International Conference on Machine Learn-
+ing, pp. 8469–8488, 2023.
+Yilun Du, Sherry Yang, Bo Dai, Hanjun Dai, Ofir Nachum, Josh Tenenbaum, Dale Schuurmans,
+and Pieter Abbeel. Learning universal policies via text-guided video generation. In Advances in
+11
+
+
+Published as a conference paper at ICLR 2027
+Neural Information Processing Systems 36 (NeurIPS 2023), 2023. doi: 10.52202/075280-0403.
+URL
+https://proceedings.neurips.cc/paper_files/paper/2023/hash/
+1d5b9233ad716a43be5c0d3023cb82d0-Abstract-Conference.html.
+Senyu Fei, Siyin Wang, Junhao Shi, Zihao Dai, Jikun Cai, Pengfang Qian, Li Ji, Xinzhe He, Shiduo
+Zhang, Zhaoye Fei, Jinlan Fu, Jingjing Gong, and Xipeng Qiu. Libero-plus: In-depth robustness
+analysis of vision-language-action models, 2025. URL https://arxiv.org/abs/2510.
+13626.
+Zelin Fu, Bin Tan, Changjiang Sun, Shaohui Liu, Kecheng Zheng, Yinghao Xu, Xing Zhu, Yujun
+Shen, and Nan Xue. Vision pretraining for dense spatial perception, 2026. URL https://
+arxiv.org/abs/2607.05247.
+Asher
+Hancock,
+Xindi
+Wu,
+Lihan
+Zha,
+Olga
+Russakovsky,
+and
+Anirudha
+Majum-
+dar.
+Actions
+as
+language:
+Fine-tuning
+vlms
+into
+vlas
+without
+catastrophic
+for-
+getting.
+In
+International
+Conference
+on
+Learning
+Representations,
+2026.
+URL
+https://proceedings.iclr.cc/paper_files/paper/2026/hash/
+7a0f8055c838df8e62329a76c7c6403d-Abstract-Conference.html.
+Joel Jang, Seonghyeon Ye, Zongyu Lin, Jiannan Xiang, Johan Bjorck, Yu Fang, Fengyuan Hu,
+Spencer Huang, Kaushil Kundalia, Yen-Chen Lin, et al. Dreamgen: Unlocking generalization in
+robot learning through neural trajectories, 2025. URL https://arxiv.org/abs/2505.
+12705.
+Jindou Jia, Shixuan Han, Meng Wang, Gen Li, Zihan Yang, Sicheng Zhou, Kexin Guo, Jianfei Yang,
+Xiang Yu, Wei Wang, and Lei Guo. Physics filtering favors the generalization of robot learning.
+npj Robotics, 4(1):48, 2026a.
+Jindou Jia, Gen Li, Xiangyu Chen, Tuo An, Yuxuan Hu, Jingliang Li, Xinying Guo, and Jianfei
+Yang. Action-to-action flow matching. In Proceedings of Robotics: Science and Systems, 2026b.
+Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakrishna, Suraj Nair,
+Rafael Rafailov, Ethan P. Foster, Pannag R. Sanketi, Quan Vuong, Thomas Kollar, Benjamin
+Burchfiel, Russ Tedrake, Dorsa Sadigh, Sergey Levine, Percy Liang, and Chelsea Finn. Open-
+vla: An open-source vision-language-action model.
+In Pulkit Agrawal, Oliver Kroemer, and
+Wolfram Burgard (eds.), Proceedings of The 8th Conference on Robot Learning, volume 270 of
+Proceedings of Machine Learning Research, pp. 2679–2713. PMLR, 06–09 Nov 2025. URL
+https://proceedings.mlr.press/v270/kim25c.html.
+Moo Jin Kim, Yihuai Gao, Tsung-Yi Lin, Yen-Chen Lin, Yunhao Ge, Grace Lam, Percy Liang, Shu-
+ran Song, Ming-Yu Liu, Chelsea Finn, and Jinwei Gu. Cosmos policy: Fine-tuning video models
+for visuomotor control and planning. In International Conference on Learning Representations,
+2026. URL https://proceedings.iclr.cc/paper_files/paper/2026/hash/
+748becc400a57c0e31cfe6a2e7951467-Abstract-Conference.html.
+Lin Li, Qihang Zhang, Yiming Luo, Shuai Yang, Ruilin Wang, Luyao Zhang, Mingrui Yu, Zelin
+Gao, Nan Xue, Boyu Zhou, Xing Zhu, Mingyu Ding, Yujun Shen, and Yinghao Xu. Causal
+World Modeling for Robot Control. In Proceedings of Robotics: Science and Systems, Sydney,
+Australia, July 2026. doi: 10.15607/RSS.2026.XXII.016.
+Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. Libero:
+Benchmarking knowledge transfer for lifelong robot learning, 2023. URL https://arxiv.
+org/abs/2306.03310.
+Karl Pertsch, Kyle Stachowicz, Brian Ichter, Danny Driess, Suraj Nair, Quan Vuong, Oier Mees,
+Chelsea Finn, and Sergey Levine. Fast: Efficient action tokenization for vision-language-action
+models. In Proceedings of Robotics: Science and Systems, Los Angeles, CA, USA, June 2025.
+doi: 10.15607/RSS.2025.XXI.012. URL https://www.roboticsproceedings.org/
+rss21/p012.html.
+Sandeep Kumar Routray, Hengkai Pan, Unnat Jain, Shikhar Bahl, and Deepak Pathak.
+Vipra:
+Video prediction for robot actions. In International Conference on Learning Representations,
+2026. URL https://proceedings.iclr.cc/paper_files/paper/2026/hash/
+707e34efcabd2b9375f7a64019600aa8-Abstract-Conference.html.
+12
+
+
+Published as a conference paper at ICLR 2027
+Oriane Sim´eoni, Huy V. Vo, Maximilian Seitzer, Federico Baldassarre, Maxime Oquab, Cijo Jose,
+Vasil Khalidov, Marc Szafraniec, Seungeun Yi, Micha¨el Ramamonjisoa, Francisco Massa, Daniel
+Haziza, Luca Wehrstedt, Jianyuan Wang, Timoth´ee Darcet, Th´eo Moutakanni, Leonel Sentana,
+Claire Roberts, Andrea Vedaldi, Jamie Tolan, John Brandt, Camille Couprie, Julien Mairal, Herv´e
+J´egou, Patrick Labatut, and Piotr Bojanowski. Dinov3, 2025. URL https://arxiv.org/
+abs/2508.10104.
+Team Wan, Ang Wang, Baole Ai, et al. Wan: Open and advanced large-scale video generative
+models, 2025. URL https://arxiv.org/abs/2503.20314.
+Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Almahairi, Yasmine Babaei, Niko-
+lay Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti Bhosale, Dan Bikel, Lukas Blecher,
+Cristian Canton Ferrer, Moya Chen, Guillem Cucurull, David Esiobu, Jude Fernandes, Jeremy
+Fu, Wenyin Fu, Brian Fuller, Cynthia Gao, Vedanuj Goswami, Naman Goyal, Anthony Hartshorn,
+Saghar Hosseini, Rui Hou, Hakan Inan, Marcin Kardas, Viktor Kerkez, Madian Khabsa, Isabel
+Kloumann, Artem Korenev, Punit Singh Koura, Marie-Anne Lachaux, Thibaut Lavril, Jenya Lee,
+Diana Liskovich, Yinghai Lu, Yuning Mao, Xavier Martinet, Todor Mihaylov, Pushkar Mishra,
+Igor Molybog, Yixin Nie, Andrew Poulton, Jeremy Reizenstein, Rashi Rungta, Kalyan Saladi,
+Alan Schelten, Ruan Silva, Eric Michael Smith, Ranjan Subramanian, Xiaoqing Ellen Tan, Binh
+Tang, Ross Taylor, Adina Williams, Jian Xiang Kuan, Puxin Xu, Zheng Yan, Iliyan Zarov, Yuchen
+Zhang, Angela Fan, Melanie Kambadur, Sharan Narang, Aurelien Rodriguez, Robert Stojnic,
+Sergey Edunov, and Thomas Scialom. Llama 2: Open foundation and fine-tuned chat models,
+2023. URL https://arxiv.org/abs/2307.09288.
+An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang
+Gao, Chengen Huang, Chenxu Lv, Chujie Zheng, Dayiheng Liu, Fan Zhou, Fei Huang, Feng Hu,
+Hao Ge, Haoran Wei, Huan Lin, Jialong Tang, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin
+Yang, Jiaxi Yang, Jing Zhou, Jingren Zhou, Junyang Lin, Kai Dang, Keqin Bao, Kexin Yang,
+Le Yu, Lianghao Deng, Mei Li, Mingfeng Xue, Mingze Li, Pei Zhang, Peng Wang, Qin Zhu, Rui
+Men, Ruize Gao, Shixuan Liu, Shuang Luo, Tianhao Li, Tianyi Tang, Wenbiao Yin, Xingzhang
+Ren, Xinyu Wang, Xinyu Zhang, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yinger
+Zhang, Yu Wan, Yuqiong Liu, Zekun Wang, Zeyu Cui, Zhenru Zhang, Zhipeng Zhou, and Zihan
+Qiu. Qwen3 technical report, 2025. URL https://arxiv.org/abs/2505.09388.
+Fan Yang, Yuting Su, Xiaobo Wang, Yuncheng You, Fugui Fan, Yuting Wu, Minghui Wu, Chenxu
+Zhao, JiaHong Ning, and Peiguang Jing. Lila-wam: Lightweight latent reasoning world-action
+model for robotic manipulation, 2026. URL https://arxiv.org/abs/2608.03701.
+Tianyuan Yuan, Zibin Dong, Yicheng Liu, and Hang Zhao. Fast-wam: Do world action models need
+test-time future imagination?, 2026. URL https://arxiv.org/abs/2603.16666.
+Wenyao
+Zhang,
+Bozhou
+Zhang,
+Zekun
+Qi,
+Wenjun
+Zeng,
+Xin
+Jin,
+and
+Li
+Zhang.
+Disentangled
+robot
+learning
+via
+separate
+forward
+and
+inverse
+dynamics
+pretrain-
+ing.
+In
+International
+Conference
+on
+Learning
+Representations,
+2026.
+URL
+https://proceedings.iclr.cc/paper_files/paper/2026/hash/
+793bfa8f8c8db6e33a7ecf410ae573a8-Abstract-Conference.html.
+Chuning Zhu, Raymond Yu, Siyuan Feng, Benjamin Burchfiel, Paarth Shah, and Abhishek Gupta.
+Unified world models: Coupling video and action diffusion for pretraining on large robotic
+datasets. In Proceedings of Robotics: Science and Systems, Los Angeles, CA, USA, June 2025.
+doi: 10.15607/RSS.2025.XXI.015. URL https://www.roboticsproceedings.org/
+rss21/p015.html.
+13
+
+
+Published as a conference paper at ICLR 2027
+A
+REPRODUCIBILITY AND ROBOTIC MANIPULATION DEMOS
+The real-world and simulation demos and reproducible code are available on the anonymous project:
+https://anonymous.4open.science/w/supplementary_materials-4586.
+B
+LIMITATION
+Our method has two main limitations. Firstly, a frozen visual model needs to be loaded, which may
+slow down the optimization speed during training, although this can be solved by caching visual
+features in advance. Secondly, the finite history window limits access to longer-term dependencies.
+We will address this issue in our future work.
+C
+HYPERPARAMETERS AND IMPLEMENTATION DETAILS
+C.1
+MODEL AND REPRESENTATION CONFIGURATION
+Backbone and trainable modules.
+We initialize the video expert from Wan2.2-TI2V-5B from
+pretrained Wan2.2 weights, with the ActionDiT action expert initialized by linear interpolation of
+the parameters from the video expert. Both experts contain 30 layers, with hidden dimensions of
+3,072 and 1,024, respectively. We train both experts, the Action Experience Dictionary (AED), the
+visual memory and action–visual fusion modules, and the transition predictor. The video VAE and
+the LingBot-vision encoder remain frozen. We employ delta pose to control the robot.
+Action Experience Dictionary.
+The AED contains 2,048 valid entries of dimension 1,024, plus
+a separate padding (PAD) entry. FAST+ token indices retrieve dictionary embeddings, which are
+aggregated with temporal positional encoding as described in the main paper.
+Visual conditioning.
+Historical visual features are extracted by the VAE and compressed into 128
+embeddings using two memory-compression layers. A single action–visual fusion block combines
+the visual memory with the action history to produce eight historical prefix tokens for the action
+expert. The frozen LingBot encoder provides the visual targets for transition supervision.
+C.2
+OPTIMIZATION AND TRAINING CONFIGURATION
+We use AdamW with a learning rate of 10−4, β1 = 0.9, β2 = 0.95, weight decay of 0.01, and a
+gradient-clipping threshold of 1. The schedule includes 10% warmup updates followed by cosine
+decay to 10−6 at the end of the planned run. Training uses 8 NVIDIA A100 GPUs and 32 NVIDIA
+H100 GPUs with eight samples per GPU. We use BF16 precision and DeepSpeed ZeRO-1. The full
+training schedule comprises 10 epochs for LIBERO and 5 epochs for RoboTwin. The video and
+action flow-matching losses each have a weight of 1. The MT loss weight is 0.01.
+C.3
+OBSERVATION AND ACTION PREPROCESSING
+For single-arm manipulation, the input includes a third-person view and a wrist-camera view. For
+dual-arm manipulation, we use three views: a head-mounted view and one wrist-camera view for
+each arm. Each image is resized to 224 × 224, and the views are concatenated horizontally.
+Single-arm actions are represented by seven-dimensional vectors. Actions are normalized using
+min–max scaling. The history contains 32 action steps, which are aggregated into eight consecutive
+groups of four steps before FAST+ tokenization.
+C.4
+INFERENCE AND DEPLOYMENT
+We use NVIDIA A100 GPUs for inference. The policy predicts a chunk of 32 future actions using
+10 flow-matching ordinary differential equation (ODE) integration steps. We execute the first 10
+predicted actions before replanning, at a control frequency of 30 Hz.
+14
+
+
+Published as a conference paper at ICLR 2027
+Algorithm 1
+Pipeline of the Proposed AED-WAM
+Input: Training batch B with instruction c, observations o, proprioceptive states s, historical actions ah, and
+flow-matching targets (xv, xa). At inference, use (c, ot, st, ah, zh
+v), where zh
+v = VAE(oh).
+Output: Action chunk bat:t+H−1.
+▷Training
+1:
+Set k = H/V ; compute bah[j] by Eq. (2), tokenize ζj = Φ(bah[j]), and retrieve the temporally
+ordered action embeddings f ⋆= [pj + M −1 P
+l D(ζj[l])]V
+j=1.
+2:
+Compress historical visual latents zh
+v to bzh
+v and obtain visually conditioned action embeddings
+ev = E(f ⋆,bzh
+v); prepend them to noisy action tokens (Eq. (6)).
+3:
+Sample τ and ϵe; set xτ
+e = (1 −τ)xe + τϵe for e ∈{v, a} and compute LFM (Eq. (1)).
+4:
+Sample (t′, ∆); predict ∆bht′ = G(ht′, u∆
+t′ ) and compute LMT against ∆ht′ = ht′+∆−ht′
+(Eq. (7)).
+5:
+Update trainable parameters by L = LFM + 0.01 LMT; keep the video VAE and target encoder F
+frozen.
+▷Inference
+6:
+Receive (c, ot, st, ah, zh
+v) and repeat Steps 1–2 to construct ev.
+7:
+Initialize the video and action latents with Gaussian noise at τ0 = 1; integrate the joint flow-
+matching ODE backward to τK = 0 with K Euler steps, conditioned on (ot, st, c, ev). Only the
+resulting action chunk is executed.
+8:
+Decode bat:t+H−1, execute the first 10 actions at 30 Hz, append the new history and latents, and
+repeat Step 6.
+D
+PER-TASK BENCHMARK RESULTS
+D.1
+LIBERO
+Table 6 reports the 42K checkpoint’s success rates on standard LIBERO, with 1,976 successes over
+2,000 trials (98.80%). Task IDs match the S0–S9, O0–O9, G0–G9, and L0–L9 definitions in the
+task protocol.
+Table 6: Per-task success rates on all 40 standard LIBERO tasks, grouped by suite. The same
+42,000-step checkpoint is evaluated with seed 3407, 50 trials per task, and replanning after ten
+executed actions. SR denotes success rate in percent. Each suite average covers 500 trials; the
+overall average covers 2,000 trials.
+ID
+Task instruction
+Successes
+SR (%)
+LIBERO-Spatial
+S0
+pick up the black bowl between the plate and the ramekin and place it on the
+plate
+50/50
+100.00
+S1
+pick up the black bowl next to the ramekin and place it on the plate
+50/50
+100.00
+S2
+pick up the black bowl from table center and place it on the plate
+50/50
+100.00
+S3
+pick up the black bowl on the cookie box and place it on the plate
+48/50
+96.00
+S4
+pick up the black bowl in the top drawer of the wooden cabinet and place it
+on the plate
+49/50
+98.00
+S5
+pick up the black bowl on the ramekin and place it on the plate
+49/50
+98.00
+S6
+pick up the black bowl next to the cookie box and place it on the plate
+50/50
+100.00
+S7
+pick up the black bowl on the stove and place it on the plate
+49/50
+98.00
+S8
+pick up the black bowl next to the plate and place it on the plate
+50/50
+100.00
+S9
+pick up the black bowl on the wooden cabinet and place it on the plate
+50/50
+100.00
+Suite average
+495/500
+99.00
+LIBERO-Object
+O0
+pick up the alphabet soup and place it in the basket
+50/50
+100.00
+O1
+pick up the cream cheese and place it in the basket
+50/50
+100.00
+O2
+pick up the salad dressing and place it in the basket
+50/50
+100.00
+O3
+pick up the bbq sauce and place it in the basket
+50/50
+100.00
+O4
+pick up the ketchup and place it in the basket
+50/50
+100.00
+O5
+pick up the tomato sauce and place it in the basket
+50/50
+100.00
+O6
+pick up the butter and place it in the basket
+50/50
+100.00
+Continued on next page
+15
+
+
+Published as a conference paper at ICLR 2027
+Table 6: LIBERO per-task results (continued).
+ID
+Task instruction
+Successes
+SR (%)
+O7
+pick up the milk and place it in the basket
+50/50
+100.00
+O8
+pick up the chocolate pudding and place it in the basket
+50/50
+100.00
+O9
+pick up the orange juice and place it in the basket
+50/50
+100.00
+Suite average
+500/500
+100.00
+LIBERO-Goal
+G0
+open the middle drawer of the cabinet
+49/50
+98.00
+G1
+put the bowl on the stove
+48/50
+96.00
+G2
+put the wine bottle on top of the cabinet
+48/50
+96.00
+G3
+open the top drawer and put the bowl inside
+50/50
+100.00
+G4
+put the bowl on top of the cabinet
+49/50
+98.00
+G5
+push the plate to the front of the stove
+50/50
+100.00
+G6
+put the cream cheese in the bowl
+49/50
+98.00
+G7
+turn on the stove
+50/50
+100.00
+G8
+put the bowl on the plate
+50/50
+100.00
+G9
+put the wine bottle on the rack
+49/50
+98.00
+Suite average
+492/500
+98.40
+LIBERO-Long (LIBERO-10)
+L0
+put both the alphabet soup and the tomato sauce in the basket
+49/50
+98.00
+L1
+put both the cream cheese box and the butter in the basket
+50/50
+100.00
+L2
+turn on the stove and put the moka pot on it
+49/50
+98.00
+L3
+put the black bowl in the bottom drawer of the cabinet and close it
+47/50
+94.00
+L4
+put the white mug on the left plate and put the yellow and white mug on the
+right plate
+48/50
+96.00
+L5
+pick up the book and place it in the back compartment of the caddy
+50/50
+100.00
+L6
+put the white mug on the plate and put the chocolate pudding to the right of
+the plate
+48/50
+96.00
+L7
+put both the alphabet soup and the cream cheese box in the basket
+50/50
+100.00
+L8
+put both moka pots on the stove
+49/50
+98.00
+L9
+put the yellow and white mug in the microwave and close it
+49/50
+98.00
+Suite average
+489/500
+97.80
+Overall average
+1976/2000
+98.80
+D.2
+ROBOTWIN 2.0
+Table 7 compares our method with Fast-WAM (Yuan et al., 2026) on all 50 RoboTwin 2.0 tasks. Our
+evaluation uses a single checkpoint and 100 trials per task in each of the Clean and Random settings,
+yielding 10,000 trials in total. Our method succeeds in 4,659/5,000 Clean trials and 4,617/5,000
+Random trials, corresponding to 93.18% and 92.34%, respectively, and an overall success rate of
+92.76%.
+Table 7: Per-task success rate (%) on RoboTwin 2.0. Fast-WAM entries are reported baseline results;
+ours use 100 trials per task and setting with unseen instructions. Avg. averages Clean and Random,
+and the final row averages all 50 tasks. Bold indicates the better result between the two methods for
+each metric, including ties.
+Fast-WAM
+Ours
+Task
+Clean
+Random
+Avg.
+Clean
+Random
+Avg.
+adjust bottle
+100.00
+100.00
+100.00
+100.00
+99.00
+99.50
+beat block hammer
+99.00
+97.00
+98.00
+98.00
+99.00
+98.50
+blocks ranking rgb
+100.00
+100.00
+100.00
+100.00
+99.00
+99.50
+blocks ranking size
+94.00
+98.00
+96.00
+92.00
+96.00
+94.00
+click alarmclock
+100.00
+100.00
+100.00
+100.00
+99.00
+99.50
+click bell
+100.00
+100.00
+100.00
+100.00
+100.00
+100.00
+dump bin bigbin
+97.00
+96.00
+96.50
+98.00
+98.00
+98.00
+grab roller
+100.00
+100.00
+100.00
+100.00
+100.00
+100.00
+Continued on next page
+16
+
+
+Published as a conference paper at ICLR 2027
+Table 7: RoboTwin 2.0 per-task results (continued).
+Fast-WAM
+Ours
+Task
+Clean
+Random
+Avg.
+Clean
+Random
+Avg.
+handover block
+95.00
+81.00
+88.00
+94.00
+84.00
+89.00
+handover mic
+99.00
+100.00
+99.50
+99.00
+99.00
+99.00
+hanging mug
+58.00
+62.00
+60.00
+56.00
+58.00
+57.00
+lift pot
+100.00
+100.00
+100.00
+100.00
+100.00
+100.00
+move can pot
+90.00
+88.00
+89.00
+99.00
+98.00
+98.50
+move pillbottle pad
+100.00
+99.00
+99.50
+100.00
+100.00
+100.00
+move playingcard away
+100.00
+100.00
+100.00
+99.00
+100.00
+99.50
+move stapler pad
+77.00
+64.00
+70.50
+86.00
+76.00
+81.00
+open laptop
+98.00
+100.00
+99.00
+96.00
+100.00
+98.00
+open microwave
+62.00
+45.00
+53.50
+86.00
+68.00
+77.00
+pick diverse bottles
+80.00
+85.00
+82.50
+82.00
+87.00
+84.50
+pick dual bottles
+100.00
+96.00
+98.00
+100.00
+96.00
+98.00
+place a2b left
+95.00
+93.00
+94.00
+100.00
+95.00
+97.50
+place a2b right
+93.00
+99.00
+96.00
+96.00
+97.00
+96.50
+place bread basket
+91.00
+93.00
+92.00
+92.00
+97.00
+94.50
+place bread skillet
+90.00
+93.00
+91.50
+92.00
+93.00
+92.50
+place burger fries
+96.00
+99.00
+97.50
+99.00
+97.00
+98.00
+place can basket
+71.00
+69.00
+70.00
+81.00
+65.00
+73.00
+place cans plasticbox
+99.00
+96.00
+97.50
+98.00
+94.00
+96.00
+place container plate
+96.00
+100.00
+98.00
+99.00
+99.00
+99.00
+place dual shoes
+94.00
+88.00
+91.00
+89.00
+91.00
+90.00
+place empty cup
+100.00
+100.00
+100.00
+99.00
+100.00
+99.50
+place fan
+96.00
+96.00
+96.00
+94.00
+94.00
+94.00
+place mouse pad
+83.00
+89.00
+86.00
+95.00
+90.00
+92.50
+place object basket
+89.00
+88.00
+88.50
+89.00
+85.00
+87.00
+place object scale
+90.00
+97.00
+93.50
+93.00
+96.00
+94.50
+place object stand
+90.00
+94.00
+92.00
+93.00
+94.00
+93.50
+place phone stand
+97.00
+99.00
+98.00
+99.00
+98.00
+98.50
+place shoe
+96.00
+99.00
+97.50
+94.00
+99.00
+96.50
+press stapler
+90.00
+97.00
+93.50
+93.00
+95.00
+94.00
+put bottles dustbin
+95.00
+90.00
+92.50
+89.00
+95.00
+92.00
+put object cabinet
+94.00
+89.00
+91.50
+88.00
+89.00
+88.50
+rotate qrcode
+93.00
+89.00
+91.00
+95.00
+90.00
+92.50
+scan object
+89.00
+92.00
+90.50
+93.00
+94.00
+93.50
+shake bottle
+100.00
+100.00
+100.00
+100.00
+100.00
+100.00
+shake bottle horizontally
+100.00
+100.00
+100.00
+100.00
+99.00
+99.50
+stack blocks three
+95.00
+97.00
+96.00
+77.00
+70.00
+73.50
+stack blocks two
+100.00
+100.00
+100.00
+100.00
+100.00
+100.00
+stack bowls three
+80.00
+81.00
+80.50
+87.00
+82.00
+84.50
+stack bowls two
+92.00
+98.00
+95.00
+93.00
+96.00
+94.50
+stamp seal
+90.00
+94.00
+92.00
+87.00
+89.00
+88.00
+turn switch
+61.00
+59.00
+60.00
+70.00
+78.00
+74.00
+Average
+91.88
+91.78
+91.83
+93.18
+92.34
+92.76
+E
+TRAINING DATA, DATA COLLECTION, AND ROBOT PLATFORMS
+E.1
+TRAINING DATA OVERVIEW
+Figure 7 illustrates ten real-world manipulation tasks on the Spirit AI MOZ1 platform. We use a VR
+device to collect these real-world data.
+E.2
+ROBOT PLATFORMS
+Figure 8 shows the Spirit AI MOZ1 and ROKAE AR5-5 0.7 platforms used in our real-world ex-
+periments, together with the deployment pipeline. The green, red, and orange markers indicate the
+head-mounted camera, wrist-mounted RealSense cameras, and grippers, respectively. The camera
+17
+
+
+Published as a conference paper at ICLR 2027
+01 Fold the poper bog.
+SURT
+20%
+60%
+80%
+BN0
+02 Lift up the two baskets.
+START
+20%
+80%
+03 Pick up the brush from the holder on the left, dip it in the ink in the small blue bowl on the right,then write "H“ on the poper.
+STRT
+20%
+4C%
+60%
+80%
+BNO
+04 Pick up two white bowis and ploce them on the box.
+START
+20%
+40%
+05 Place the knife on the box, then put the spatula into the orange pot.
+STAKT
+20%
+40%
+06 Ploce the purple pot on the stove, then use the spatula on the left to cook the food.
+STRT
+20%
+60露
+60%
+15Ti
+07 Push the box next to the green pot, then pioce the green pot on the stove.
+SART
+20%
+40%
+B0%
+08 Put the groen pepper on the right into the pot, then pick up the purple pot on the left and pour the tomato into the pot.
+STURT
+20%
+60年
+60%
+80%
+09 Put the mushroom into the basket, then put the orange into the basket.
+ART
+2DT
+4C5
+10 Unzip the pencil cose, then ploce the blue pen from the cup into the pencil case.
+START
+20%
+4C%
+Bas
+60%
+m
+4104
+Figure 7: Overview of ten real-world manipulation tasks on Spirit AI MOZ1. Each row shows six
+frames from the high camera, covering an episode from start to finish.
+views provide observations of the workspace and the regions near the grippers. During deployment,
+camera images and a natural-language task instruction are passed to the model running on a host
+computer, which predicts actions and sends them to the robot for execution.
+F
+ANALYSIS OF SHARED ACTION EXPERIENCE
+F.1
+CROSS-TASK SIMILARITY OF ACTION CONTENT EMBEDDINGS
+Manipulation tasks with distinct goals and visual contexts nevertheless share reusable action expe-
+rience. For example, placing a can into a basket can draw on grasping, transporting, and releasing
+behaviors also used in other pick-and-place tasks. We examine this underlying relationship among
+18
+
+
+Published as a conference paper at ICLR 2027
+Spirit AI MOZ1
+ROKAE AR5
+Camera High
+ 
+Real Sense
+Gripper
+ 
+Real Sense
+Gripper
+Camera 
+(Capture Image)
+Language 
+Instruction
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+Pick up the two cups
+,and stack them
+Computer
+(Load Model)
+Infer action from vision 
+and language
+Send Actions to Robot
+Image
+Text
+Figure 8: Robot platforms and deployment pipeline. Left and center: Spirit AI MOZ1 and ROKAE
+AR5-5 0.7 with camera and gripper annotations. Right: camera images and language instructions
+are processed by the model on a host computer, and predicted actions are sent to the robot.
+manipulation tasks from two complementary perspectives: the similarity structure of action embed-
+dings and the reuse of Action Experience Dictionary (AED) entries across task windows.
++0.173
++0.105
++0.092
++0.163
++0.090
++0.067
+Figure 9: Cross-task similarity of action content embeddings. Orange and yellow compare the
+same skill and different skills across tasks, respectively. Each distribution sample is a weighted
+average cosine-similarity score for a cross-task pair; white points mark the medians of these task-
+pair scores. The annotated gaps for grasp, transport, dip, release, lift, and reach are +0.173, +0.105,
++0.092, +0.163, +0.090, and +0.067, respectively.
+Representation and statistical unit.
+For each four-action interval, its FAST+ tokens undergo
+AED lookup and projection, followed by mean pooling over the retrieved valid tokens to produce
+a 1024-dimensional action content embedding. This is the aggregated action representation before
+adding positional encoding or applying visual cross-attention, rather than a single AED vocabulary
+vector or a visually conditioned action embedding. Each sample in the violin distributions is a
+weighted average of cosine similarities for a cross-task pair, not an individual action vector or a
+single vector-pair similarity. The white points summarize these task-pair scores by their medians.
+Cross-task organization of action content.
+Figure 9 shows higher median task-pair similarity for
+the same skill than for different skills across all six categories. Both comparison groups are cross-
+task. The largest annotated gaps occur for grasping (0.173) and releasing (0.163), while transporting
+also exhibits a positive gap (0.105). These behaviors directly match the reusable action experience
+in our motivation; dipping, lifting, and reaching extend the pattern beyond pick-and-place.
+The overlapping distributions indicate graded relationships among skills rather than completely dis-
+joint categories. Because this analysis precedes positional encoding and visual cross-attention, it
+locates the observed cross-task structure in the pooled action content itself. This supports the in-
+tended role of historical action trajectories as a source of reusable action experience across tasks.
+19
+
+
+Published as a conference paper at ICLR 2027
+Observation at time t3                    Ground Truth
+Direct t3            Composed t1→t2→t3
+Figure 10: Additional transition-prediction examples. Each row shows, from left to right, the
+observation at t3, a PCA visualization of its ground-truth features, the endpoint features estimated
+by direct t1 →t3 prediction, and those estimated by composing t1 →t2 and t2 →t3 predictions.
+The two prediction routes produce similar spatial feature patterns across the illustrated scenes.
+Connection to the proposed mechanism.
+The pretrained action tokenizer supplies indices into
+the learnable AED. Repeated IDs establish access to the same dictionary entries, while the similarity
+distributions characterize the pooled, projected action content embeddings. An individual token ID
+need not denote an entire high-level skill. These complementary views connect shared dictionary
+access with the organization of action experience across tasks.
+F.2
+SHARED AED ENTRIES ACROSS MANIPULATION TASKS
+Retrieval frequency.
+For each selected task window, the eight original four-action intervals are
+paired into four eight-action statistical groups. This grouping retains the original tokenization; it
+does not re-tokenize eight-action segments. Let Gt,g be the set of token IDs occurring in group g of
+the selected window for task t. Then
+Frequency(t, k) = 1
+4
+4
+X
+g=1
+1{k ∈Gt,g} × 100%.
+(11)
+Thus, 75% means presence in three of the four groups, irrespective of repetitions within a group.
+Retrieval is restricted to the selected window and is not a whole-task token frequency.
+Shared dictionary access.
+In Fig. 5, ID 300 occurs in all four task windows, with frequency of
+75%, 100%, 25%, and 100% for T1–T4. ID 309 has frequency of 75% and 100% in the two pick-
+and-place windows (T1 and T2); ID 308 has frequency of 75%, 100%, and 100% in T1, T3, and T4.
+These overlapping, non-identical sets reveal shared AED access across different objects and goals,
+spanning both the pick-and-place examples in our motivation and drawer and stove interactions.
+As emphasized in the Introduction, similar motions can serve different purposes depending on ob-
+jects and their spatial relationships. Shared AED entries supply reusable action experience, while
+subsequent visual conditioning supplies interaction context and action intent for the target task.
+These results indicate combining common action content with task-relevant visual information to
+exploit underlying relationships among manipulation tasks.
+20
+
+
+Published as a conference paper at ICLR 2027
+f★[0]
+f★[1]
+f★[2]
+f★[3]
+f★[4]
+f★[5]
+f★[6]
+f★[7]
+Figure 11: Visual context associated with historical action embeddings. Panels are ordered from
+left to right and top to bottom, corresponding to f ⋆[0]–f ⋆[7]. Each panel pairs two camera views
+with overlaid visual responses and trajectory markers. The responses vary with the interaction stage
+and include regions around the robot gripper and nearby objects.
+G
+ADDITIONAL QUALITATIVE RESULTS
+G.1
+TRANSITION PREDICTION
+Figure 10 examines whether the learned transitions describe visual changes consistently across tem-
+poral intervals. For three time steps t1 < t2 < t3, the direct prediction adds the predicted change
+over t1 →t3 to the features at t1, whereas the composed prediction adds the changes over t1 →t2
+and t2 →t3. Both therefore estimate the same endpoint features at t3. The ground-truth column
+visualizes features extracted from the observation at t3.
+Across the four examples, the direct and composed predictions exhibit similar spatial organization
+and broadly reproduce the ground-truth feature patterns around the robot, scene objects, and sur-
+rounding surfaces. Agreement with the ground truth indicates that the two routes capture meaningful
+endpoint structure, while agreement between the routes supports temporal composition consistency:
+subdividing an interval yields a compatible estimate of the resulting visual state. This observation
+is consistent with the main-paper analysis linking the motion-aware transition (MT) objective to
+composition error, and supports learning action-related visual transitions across temporal scales.
+G.2
+VISUAL CONDITIONING
+Figure 11 illustrates how historical action embeddings are associated with visual regions over a
+manipulation sequence. The eight panels correspond to f ⋆[0] through f ⋆[7] in temporal order, with
+two camera views in each panel. The overlaid responses show the visual regions associated with
+each action embedding, and the corresponding visualized trajectories are also provided.
+The response patterns change as the gripper moves through the scene. In the earlier panels, visible
+responses occur near the robot and objects adjacent to the gripper; in later panels, responses also
+appear around the gripper–object interaction and the plate region as the trajectory approaches it. This
+stage-dependent association is consistent with visual conditioning supplying the object and spatial
+context needed to interpret historical motions. Such context matters because a reusable motion alone
+does not specify which object it acts on or how that object relates to the current goal.
+Together with the shared action-content analysis in Appendix F.1, these examples support comple-
+mentary roles for the two components: AED provides reusable action experience, and visual condi-
+tioning associates that experience with the observed interaction context. The localized responses are
+also consistent with the intended emphasis of MT supervision on action-relevant visual information.
+H
+ABLATION STUDIES
+H.1
+EXPERIMENTAL PROTOCOL
+The ablation uses seed 0, 32 predicted actions per call, ten executed actions before replanning, with
+50 trials per task across ten LIBERO-10 tasks. SR denotes success rate in percent. All six ablation
+plots use 97.4% as the shared full-model reference.
+21
+
+
+Published as a conference paper at ICLR 2027
+H.2
+ACTION AGGREGATION AND TEMPORAL SAMPLING
+Action aggregation.
+In Fig. 12, Agg→Tok aggregates each four-action interval before FAST+
+tokenization, Tok→Agg jointly tokenizes the four actions before pooling their embeddings, and
+MLP encodes the aggregated continuous actions with a multilayer perceptron. The Agg→Tok (Ours)
+outperforms the other methods.
+Temporal sampling.
+Figure 13 compares Start→Span, which samples a start first and then a valid
+span, Span→Start, which reverses this order, a fixed temporal window, and the configuration with-
+out interval sampling. The 96.8% result jointly removes random sampling and the motion-aware
+transition (MT) objective.
+Agg→Tok
+(Ours)
+Tok→Agg
+MLP
+94
+95
+96
+97
+98
+Success rate (%)
+97.4
+95.8
+95.4
+Figure 12: Action aggregation.
+Start→Span
+(Ours)
+Span→Start
+Fixed
+window
+No sampling,
+no MT
+94
+95
+96
+97
+98
+Success rate (%)
+97.4
+96.6
+96.4
+96.8
+Figure 13: Temporal sampling.
+H.3
+SAMPLING WINDOW DISTRIBUTION
+To clarify the Start→Span strategy, Fig. 14 visualizes the probability of sampling each temporal
+window for motion-aware transition supervision. Let r = t′ −t denote the start offset in visual
+intervals. The sampler first draws r uniformly from {1, . . . , V −1}, then draws ∆uniformly from
+{1, . . . , V −r}. Consequently,
+P(r, ∆) =
+1
+(V −1)(V −r),
+1 ≤r ≤V −1,
+1 ≤∆≤V −r,
+(12)
+with zero probability outside this support. Summing over valid start offsets gives
+P(∆) =
+1
+V −1
+V −∆
+X
+r=1
+1
+V −r,
+∆∈{1, . . . , V −1}.
+(13)
+4
+8
+12
+16
+20
+24
+28
+Window length (saved action records)
+1
+2
+3
+4
+5
+6
+7
+Window length Δ (visual intervals)
+0%
+10%
+20%
+30%
+40%
+Sampling probability P(Δ)
+37.04%
+22.76%
+15.61%
+10.85%
+7.28%
+4.42%
+2.04%
+1
+2
+3
+4
+5
+6
+7
+Window length Δ (visual intervals)
+1
+2
+3
+4
+5
+6
+7
+Start offset r=t′−t (visual intervals)
+2.04
+2.04
+2.04
+2.04
+2.04
+2.04
+2.04
+2.38
+2.38
+2.38
+2.38
+2.38
+2.38
+2.86
+2.86
+2.86
+2.86
+2.86
+3.57
+3.57
+3.57
+3.57
+4.76
+4.76
+4.76
+7.14
+7.14
+14.29
+0
+2
+4
+6
+8
+10
+12
+14
+Joint probability P(r,Δ) (%)
+Figure 14: Temporal-window sampling probabilities for Start→Span, with V
+= 8.
+Left:
+marginal length distribution P(∆); the upper axis counts saved action records (four per visual inter-
+val). Right: joint distribution P(r, ∆) over start offsets and lengths; blank cells are invalid windows.
+All values are percentages.
+Uniform draws at each stage do not give uniform window lengths: for V = 8, P(∆= 1) = 37.04%
+and P(∆= 7) = 2.04%. Short windows are valid at more start offsets, including late starts with
+few remaining choices. The resulting MT supervision emphasizes short-term visual transitions while
+retaining positive probability for every valid longer interval.
+22
+
+
+Published as a conference paper at ICLR 2027
+H.4
+VISUAL ENCODER AND QUERY COUNT
+Pretrained visual encoder.
+Figure 15 compares LingBot-Vision and DINOv3 as alternative pre-
+trained encoders for visual feature extraction.
+Visual-memory query count.
+Figure 16 varies the number of learnable visual-memory queries
+across 32, 64, 128, and 256, with 128 as the proposed setting.
+LingBot-Vision
+(Ours)
+DINOv3
+94
+95
+96
+97
+98
+Success rate (%)
+97.4
+96.6
+Figure 15: Pretrained visual encoder.
+32
+64
+128
+(Ours)
+256
+92
+93
+94
+95
+96
+97
+98
+Success rate (%)
+95.0
+93.8
+97.4
+96.6
+Figure 16: Visual-memory query count.
+H.5
+PREFIX CONTENT AND INJECTION
+Prefix content.
+In Fig. 17, Vision-only constructs the history prefix from historical visual features,
+whereas Action-only uses historical action embeddings without VC. The 95.6% Action-only setting
+also removes MT; the 94.8% setting jointly removes AED, VC, and MT.
+Prefix injection.
+In Fig. 18, Prefix prepends the history tokens to the action sequence, whereas
+Cross-attn conditions the action expert through separate residual cross-attention modules.
+Action+vision
+(Ours)
+Vision-only
+Action-only,
+no MT
+No AED/
+VC/MT
+92
+93
+94
+95
+96
+97
+98
+Success rate (%)
+97.4
+93.8
+95.6
+94.8
+Figure 17: Prefix content.
+Prefix
+(Ours)
+Cross-attn
+94
+95
+96
+97
+98
+Success rate (%)
+97.4
+95.0
+Figure 18: Prefix injection.
+23

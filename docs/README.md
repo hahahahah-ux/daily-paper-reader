@@ -51,14 +51,14 @@
       <span class="dpr-home-dashboard-kicker">2026-10-04</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 29 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>17</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-04 00:39:09 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-04 22:23:10 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-10-04 日报精选19篇机器人VLA研究，精读7篇速读12篇。最值得看双臂操作数据集与零样本操作框架，FineART和MotorMind均获9.0分。普通读者可先速览RawVLA等三篇8分速读，再按需精读。</p>
+<p>10月4日机器人VLA日报：29篇中精读12篇、速读17篇，双手机器人操作与零样本操控成最高分焦点。</p>
+<p>最值得看FineART（9.0）的双臂轨迹数据集+VLA，以及MotorMind（9.0）用通用视觉语言模型做零样本机器人操作；速读可补RawVLA、GPT-6 Astra、Cue the Flow。</p>
+<p>普通读者建议先读这两篇9分工作，再按兴趣看速读里的具身ISP、GPT-6策略与流匹配配送操控。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="FineART: Fine-Grained Annotated Robotic Trajectory Dataset and Vision-Language-Action Model for Bimanual Manipulation">FineART: Fine-Grained Annotated Robotic Trajectory Dataset and Vision-Language-Action Model for Bimanual Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="MotorMind: Scaffolding General Vision Language Models for Zero-Shot Robot Manipulation">MotorMind: Scaffolding General Vision Language Models for Zero-Shot Robot Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="The Planning Limits of Latent World Models">The Planning Limits of Latent World Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="FineART: Fine-Grained Annotated Robotic Trajectory Dataset and Vision-Language-Action Model for Bimanual Manipulation">FineART: Fine-Grained Annotated Robotic Trajectory Dataset and Vision-Language-Action Model for Bimanual Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="MotorMind: Scaffolding General Vision Language Models for Zero-Shot Robot Manipulation">MotorMind: Scaffolding General Vision Language Models for Zero-Shot Robot Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rho: A Foundation for Efficiently Adaptable VLA Models">Rho: A Foundation for Efficiently Adaptable VLA Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>7</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>12</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -91,12 +93,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">17 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation">RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rho: A Foundation for Efficiently Adaptable VLA Models">Rho: A Foundation for Efficiently Adaptable VLA Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Systematically Exploring the Capabilities of GPT-6 Astra as Embodied Policies">Systematically Exploring the Capabilities of GPT-6 Astra as Embodied Policies</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation">RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Systematically Exploring the Capabilities of GPT-6 Astra as Embodied Policies">Systematically Exploring the Capabilities of GPT-6 Astra as Embodied Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Cue the Flow: Steering Flow-Matching Policies for Open-World Delivery Manipulation">Cue the Flow: Steering Flow-Matching Policies for Open-World Delivery Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>15</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
 </section>
 </div>
 
