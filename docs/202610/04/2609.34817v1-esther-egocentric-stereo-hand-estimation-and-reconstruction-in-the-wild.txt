@@ -1,0 +1,2013 @@
+ESTHER: Egocentric Stereo Hand Estimation and Reconstruction in the Wild
+Hongyu Ma, Hairong Qu, Shiqi Zhao, Yongsong Yang, Peng Yin
+City University of Hong Kong
+Abstract
+Human dexterity is guided by two eyes watching two hands:
+binocular vision supplies the metric 3D structure that fine-
+grained manipulation consumes. Egocentric stereo is there-
+fore the natural perceptual interface for robots, AR, and
+VR—yet metric 3D hand reconstruction from this very sig-
+nal still has neither an end-to-end model nor an in-the-wild
+benchmark. We propose ESTHER, a model whose stereo
+geometry, temporal reasoning, and output representation
+are designed for wearable egocentric stereo. It is trained
+on pseudo-labels from a calibrated labeling pipeline and in
+turn assembles our benchmark ESTHER3D, an egocentric
+stereo hand dataset pairing a large in-the-wild training set of
+model-generated labels with a motion-capture test set of true
+metric ground truth. Experiments show state-of-the-art accu-
+racy, superior external generalization, and robustness to the
+missing views, dropped frames, and lighting and motion-blur
+extremes of real egocentric capture that break existing meth-
+ods. This robustness runs deeper than graceful degradation:
+stereo guidance teaches the model to bind apparent hand
+scale to metric depth, so it not only adapts to different stereo
+rigs and modalities with minimal fine-tuning, but more strik-
+ingly preserves true metric scale even after collapsing to a
+single monocular view.
+1. Introduction
+An embodied agent that sees the world through head-
+mounted stereo perceives its own hands much as people do —
+two eyes on two hands, the binocular disparity carrying the
+metric 3D structure that fine-grained manipulation depends
+on. This makes egocentric stereo the natural signal for hand
+perception in robotics, AR, and VR: it provides the metric
+constraints that monocular RGB lacks. We study this setting
+as egocentric stereo 3D hand reconstruction: given short-
+baseline head-mounted stereo videos, the system should re-
+cover MANO-consistent hand pose, shape, and global wrist
+translation in metric 3D. Yet despite its practical importance,
+this very signal still has neither an end-to-end model nor
+an in-the-wild benchmark. We identify two primary obsta-
+cles: the lack of scalable training data with reliable metric
+Retail
+Household
+Dining
+Life services
+Office
+Factory
+t = 0 s
++0.2 s
++0.4 s
++0.6 s
++0.8 s
+stereo 2D projections  +  metric 3D mesh over time
+Figure 1. ESTHER at a glance. Letters: egocentric stereo frames
+from the six ESTHER3D industries. Bottom: ESTHER outputs
+over time — stereo 2D projections and metric 3D meshes.
+hand labels, and the mismatch between existing hand pose
+architectures and wearable stereo geometry.
+Accurate 3D hand annotation for in-the-wild egocentric
+capture is hard: the label itself must be recovered from par-
+tial, moving, and frequently occluded observations. Existing
+egocentric hand datasets — H2O [17], AssemblyHands [27],
+OakInk [43], ARCTIC [6], HOI4D [21], HOT3D [1] —
+obtain labels through additional sensing or offline recon-
+struction; HOT3D is closest in viewpoint, but its stereo is
+monochrome and its ground truth comes from professional
+motion capture rather than scalable visual labeling of raw
+RGB stereo. How to scale metric hand labels from raw in-
+the-wild head-mounted stereo remains open. We therefore
+build a calibrated labeling pipeline combining 2D evidence,
+stereo geometry, and hand priors, validate it against motion-
+capture ground truth, and train a scalable reconstruction
+model on the pseudo-labels the pipeline generates; the re-
+sulting benchmark, ESTHER3D, pairs a mocap ground-truth
+test set with these in-the-wild training sequences.
+The model bottleneck can be traced through the evolu-
+tion of hand pose architectures. Monocular mesh meth-
+ods [29, 30] regress plausible hands, but from a single crop
+they can recover depth and scale only through learned priors
+rather than geometric measurement, so metric accuracy is
+not guaranteed. Multi-view methods [15, 19, 46] restore
+1
+arXiv:2609.34817v1  [cs.CV]  28 Sep 2026
+
+
+scale through calibrated triangulation, but are single-frame
+and assume at least two cameras see each point. Temporal
+models add in-camera video context [35, 41] or lift monocu-
+lar video into world space with SLAM [47, 48], recovering
+the camera only up to monocular-SLAM scale ambiguity
+and offline optimization. Egocentric stereo sharpens all three
+weaknesses at once. Triangulation anchors are not guaran-
+teed: blur and occlusion routinely erase the hand from one of
+the two views, so a model hard-wired to triangulation loses
+its metric anchor exactly on the frames that matter. Detec-
+tion dropout is the norm: the interacting hand is repeatedly
+missed for entire frames, so per-frame architectures cannot
+run stably without temporal in-painting. Hand and head mo-
+tion are coupled: observed image motion mixes articulation
+with head egomotion and crop reparameterization, which a
+model without explicit disentanglement absorbs into finger
+pose. The setting therefore requires a model designed for
+these failure modes.
+We address this setting with ESTHER, built from two
+encoders and a decoder. A stereo image encoder fuses cali-
+brated two-view evidence into joint-level tokens; a masked
+temporal motion encoder reasons over these tokens across
+time, with camera and crop motion supplied as condition-
+ing tokens; and a query-gated fusion decoder reads both
+encoders through structured pose, shape, and wrist tokens
+and outputs MANO pose, sequence-level shape, and a direct
+metric wrist translation.
+In summary, our contributions are as follows:
+• We propose ESTHER, an end-to-end egocentric stereo
+hand reconstruction model built from two encoders and
+a query-gated fusion decoder that fuses calibrated stereo
+geometry and temporal context to output metric MANO
+pose, shape, and an absolute wrist, with state-of-the-art
+accuracy and robustness.
+• We introduce ESTHER3D, an in-the-wild egocentric
+stereo hand benchmark whose test set carries motion-
+capture ground truth and whose training set consists
+of large-scale model-labeled stereo videos, bootstrapped
+from a calibrated pipeline validated on that ground truth.
+• We evaluate under a controlled protocol (shared backbone,
+data, and losses) on the ESTHER3D test set, on HOT3D,
+and under view-missing and frame-dropping corruption,
+and uncover a size-depth binding effect: short-baseline
+stereo guidance lets direct wrist regression internalize a
+prior tying apparent hand scale to metric depth, giving sur-
+prising monocular-fallback accuracy and cheap adaptation
+to different baselines, camera parameters, and even the
+grayscale modality.
+2. Related Works
+2.1. Egocentric and Embodied Datasets
+Egocentric datasets are central to embodied perception:
+EPIC-KITCHENS [4] and Ego4D [8] cover long-form daily
+activity, Ego-Exo4D [9] pairs egocentric and external views,
+and Nymeria [23] adds multi-modal wearable motion sens-
+ing.
+Hand-object interaction datasets such as FPHA [7],
+H2O [17], HOI4D [21], OakInk [43], DexYCB [2], ARC-
+TIC [6], AssemblyHands [27], and HOT3D [1] provide im-
+portant supervision for hands and interaction. HOT3D is
+closest, but its wearable stereo is monochrome and its metric
+labels come from motion capture. ESTHER3D instead tar-
+gets in-the-wild calibrated short-baseline RGB stereo with
+metric MANO labels and train/test protocols.
+2.2. 3D Hand Pose and Mesh Estimation
+Parametric hand reconstruction builds on MANO [32], sup-
+ported by datasets such as FreiHAND [49], HO-3D [10],
+InterHand2.6M [26], DexYCB [2], ObMan [13], and ARC-
+TIC [6]. Monocular models from I2L-MeshNet [25], Mesh
+Graphormer [20], MobRecon [3], and HandOccNet [28]
+to HaMeR [29] and WiLoR [30] recover articulation well
+but must regress scale and metric depth from learned priors
+alone.
+On the temporal side, HTT [41], HandFormer [35], and
+UmeTrack [11] track hands in head-mounted settings, and
+HaWoR [48] and Dyn-HaMR [47] recover world-space mo-
+tion from monocular video via scale-ambiguous SLAM and
+offline optimization. ESTHER instead obtains metric scale
+feed-forward from calibrated stereo and disentangles hand
+from head motion with conditioning tokens and masked
+temporal training.
+2.3. Multi-View, Stereo, and Depth-Based Recon-
+struction
+Multi-view pose estimation has explored learnable triangula-
+tion, epipolar attention, volumetric fusion, and cross-view
+transformers [14, 15, 19, 37, 39]; POEM-v2 [46] studies
+point-embedded multi-view hands. Closer to us, egocentric
+stereo has been used for absolute hand pose [34] and stereo
+keypoints [18], and event cameras for stereo hand pose [38]
+and MANO mesh reconstruction [12]. These estimate sparse
+keypoints, use non-RGB sensing, or are single-frame; we
+target temporally consistent metric MANO reconstruction
+from wearable RGB stereo, where neither two-view visibility
+nor per-frame detection can be assumed.
+3. Method
+ESTHER is built together with its supervision pipeline (Fig-
+ure 2). We first collect a large corpus of raw in-the-wild
+2
+
+
+Figure 2. Supervision pipeline and data engine. (a) The teacher turns stereo 2D keypoints and per-view WiLoR into metric pseudo-labels
+via a two-stage optimization and a reprojection/human filter. (b) These train ESTHER, which labels in-the-wild stereo to build ESTHER3D.
+stereo video with our calibrated head-mounted rig, then de-
+sign a calibrated teacher labeling pipeline and validate it on
+the motion-capture ground truth of the ESTHER3D test set.
+Being optimization-based and expensive, the teacher labels
+only about 15 hours drawn evenly from the six categories,
+on which ESTHER is trained. The trained model is then
+applied to the full raw collection: its predictions, refined
+by the 2D evidence under a DPoser-X pose prior [22] and
+screened by reprojection and human review, feed back into
+further training rounds; the final model’s inference over the
+raw collection constitutes the training set, and the mocap
+recordings the test set.
+3.1. Calibrated Teacher Labeling Pipeline
+The teacher converts 2D evidence — far easier to obtain
+reliably than metric 3D hands — into metric MANO pseudo-
+labels via stereo calibration, hand priors, and optimization.
+We design a simple head-mounted RGB stereo rig (camera
+intrinsics and extrinsics in Appendix F); the formulation is
+not tied to it, and our experiments show the model adapts to
+different capture setups with only minimal fine-tuning.
+An ensemble of 2D detectors (YOLO11-pose [16] and
+ViTPose [42]) provides keypoints on both views, triangu-
+lated through the calibrated rig and filtered by depth range
+and bone-length plausibility. Optimization is initialized from
+the triangulated wrist and per-view monocular MANO esti-
+mates from WiLoR [30], and proceeds in two stages under
+the DPoser-X pose prior. Shape lock: on the 64 most con-
+fident frames, shape, pose, and wrist are jointly optimized
+against the filtered stereo observations, and the per-frame
+shapes are averaged into one fixed ¯β per hand. Pose and
+motion optimization: with the shape locked, pose and wrist
+are re-optimized per frame, then refined by 16-frame sliding-
+window motion optimization with velocity limits and an
+AMASS-pretrained motion prior [5, 24, 31]. The detection
+filtering thresholds, initialization, full fitting objective, and
+stage details are given in Appendix A.
+3.2. Ground-Truth Validation
+Before scaling up, we verify that the automatic labels can
+serve as supervision on the motion-capture test set (Ap-
+pendix H). The teacher runs on it without access to the labels
+and reaches 15.9 mm P-MPJPE, 9.3 mm PA-MPJPE, and
+19.1 mm wrist error zero-shot (Figure 4). This approaches
+the roughly 10 mm glove-solving uncertainty of the ground
+truth itself and is on par with the fitting-based annotation
+quality of widely used hand benchmarks [10, 49], meeting
+the accuracy required of pseudo-labels; the full measurement
+chain is in Appendix I. The validation also exposes failure
+modes (2D misdetections under heavy occlusion), handled
+by confidence thresholds and manual quality control.
+3.3. In-the-Wild Data and Filtering
+The validated teacher is applied to a subset of the raw in-
+the-wild collection, about 15 hours drawn evenly from the
+six categories (collection statistics in the ESTHER3D sec-
+tion). Labels pass a three-stage filter: a coarse geometric
+pre-screen on bone length and hand-camera depth range,
+an automatic 2D check that reprojects each fitted hand into
+both views and discards hand-frames disagreeing with the
+detections, and human review for the residual failures these
+cannot catch (wrong hand identity, implausible articulation).
+Qualified data trains ESTHER with its pseudo-labels; the full
+collection is labeled by the trained model itself (ESTHER3D
+3
+
+
+(a) ESTHER
+(b) (masked) Stereo
+Transformer
+(c) (masked) Temporal
+Transformer
+Figure 3. ESTHER. (a) The stereo image encoder and masked temporal motion encoder feed a query-gated fusion decoder that outputs
+MANO with a metric wrist. (b, c) Stereo and temporal transformer blocks.
+GT (left / right view)
+Teacher (left / right view)
+Figure 4. Teacher pseudo-labels vs. motion-capture ground truth as
+MANO meshes projected into both stereo views (two ESTHER3D
+test scenes; the GT mesh is MANO fitted to the mocap joints).
+Benchmark section).
+3.4. Model Overview
+ESTHER
+starts
+from
+the
+standard
+detect-then-crop
+pipeline [3, 29, 30]: a detector produces left/right crops
+with their virtual crop-camera calibration, and the network
+consumes only these. Training uses right hands exclusively —
+a left hand is mirrored with its views swapped and the predic-
+tion un-mirrored, the single-hand convention of WiLoR [30],
+halving the pose space to learn.
+The model consists of two encoders and a decoder (Fig-
+ure 3):
+F = Eimg(Il, Ir, ℓl, ℓr),
+Z, zroot, ˆo = Emot(F, f, r),
+ˆΘ = Dfuse(F, Z, zroot),
+(1)
+where, per hand, ˆΘ = (ˆθ, ˆβ,ˆt) collects the MANO pose
+(16 × 3 axis-angle), the 10-dimensional MANO shape, and
+the 3-dimensional global wrist translation. Il, Ir are cropped
+stereo images and ℓl, ℓr the Plucker rays of their patches,
+computed from the crop-camera calibration. The per-frame
+stereo image encoder Eimg fuses the two views into 21 joint-
+level tokens F. The temporal motion encoder Emot, con-
+ditioned on a camera-motion flow token f and a learned
+root token r, outputs a motion feature Z, a root feature
+zroot, and a per-frame on-screen probability ˆo that gates,
+at deployment, whether the decoded hand is emitted at all.
+The fusion decoder reads all sources with structured queries.
+During training the image encoder additionally emits 2D
+keypoints, visibility, and triangulated anchors as guidance,
+and the motion encoder is trained on randomly masked se-
+quences; heads and losses are detailed in Appendix B.
+3.5. Stereo Image Encoder
+The stereo image encoder pairs a frozen DINOv3-L image
+encoder [36] with a stereo transformer (Figure 3b). It en-
+codes the 16-frame clip together but injects no temporal
+information, fusing the two views purely through comple-
+mentary image evidence; all temporal modeling is left to the
+motion encoder. Patch tokens of each view are augmented
+with embeddings of their calibrated Plucker rays, situating in-
+dependently detected crops in the common metric geometry,
+and pass through alternating intra-view and cross-view at-
+tention, so within-view spatial context and cross-view stereo
+matching refine each other layer by layer; 21 joint queries per
+view then read from these fused tokens and are aggregated
+into the shared feature F. During training one entire view
+is randomly blanked and replaced by a learned view-mask
+token, so the fusion explicitly survives a missing camera.
+Lightweight heads (heatmaps, 2D keypoints, visibility, depth
+bins, a differentiable triangulation) guide the encoder toward
+explicit stereo geometry. The DINOv3-L backbone stays
+frozen throughout; only the stereo transformer and its heads
+are trained, so the encoder inherits strong pretrained features
+while keeping the trainable parameter count small (51M of
+355M total).
+4
+
+
+3.6. Masked Temporal Motion Encoder
+The motion encoder provides the temporal reasoning that
+egocentric capture demands. It feeds three inputs directly to
+a temporal transformer (Figure 3c): the fusion image feature
+F (with joint and time embeddings), the camera-motion flow
+token f, and a learned root token r that aggregates global
+hand motion into the root feature zroot.
+Detection dropout and occlusion. Tokens are randomly
+masked per joint, per frame, and over contiguous spans
+(anchor frames kept), each masked slot filled by a learned
+motion mask token (distinct from the stereo view-mask to-
+ken), and auxiliary heads reconstruct joints, pose, and root
+velocity there: the encoder learns to in-paint exactly the
+corruption of in-the-wild capture. A per-frame head pre-
+dicts the whole-hand on-screen probability, supervised with
+blank-frame negatives.
+Hand-head motion coupling. Camera motion enters
+as a conditioning token: the dense classical optical flow of
+the crop between consecutive frames, crop-parameter com-
+pensated and pooled into a token (Appendix D), computed
+online. This flow carries both camera and hand motion; it
+is never masked, unlike the image-feature tokens, so the
+encoder is forced to read the flow’s global component as
+camera motion and decouple it from the hand’s own articula-
+tion — a feed-forward counterpart of SLAM-based camera
+factorization [47, 48] when no headset pose stream exists.
+3.7. Query-Gated Fusion Decoder
+The fusion decoder merges the two encoders with structured
+tokens: since pose, shape, and wrist should read different
+evidence, it carries 16 kinematic-tree pose tokens, a shape
+token, and a wrist token over the sources F, Z, and zroot.
+Realized as the fusion transformer of Figure 3a, per layer the
+tokens self-attend into states hi, then read the sources Sk,
+k ∈{img, mot, root}, with a per-token softmax gate gi:
+q+
+i = FFN
+
+hi +
+X
+k
+gk
+i CrossAttn(hi, Sk)
+
+,
+(2)
+where q+
+i is the updated token. The gate is predicted from
+the token state, pooled source summaries, and evidence
+statistics such as visibility and triangulation spread (Ap-
+pendix E): the pose tokens can emphasize the image and
+motion features while the wrist token leans on the root fea-
+ture when image evidence is ambiguous.
+Pose is decoded along the kinematic tree, each child rota-
+tion conditioned on its parent, and shape once per sequence
+from the time-pooled shape token, yielding a single hand
+identity per clip. The wrist token decodes the global wrist
+translation directly in the metric rig frame:
+ˆt = MLP(qwrist).
+(3)
+We deliberately do not anchor the wrist to the triangulated
+point: an anchored wrist is sharper when both views are clean
+194 h
+total
+23%
+21%
+16%
+15%
+13%
+11%
+Training set
+in-the-wild
+50
+tasks
+24%
+16%
+12%
+20%
+14%
+14%
+Test set
+mocap, 10 h
+Retail
+Household
+Dining
+Life services
+Factory
+Oﬀice
+Figure 5. ESTHER3D across the six industries. Left: in-the-wild
+training hours (194 h). Right: motion-capture test tasks (50 tasks,
+≈10 h).
+but collapses exactly when the anchor disappears (quantified
+in the ablation). Triangulation instead contributes through its
+guidance loss and the gating statistics, and the decoded wrist
+survives monocular fallback. A MANO forward-kinematics
+layer maps ˆΘ to joints and vertices.
+3.8. Training and Supervision
+Training has two stages: the stereo image encoder is pre-
+trained with its geometric guidance, then the full model
+is trained jointly. The joint stage pairs the final forward-
+kinematics losses with intermediate guidance in both en-
+coders — the image encoder keeps its 2D and triangulation
+objectives, while the motion encoder reconstructs canonical
+joints, pose, and root velocity at the masked positions and
+classifies on-screen frames — teaching it temporal struc-
+ture and in-painting (details in Appendix B); every term is
+masked wherever its target is invalid. Alongside motion
+token masking, image-level augmentation (noise, erasing,
+whole-view and whole-frame blanking, the latter doubling
+as on-screen negatives) exposes the encoders to in-the-wild
+corruption. The overall objective is
+L = LFK + Limg + Lmot + Lon,
+(4)
+where LFK gathers joint, mesh, pose, shape, and wrist
+terms, Limg the image guidance, Lmot the masked recon-
+struction, and Lon the on-screen classification (all terms in
+Appendix B); no oracle signal is provided at test time. The
+full model trains in about two days on four RTX 4090 GPUs.
+4. ESTHER3D Benchmark
+ESTHER3D consists of two parts: a large in-the-wild train-
+ing set carrying model-generated metric pseudo-labels, and
+a motion-capture test set with true metric ground truth. Ev-
+ery frame carries per-hand MANO pose and shape, absolute
+metric wrist, calibrated camera parameters, 2D keypoint
+projections in both views, and hand bounding boxes. The
+5
+
+
+training set comes from a distributed program that collects
+raw in-the-wild stereo video with our rig across six indus-
+tries — about 194 hours from 121 collectors in 308 real
+venues, 44 scene categories, and roughly 800 manipulation
+tasks (Figure 5; breakdown in Appendix G) — covering
+what wearable systems actually meet: view-exits, object
+interactions, self-occlusion, rapid head motion, and asym-
+metric visibility (Figure 1). The test set is captured in a
+motion-capture studio mirroring the six industries (about 10
+hours, 6 subjects, 50 scripted tasks spanning 14 hand-action
+types; Appendix H).
+4.1. Model-Assisted Labeling and Iterative En-
+hancement
+ESTHER labels the raw collection at scale, in the spirit of
+depth data engines [44, 45] but grounded by stereo geometry
+and motion-capture validation: each prediction is refined
+by a light optimization under the DPoser-X prior and the
+2D evidence (2D keypoints in both views), then passes the
+same reprojection-plus-human filter as the teacher. Surviving
+labels enter the benchmark and feed back into training, each
+round yielding a stronger labeler and cleaner labels.
+Label quality. Judged from 2D alone, the in-the-wild
+labels reproject onto the 2D keypoints with a median residual
+of 5.3 px, i.e., 2.8 mm in the image plane, while the 6.0 cm
+stereo baseline still admits about 21 mm along the viewing
+ray. The label error is thus bracketed between about 3 and
+21 mm, and the teacher’s motion-capture error (15.9 mm P-
+MPJPE, 19.1 mm wrist) falls inside this band: metric depth,
+not image alignment, limits the labels, which is what the
+motion-capture test set measures (Appendix N).
+As the experiments show, training on ESTHER3D im-
+proves stereo accuracy, monocular-fallback accuracy, and
+cross-device generalization, transferring to a public bench-
+mark after minimal fine-tuning.
+5. Experiments
+The main text reports the controlled architecture compar-
+ison, the robustness studies, and the component ablation;
+remaining details are in Appendices A–O.
+5.1. Protocol and Metrics
+All trainable methods share the frozen backbone, data, losses,
+and budget, so the comparison isolates architecture. Eval-
+uation covers the ESTHER3D test set (zero-shot for every
+method) and HOT3D [1], zero-shot and after fine-tuning on
+10% of its data. We report P-MPJPE (wrist-relative per-joint
+error), PA-MPJPE, absolute wrist error (mm), and temporal
+jitter (m/s2; exact formula and on-screen gating protocol in
+Appendix L); ablations additionally report absolute MPJPE.
+Table 1. Main comparison. Errors in mm, jitter in m/s2. ES-
+THER3D test = real mocap GT, zero-shot (z.s.) for all methods;
+HOT3D reported zero-shot and after fine-tuning (f.t.) on 10% of
+HOT3D. Best per block in bold.
+Method
+P-MPJPE ↓
+PA-MPJPE ↓
+Wrist ↓
+Jitter ↓
+Hiera-FTL [33, 50]
+43.4
+10.0
+277
+79.5
+POEM-v2 [46]
+19.4
+8.9
+22.5
+8.5
+ESTHER3D
+MVGFormer [19]
+19.2
+8.9
+21.0
+8.7
+Epipolar Trans. [14]
+19.0
+9.0
+20.9
+13.3
+ESTHER (ours)
+17.7
+8.6
+21.3
+3.3
+Hiera-FTL [33, 50]
+103.2
+13.6
+324.3
+99.6
+MVGFormer [19]
+52.2
+9.2
+71.9
+31.5
+HOT3D z.s.
+POEM-v2 [46]
+49.7
+9.5
+66.4
+33.4
+Epipolar Trans. [14]
+48.3
+9.6
+83.8
+51.1
+ESTHER (ours)
+30.5
+8.0
+54.2
+20.9
+Hiera-FTL [33, 50]
+45.3
+18.9
+46.0
+52.8
+POEM-v2 [46]
+35.5
+16.7
+25.9
+23.7
+HOT3D f.t.
+Epipolar Trans. [14]
+35.1
+19.5
+45.4
+55.9
+MVGFormer [19]
+34.9
+18.7
+24.7
+23.2
+ESTHER (ours)
+29.5
+17.3
+20.8
+17.1
+Table 2. Missing-view robustness. One stereo view is dropped for
+the stereo-trained methods (ESTHER falls back via its view-mask
+token); monocular methods take their usual single view. Metrics as
+in Table 1.
+Method
+P-MPJPE ↓
+PA-MPJPE ↓
+Wrist ↓
+Jitter ↓
+Hiera-FTL [33, 50]
+65.2
+9.9
+217
+55.2
+HaWoR [48] (mono, temporal)
+43.8
+11.2
+97.3
+4.8
+HaMeR [29] (mono)
+36.3
+11.8
+100
+10.5
+ESTHER3D
+WiLoR [30] (mono)
+30.2
+11.1
+101.6
+9.5
+POEM-v2 [46]
+29.5
+9.7
+96.8
+8.8
+MVGFormer [19]
+28.9
+9.8
+97.1
+9.3
+Epipolar Trans. [14]
+27.0
+9.5
+171.7
+10.5
+ESTHER (ours)
+18.0
+9.0
+32.5
+4.3
+HaWoR [48] (mono, temporal)
+71.8
+29.3
+214
+26.9
+HaMeR [29] (mono)
+69.5
+17.4
+126.8
+96.4
+Hiera-FTL [33, 50]
+52.4
+18.7
+115.6
+53.3
+HOT3D f.t.
+Epipolar Trans. [14]
+42.1
+20.1
+93.2
+45.8
+MVGFormer [19]
+39.9
+22.9
+90.0
+23.3
+POEM-v2 [46]
+37.2
+19.7
+130.2
+22.7
+WiLoR [30] (mono)
+31.0
+15.9
+111.5
+91.8
+ESTHER (ours)
+30.2
+18.1
+33.9
+18.4
+5.2. Architecture Comparison
+Baselines. We compare three groups: (1) single-frame multi-
+view architectures adapted to two-view stereo — Epipolar
+Transformers [14], MVGFormer [19], POEM-v2 [46]; (2)
+the HOT3D challenge winner — a Hiera backbone [33] with
+FTL-style camera-aware fusion [50]; and (3) off-the-shelf
+monocular models — WiLoR [30], HaMeR [29], and the
+temporal HaWoR [48].
+Monocular wrist. The monocular methods predict a
+weak-perspective camera on the normalized crop, xcrop =
+s (X + tx), which involves no camera intrinsics. Because
+the MANO joints X are in meters, the scale s carries units
+of normalized crop per meter: metric scale already enters
+through MANO the moment s is predicted, and the hand
+lives directly in MANO metric coordinates. Writing the
+same point with the true pinhole, u = f (X + tx)/tz + c
+and xcrop = 2(u −cbox)/b for a crop box of side b pixels,
+and matching the coefficient of X gives s = 2f/(tzb), i.e.,
+tz = 2f/(s b), which is dimensionally meters. Recovering
+the wrist depth is thus a pure unit conversion rather than
+6
+
+
+GT
+ESTHER (ours)
+POEM-v2
+MVGFormer
+Epipolar
+Hiera-FTL
+GT
+ESTHER (ours)
+view dropped
+POEM-v2
+view dropped
+MVGFormer
+view dropped
+Epipolar
+view dropped
+Hiera-FTL
+view dropped
+WiLoR
+HaMeR
+HaWoR
+GT
+ESTHER (ours)
+POEM-v2
+MVGFormer
+Epipolar
+Hiera-FTL
+GT
+ESTHER (ours)
+view dropped
+POEM-v2
+view dropped
+MVGFormer
+view dropped
+Epipolar
+view dropped
+Hiera-FTL
+view dropped
+WiLoR
+HaMeR
+HaWoR
+ESTHER3D
+HOT3D
+Figure 6. Qualitative results on ESTHER3D and HOT3D: MANO meshes projected into both stereo views (pink right, blue left hand). Per
+block: top row full stereo, bottom row monocular.
+an intrinsic assumption, so their wrists are evaluated in the
+same metric camera frame as ESTHER’s.
+ESTHER3D test set. Against real ground truth (zero-
+shot for every method; Figure 6), ESTHER leads where
+stereo and temporal fusion matter: best pose (17.7 mm P-
+MPJPE) and three to four times lower jitter (3.3 versus 8.5–
+13.3 m/s2) — a dimension single-frame architectures cannot
+address — with a clean-frame wrist on par with the multi-
+view methods (21.3 versus 20.9–22.5 mm; its absolute-wrist
+design trades a hair of clean-frame accuracy for the missing-
+view robustness of Table 2), while Hiera-FTL’s anchor-free
+absolute head fails outright (277 mm wrist).
+External generalization. On HOT3D the gap widens:
+zero-shot, ESTHER’s pose error (30.5 mm) already beats the
+baselines after their fine-tuning, and fine-tuned it remains
+SOTA on pose, wrist, and jitter. PA-MPJPE is close across
+methods (Procrustes removes global rotation and scale). ES-
+THER is also nearly invariant to the HOT3D fisheye-to-
+pinhole rectification, unlike the baselines (Appendix M).
+5.3. Robustness
+One stereo view missing. We blank one entire view at
+inference — the frequent egocentric case where the hand
+leaves or is occluded in one camera.
+With a camera gone, the stereo baselines collapse in wrist:
+their triangulated anchor vanishes with the view. ESTHER
+degrades gracefully rather than collapsing: relative pose is
+nearly unchanged (17.7 →18.0 mm P-MPJPE, PA-MPJPE
+flat), while the absolute wrist — the depth cue the miss-
+ing view carried — loosens from 21.3 to 32.5 mm on ES-
+THER3D. This is still three to four times closer than any
+baseline, whose wrist stays at 97–217 mm; view-blanking
+training and the view-mask token let the model fall back
+to a single view without the wrist collapse that undoes the
+triangulation-anchored baselines. Even on a single grayscale
+view ESTHER surpasses the 1.3B-parameter video-diffusion
+model ViDiHand [40] at 355M total parameters (51M train-
+Table 3. Frame-dropping robustness as N of 16 frames are blanked
+and masked at inference, on the ESTHER3D test set and HOT3D.
+Each cell: P-MPJPE / PA-MPJPE / wrist (mm) / jitter (m/s2).
+N dropped / 16
+ESTHER3D
+HOT3D
+0
+17.7 / 8.6 / 21.3 / 3.3
+29.5 / 17.3 / 20.8 / 17.1
+2
+17.8 / 8.6 / 21.3 / 3.9
+29.7 / 17.5 / 20.9 / 18.2
+4
+17.8 / 8.6 / 21.4 / 4.7
+29.8 / 17.4 / 20.9 / 19.5
+6
+17.8 / 8.6 / 21.5 / 7.7
+29.8 / 17.4 / 21.2 / 23.8
+8
+17.8 / 8.6 / 21.5 / 5.4
+30.0 / 17.5 / 21.0 / 20.6
+able atop a frozen DINOv3-L backbone). This robustness
+comes from the stereo training regime and the view-mask to-
+ken together: stereo supervision instills a metric depth prior,
+and under it the token learns to complete depth from one
+view — as the brain does from a single eye — anchoring on
+scene context (objects, arm) to stay stable and generalizable
+when a view is lost (Sec. 5.4).
+Dropped frames. We drop N random frames from each
+16-frame clip (images blanked and tokens masked), sim-
+ulating the detection dropout that is routine in egocentric
+capture, where fast motion and occlusion break a per-frame
+detector. Dropping up to half the frames (8 of 16) leaves P-
+MPJPE, PA-MPJPE, and wrist essentially unchanged on both
+datasets (Table 3) — from N = 0 to N = 8 the ESTHER3D
+P-MPJPE shifts by 0.1 mm and the wrist by 0.2 mm — while
+only jitter rises, reflecting the extra frames interpolated be-
+tween surviving observations. This graceful degradation
+comes from the masked-frame objective, which teaches the
+motion encoder to in-paint missing frames from temporal
+context. Appendix J reports bootstrap confidence intervals
+for these gaps and Appendix K a failure-mode study under
+lighting, motion-blur, sensor-noise, and skin-tone shifts.
+5.4. Why the Monocular Fallback Stays Reliable
+Table 2 shows that dropping a stereo view costs ESTHER
+only a graceful wrist increase, not the collapse the anchor-
+based baselines suffer. We probe why, comparing three
+7
+
+
+Figure 7. Cross-attention into the kept view (two held-
+out scenes, four transformer blocks L1–L4). Pure-
+monocular and stereo attend almost identically to the
+hand; the view-mask placeholder instead spreads onto
+surrounding objects and the arm, using scene context
+as a depth reference.
+(a) stereo
+(b) view-mask token
+(c) pure-mono
+Figure 8. Held-out wrist-depth prediction vs. ground truth for
+(a) stereo, (b) the view-mask model with one view dropped,
+and (c) a separately-trained pure-monocular model. (a) and
+(b) track true depth (correlation 0.96/0.92, random scatter
+8/11 mm); (c) collapses (correlation 0.69, random scatter
+32 mm).
+configurations on the held-out motion-capture set: stereo
+(both views), view-mask (our model with one view dropped,
+its learned placeholder token standing in for the missing
+view), and pure-monocular — a model trained from scratch
+with the second view always removed (a separate checkpoint,
+not our model run monocularly).
+Attention (Figure 7).
+We visualize, across the four
+stereo-transformer blocks, the cross-attention that flows into
+the kept view. The pure-monocular model and the stereo
+model attend almost identically — both concentrate on the
+hand itself. The view-mask model is visibly different: its
+placeholder token queries beyond the hand, onto surrounding
+objects, the workspace, and the arm. Trained under stereo
+guidance, the token has learned to use scene context as a
+depth reference — the feed-forward analogue of the monoc-
+ular depth prior the human visual system falls back on with
+one eye — rather than relying on a disparity signal that is no
+longer present.
+Per-frame depth scatter (Figure 8). We fit ˆz = a zgt +b
+to the predicted wrist depth on held-out data and decompose
+the error into a systematic (linearly correctable) and a ran-
+dom (irreducible) part. Stereo tracks true depth tightly (cor-
+relation 0.96, random scatter 8 mm). The view-mask model
+stays close (correlation 0.92, random scatter 11 mm): it still
+knows how depth varies frame to frame, and its residual error
+is mostly a systematic scale compression that a single linear
+term removes. The pure-monocular model, despite being
+trained end-to-end for the single-view setting, collapses on
+held-out data — correlation drops to 0.69 and random scatter
+triples to 32 mm, i.e. it regresses toward a prior mean plus
+noise. The view-mask token thus keeps depth estimation
+low-variance and generalizable where a dedicated monoc-
+ular model overfits its training cues, which is exactly why
+ESTHER degrades gracefully under a missing view.
+Table 4. Component ablation on a subject-disjoint validation split
+of the pseudo-labeled data (absolute MPJPE, mm).
+Variant
+MPJPE ↓
+∆vs full
+Full ESTHER
+19.60
+–
+w/o Plucker ray embedding
+33.60
++14.0
+w/o cross-view attention
+28.70
++9.1
+w/o all guidance, masking, augmentation
+23.10
++3.5
+w/o flow token
+22.10
++2.5
+w/o 2D / heatmap guidance
+20.99
++1.4
+w/o image augmentation
+20.40
++0.8
+uniform gate (concat-style fusion)
+19.86
++0.3
+w/o triangulation guidance
+19.72
++0.1
+w/o motion token masking
+19.31
+−0.3
+triangulation-anchored wrist
+16.12
+−3.5
+5.5. Ablation
+We ablate every component under one budget (Table 4). Ge-
+ometry matters most: dropping the Plucker-ray embedding
+or cross-view attention is by far the most damaging, and the
+camera-motion flow token adds a clear gain. Masking and
+the absolute wrist slightly hurt clean accuracy but buy the
+robustness above.
+6. Conclusion
+We presented ESTHER, an end-to-end model for metric
+3D hand reconstruction from in-the-wild egocentric stereo,
+with ESTHER3D, its model-labeled and motion-capture-
+validated benchmark. ESTHER reaches state-of-the-art accu-
+racy with superior temporal smoothness and generalization,
+and a size-depth binding effect keeps its metric scale under
+a lost view, dropped frames, or monocular input. Detection-
+free streaming reconstruction and joint hand-object-body
+modeling are promising next directions.
+8
+
+
+References
+[1] Prithviraj Banerjee et al. HOT3D: Hand and Object Tracking
+in 3D from Egocentric Multi-View Videos. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 2025. 1, 2, 6
+[2] Yu-Wei Chao, Wei Yang, Yu Xiang, Pavlo Molchanov, Ankur
+Handa, Jonathan Tremblay, Yashraj S. Narang, Karl Van Wyk,
+Umar Iqbal, Stan Birchfield, Jan Kautz, and Dieter Fox.
+DexYCB: A Benchmark for Capturing Hand Grasping of
+Objects. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, 2021. 2
+[3] Xingyu Chen, Yufeng Liu, Chi Ma, Jianlong Chang, Huamin
+Wang, Yi Chen, Xiaoguang Guo, Pengfei Wan, and Wen
+Zheng. MobRecon: Mobile-Friendly Hand Mesh Reconstruc-
+tion from Monocular Image. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+2022. 2, 4
+[4] Dima Damen, Hazel Doughty, Giovanni Maria Farinella,
+Sanja Fidler, Antonino Furnari, Evangelos Kazakos, Da-
+vide Moltisanti, Jonathan Munro, Toby Perrett, Will Price,
+and Michael Wray. Scaling Egocentric Vision: The EPIC-
+KITCHENS Dataset. In European Conference on Computer
+Vision, 2018. 2
+[5] Enes Duran, Muhammed Kocabas, Vasileios Choutas, Zicong
+Fan, and Michael J. Black. HMP: Hand Motion Priors for
+Pose and Shape Estimation from Video. In Proceedings of the
+IEEE/CVF Winter Conference on Applications of Computer
+Vision (WACV), 2024. 3
+[6] Zicong Fan, Omid Taheri, Dimitrios Tzionas, Muhammed
+Kocabas, Manuel Kaufmann, Michael J. Black, and Otmar
+Hilliges. ARCTIC: A Dataset for Dexterous Bimanual Hand-
+Object Manipulation. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, 2023.
+1, 2
+[7] Guillermo Garcia-Hernando, Shanxin Yuan, Seungryul Baek,
+and Tae-Kyun Kim. First-Person Hand Action Benchmark
+with RGB-D Videos and 3D Hand Pose Annotations. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, 2018. 2
+[8] Kristen Grauman et al. Ego4D: Around the World in 3,000
+Hours of Egocentric Video. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+2022. 2
+[9] Kristen Grauman et al. Ego-Exo4D: Understanding Skilled
+Human Activity from First- and Third-Person Perspectives.
+In Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), 2024. 2
+[10] Shreyas Hampali, Mahdi Rad, Markus Oberweger, and Vin-
+cent Lepetit. HOnnotate: A Method for 3D Annotation of
+Hand and Object Poses. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+2020. 2, 3
+[11] Shangchen Han et al. UmeTrack: Unified Multi-View End-
+to-End Hand Tracking for VR. In SIGGRAPH Asia 2022
+Conference Papers, 2022. 2
+[12] Ryosei Hara, Wataru Ikeda, Masashi Hatano, and Mariko
+Isogawa. EventEgoHands: Event-based Egocentric 3D Hand
+Mesh Reconstruction. In IEEE International Conference on
+Image Processing (ICIP), 2025. 2
+[13] Yana Hasson, Gul Varol, Dimitrios Tzionas, Igor Kalevatykh,
+Michael J. Black, Ivan Laptev, and Cordelia Schmid. Learn-
+ing Joint Reconstruction of Hands and Manipulated Objects.
+In Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, 2019. 2
+[14] Yihui He, Rui Yan, Katerina Fragkiadaki, and Shoou-I Yu.
+Epipolar Transformers. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+2020. 2, 6
+[15] Karim Iskakov, Egor Burkov, Victor Lempitsky, and Yury
+Malkov. Learnable Triangulation of Human Pose. In Proceed-
+ings of the IEEE/CVF International Conference on Computer
+Vision, 2019. 1, 2
+[16] Glenn Jocher and Jing Qiu. Ultralytics YOLO11. https:
+//github.com/ultralytics/ultralytics, 2024.
+3
+[17] Taein Kwon, Bugra Tekin, Jan Stuhmer, Federica Bogo, and
+Marc Pollefeys. H2O: Two Hands Manipulating Objects
+for First Person Interaction Recognition. In Proceedings of
+the IEEE/CVF International Conference on Computer Vision,
+2021. 1, 2
+[18] Yuncheng Li, Zehao Xue, Yingying Wang, Liuhao Ge, Zhou
+Ren, and Jonathan Rodriguez. End-to-End 3D Hand Pose
+Estimation from Stereo Cameras. In British Machine Vision
+Conference (BMVC), 2019. 2
+[19] Ziwei Liao, Jialiang Zhu, Chunyu Wang, Han Hu, and
+Steven L. Waslander. Multiple View Geometry Transform-
+ers for 3D Human Pose Estimation.
+In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2024. 1, 2, 6
+[20] Kevin Lin, Lijuan Wang, and Zicheng Liu. Mesh Graphormer.
+In Proceedings of the IEEE/CVF International Conference
+on Computer Vision, 2021. 2
+[21] Yunze Liu et al.
+HOI4D: A 4D Egocentric Dataset for
+Category-Level Human-Object Interaction. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2022. 1, 2
+[22] Junzhe Lu, Jing Lin, Hongkun Dou, Ailing Zeng, Yue Deng,
+Xian Liu, Zhongang Cai, Lei Yang, Yulun Zhang, Haoqian
+Wang, and Ziwei Liu. DPoser-X: Diffusion Model as Robust
+3D Whole-body Human Pose Prior. In Proceedings of the
+IEEE/CVF International Conference on Computer Vision,
+2025. 3
+[23] Lingni Ma et al. Nymeria: A Massive Collection of Multi-
+modal Egocentric Daily Motion in the Wild. In European
+Conference on Computer Vision (ECCV), 2024. 2
+[24] Naureen Mahmood, Nima Ghorbani, Nikolaus F. Troje, Ger-
+ard Pons-Moll, and Michael J. Black. AMASS: Archive
+of Motion Capture as Surface Shapes. In Proceedings of
+the IEEE/CVF International Conference on Computer Vision
+(ICCV), 2019. 3
+[25] Gyeongsik Moon and Kyoung Mu Lee. I2L-MeshNet: Image-
+to-Lixel Prediction Network for Accurate 3D Human Pose
+and Mesh Estimation from a Single RGB Image. In European
+Conference on Computer Vision, 2020. 2
+9
+
+
+[26] Gyeongsik Moon, Shoou-I Yu, He Wen, Takaaki Shiratori,
+and Kyoung Mu Lee. InterHand2.6M: A Dataset and Baseline
+for 3D Interacting Hand Pose Estimation from a Single RGB
+Image. In European Conference on Computer Vision, 2020. 2
+[27] Takehiko Ohkawa, Kun He, Fadime Sener, Tomas Hodan,
+Minh Tran, Cem Keskin, Jamie Shotton, Dima Damen, Greg
+Mori, and Yoichi Sato. AssemblyHands: Towards Egocentric
+Activity Understanding via 3D Hand Pose Estimation. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, 2023. 1, 2
+[28] JoonKyu Park, Youngjoong Oh, Gyeongsik Moon, Hong-
+suk Choi, and Kyoung Mu Lee. HandOccNet: Occlusion-
+Robust 3D Hand Mesh Estimation Network. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2022. 2
+[29] Georgios Pavlakos, Dandan Shan, Ilija Radosavovic, Angjoo
+Kanazawa, David Fouhey, and Jitendra Malik. Reconstruct-
+ing Hands in 3D with Transformers.
+In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2024. 1, 2, 4, 6
+[30] Rolandos Alexandros Potamias, Jinglei Zhang, Jiankang
+Deng, and Stefanos Zafeiriou. WiLoR: End-to-End 3D Hand
+Localization and Reconstruction in-the-wild. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2025. 1, 2, 3, 4, 6
+[31] Davis Rempe, Tolga Birdal, Aaron Hertzmann, Jimei Yang,
+Srinath Sridhar, and Leonidas J. Guibas. HuMoR: 3D Human
+Motion Model for Robust Pose Estimation. In Proceedings of
+the IEEE/CVF International Conference on Computer Vision
+(ICCV), 2021. 3
+[32] Javier Romero, Dimitrios Tzionas, and Michael J. Black.
+Embodied Hands: Modeling and Capturing Hands and Bodies
+Together. ACM Transactions on Graphics, 36(6), 2017. 2
+[33] Chaitanya Ryali, Yuan-Ting Hu, Daniel Bolya, Chen Wei,
+Haoqi Fan, Po-Yao Huang, Vaibhav Aggarwal, Arkabandhu
+Chowdhury, Omid Poursaeed, Judy Hoffman, Jitendra Malik,
+Yanghao Li, and Christoph Feichtenhofer. Hiera: A Hierar-
+chical Vision Transformer without the Bells-and-Whistles. In
+International Conference on Machine Learning, 2023. 6
+[34] Kyeongeun Seo, Hyeonjoong Cho, Daewoong Choi, and Tae-
+wook Heo. Stereo Feature Learning Based on Attention and
+Geometry for Absolute Hand Pose Estimation in Egocentric
+Stereo Views. IEEE Access, 9:116083–116093, 2021. 2
+[35] Md Salman Shamil, Dibyadip Chatterjee, Fadime Sener,
+Shugao Ma, and Angela Yao. On the Utility of 3D Hand
+Poses for Action Recognition. In European Conference on
+Computer Vision, 2024. 2
+[36] Oriane Sim´eoni, Huy V. Vo, Maximilian Seitzer, Federico
+Baldassarre, Maxime Oquab, Cijo Jose, Vasil Khalidov, Marc
+Szafraniec, Seungeun Yi, Micha¨el Ramamonjisoa, Francisco
+Massa, Daniel Haziza, Luca Wehrstedt, Jianyuan Wang, Tim-
+oth´ee Darcet, Th´eo Moutakanni, Leonel Sentana, Claire
+Roberts, Andrea Vedaldi, Jamie Tolan, John Brandt, Camille
+Couprie, Julien Mairal, Herv´e J´egou, Patrick Labatut, and
+Piotr Bojanowski. DINOv3, 2025. 4
+[37] Hanyue Tu, Chunyu Wang, and Wenjun Zeng. VoxelPose:
+Towards Multi-Camera 3D Human Pose Estimation in Wild
+Environment. In European Conference on Computer Vision,
+2020. 2
+[38] Luming Wang, Hao Shi, Jiajun Zhai, Kailun Yang, and Kai-
+wei Wang. EgoEV-HandPose: Egocentric 3D Hand Pose
+Estimation and Gesture Recognition with Stereo Event Cam-
+eras. arXiv preprint arXiv:2605.12297, 2026. 2
+[39] Tao Wang, Jianfeng Zhang, Yujun Cai, Shuicheng Yan, and
+Jiashi Feng. Direct Multi-view Multi-person 3D Pose Estima-
+tion. In Advances in Neural Information Processing Systems,
+2021. 2
+[40] Yuxi Wang, Chengkai Jin, Yufei Liu, Wenqi Ouyang, Tianyi
+Wei, Zhiwei Zeng, Siyuan Huang, Zhiqi Shen, and Xingang
+Pan. The Surprising Effectiveness of Video Diffusion Models
+for Hand Motion Reconstruction, 2026. 7
+[41] Yilin Wen, Hao Pan, Lei Yang, Jia Pan, Taku Komura, and
+Wenping Wang. Hierarchical Temporal Transformer for 3D
+Hand Pose Estimation and Action Recognition from Ego-
+centric RGB Videos. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, 2023.
+2
+[42] Yufei Xu, Jing Zhang, Qiming Zhang, and Dacheng Tao. ViT-
+Pose: Simple Vision Transformer Baselines for Human Pose
+Estimation. In Advances in Neural Information Processing
+Systems (NeurIPS), 2022. 3
+[43] Lixin Yang, Xinyu Zhan, Kailin Li, Wenqiang Xu, Jiefeng Li,
+and Cewu Lu. OakInk: A Large-Scale Knowledge Repository
+for Understanding Hand-Object Interaction. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2022. 1, 2
+[44] Lihe Yang, Bingyi Kang, Zilong Huang, Xiaogang Xu, Jiashi
+Feng, and Hengshuang Zhao. Depth Anything: Unleashing
+the Power of Large-Scale Unlabeled Data. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2024. 6
+[45] Lihe Yang, Bingyi Kang, Zilong Huang, Zhen Zhao, Xiao-
+gang Xu, Jiashi Feng, and Hengshuang Zhao. Depth Anything
+V2. In Advances in Neural Information Processing Systems,
+2024. 6
+[46] Lixin Yang, Licheng Zhong, Pengxiang Zhu, Xinyu Zhan,
+Junxiao Kong, Jian Xu, and Cewu Lu. Multi-view Hand
+Reconstruction with a Point-Embedded Transformer, 2024.
+1, 2, 6
+[47] Zhengdi Yu, Stefanos Zafeiriou, and Tolga Birdal.
+Dyn-
+HaMR: Recovering 4D Interacting Hand Motion from a Dy-
+namic Camera. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), 2025.
+2, 5
+[48] Jinglei Zhang, Jiankang Deng, Chao Ma, and Rolan-
+dos Alexandros Potamias. HaWoR: World-Space Hand Mo-
+tion Reconstruction from Egocentric Videos. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 2025. 2, 5, 6
+[49] Christian Zimmermann, Duygu Ceylan, Jimei Yang, Bryan
+Russell, Max Argus, and Thomas Brox.
+FreiHAND: A
+Dataset for Markerless Capture of Hand Pose and Shape
+from Single RGB Images. In Proceedings of the IEEE/CVF
+International Conference on Computer Vision, 2019. 2, 3
+10
+
+
+[50] Minqiang Zou, Zhi Lv, Riqiang Jin, Tian Zhan, Mochen Yu,
+Yao Tang, and Jiajun Liang. 1st Place Solution of Multiview
+Egocentric Hand Tracking Challenge ECCV2024, 2024. 6
+11
+
+
+Appendix
+A. Teacher Pipeline Details
+The 2D evidence is produced by an ensemble of detectors
+(YOLO11-pose and ViTPose) run independently on both
+rectified pinhole views. Each detector d ∈{1, 2} returns, for
+every one of the 21 hand joints j, a 2D location ud
+j and a per-
+joint confidence cd
+j, and each hand box a detector-level score
+sd. Their outputs are fused by a confidence-guided selection
+in the spirit of WiLoR. With the valid set Vj = {d : cd
+j ≥τ}
+(threshold τ=0.3), the fused keypoint is
+ˆuj =
+
+
+
+
+
+c1
+ju1
+j + c2
+ju2
+j
+c1
+j + c2
+j
+,
+|Vj| = 2 and ∥u1
+j −u2
+j∥≤ϵ wb,
+ud⋆
+j ,
+otherwise,
+(5)
+where d⋆= arg maxd∈Vj cd
+j (near-ties broken by the box
+score sd), wb is the hand-box side, and joints with Vj = ∅
+are dropped. The agreement radius is ϵ=0.1 (two detections
+are averaged only if they fall within 10% of the hand-box
+side of each other); it is set to about one MANO joint spac-
+ing at the working hand scale and the fusion is insensitive
+to it in the 0.08–0.15 range. In words: two detectors that
+agree are averaged with confidence weights, a lone confi-
+dent detector is trusted, and disagreements fall back to the
+higher-confidence estimate — retaining each detector’s reli-
+able keypoints while suppressing the isolated false positives
+that either produces alone. The stereo filtering stage then
+removes geometrically implausible detections in two steps.
+First, joints whose triangulated depth falls outside the 0.1–
+1.0 m hand-camera range typical of head-mounted capture
+are rejected. Second, a structural constraint on the relative
+distances between wrist and finger joints removes isolated
+matches whose reconstructed bone lengths deviate by more
+than 40% from the canonical MANO template. The surviv-
+ing stereo-consistent keypoints and coarse 3D anchors form
+the observation set V of the fitting objective
+Lfit =λ2dL2d + λpRpose(θ)
++ λb∥β −β0∥2
+2 + λt∥t −t0∥2
+2,
+(6)
+where L2d is a robust reprojection loss between projected
+MANO joints and the filtered stereo keypoints over both
+views. Triangulation serves as both the initialization and a
+soft constraint: the triangulated wrist depth ˆzwrist seeds the
+global translation t0, and the mild λt∥t −t0∥2
+2 term then
+anchors the solution loosely to it while L2d drives the fit.
+The weight λt is small, so this is a soft prior the reprojection
+can override, not a hard depth constraint. The WiLoR ini-
+tialization fuses the left- and right-view MANO estimates by
+averaging their parameters after transforming both into the
+calibrated stereo frame.
+The optimization runs in two stages. Stage 1 (shape
+lock) selects the 64 frames with the highest stereo detec-
+tion confidence, optimizes (β, θ, t) jointly on them under
+Lfit, and averages the per-frame shapes into a single ¯β per
+hand. Stage 2 re-optimizes pose and wrist per frame with
+¯β fixed, then applies motion optimization over 16-frame
+sliding windows with the objective
+Lmotion =
+X
+t
+h
+λ2d L2d,t + λz ρ
+ t(t)
+z
+−ˆz(t)
+wrist
+
++ λω ρ
+ ∠(ϕt+1, ϕt) −ωmax
+
++ λv ρ
+ ∥tt+1 −tt∥−vmax
+i
++ λm Rmotion
+ θt:t+15
+
+,
+(7)
+where ϕt is the global (wrist) orientation, i.e. the root axis-
+angle component of the pose θt itself (its last three entries
+in the MANO parameterization); the angular penalty thus
+acts on a sub-vector of θt, and ∠(·, ·) is the geodesic angle
+between consecutive orientations. As in Stage 1, the triangu-
+lated wrist depth ˆz(t)
+wrist enters only as the same soft anchor
+on the per-frame depth t(t)
+z
+(small weight λz, robust ρ); the
+reprojection term can override it, so it is a prior rather than a
+hard depth constraint. Here, as in L2d, ρ is the Huber func-
+tion (quadratic within a small threshold δ, linear beyond),
+which down-weights single-frame outliers. It acts on the raw
+residual for the depth anchor and on the excess over the limit
+for the two velocity terms, so the velocity penalty is one-
+sided and active only above ωmax and vmax (ωmax ≈300◦/s
+and vmax ≈1.5 m/s at 30 fps); the orientation term carries the
+larger weight (λω > λv), because over a short 16-frame win-
+dow the global translation t is partly confounded by camera
+motion and is therefore constrained more loosely. Rmotion
+is the energy of a 16-frame motion prior, from an encoder
+pretrained on AMASS, over the pose trajectory θt:t+15; it
+scores the orientation and articulation dynamics of the hand
+and is independent of the global translation. The smoothing
+weights are derived from the prior’s gradient feedback and
+from inter-frame differences, so windows with implausible
+dynamics receive stronger regularization while genuinely
+fast motion is preserved.
+The pipeline uses stereo only where it is geometrically
+reliable and lets the hand model and priors regularize un-
+observed structure: under hand-object occlusion or self-
+occlusion the desired annotation is a structured articulated
+state with semantic joints, MANO shape, and global wrist
+translation, not the depth of whatever surface happens to be
+visible. This suits egocentric capture, where hand size, cam-
+era distance, and wrist-centered motion occupy a constrained
+range.
+The filtering above (confidence, depth range, bone-length
+plausibility) is the coarse first stage: it pre-screens the in-
+put 2D evidence before fitting. The fitted per-sequence
+labels then pass two further stages before entering ES-
+THER3D. Stage two is a fine 2D check: it reprojects each
+12
+
+
+fitted hand into both views and computes the residual r, the
+mean pixel distance to the fused keypoints over all joints
+of both views with confidence above τ; hand-frames with
+r > 15 px are discarded. Stage three is human review for the
+residual failures the automatic stages cannot catch (wrong
+hand identity, implausible articulation). This coarse (bone-
+length/depth) →fine (2D reprojection) →human screen is
+the three-stage filter referenced in the main text.
+B. Loss Definitions and Weights
+Training proceeds in the two stages of the main text: the
+stereo image encoder is first pretrained under its geometric
+guidance, then the full model is trained jointly.
+Stage 1 — image-encoder pretraining. The image en-
+coder is trained alone under the geometric guidance group
+Limg = λ2dL2d + λhmLhm + λtriLtri with λ2d=0.5,
+λhm=1.0, λtri=1.0. The 2D loss is a Huber loss on pixel-
+normalized coordinates, masked by per-view, per-joint visi-
+bility; a blanked view contributes no 2D or heatmap supervi-
+sion. The heatmap loss is a cross-entropy against Gaussian
+soft targets on the prediction grid. The triangulation loss is
+an L1 loss between Xtri and metric 3D joints, applied only
+to joints visible in both views. Visibility is supervised with
+binary cross-entropy from in-frame projection validity, and
+depth bins with cross-entropy over log-spaced bins.
+Stage 2 — joint training of the full model. The im-
+age encoder (keeping its Stage-1 guidance) is joined by
+the motion encoder and fusion decoder and trained end-to-
+end. The decoder output is mapped through the MANO
+forward-kinematics layer, and LFK combines L1 losses on
+reference-frame joints and canonical (wrist-relative) joints,
+an L1 mesh vertex loss, a geodesic rotation loss and 6D
+consistency term on pose, an L1 shape loss, an L1 wrist
+translation loss, and articulated priors (PCA pose prior, joint-
+limit prior, and shape regularization), with weights λJ=1.0,
+λJcan=1.0, λV =0.5, λθ=1.0, λ6d=0.2, λβ=0.01, λt=2.0,
+and prior weights 0.1/0.05/0.02. In the same stage the
+motion encoder is supervised at masked positions, recon-
+structing canonical 3D joints (L1, per masked joint), MANO
+pose (L1, per masked frame), and root velocity (L1 on frame
+differences), summed as Lmot with weight λmot=0.5; the
+on-screen term Lon is a binary cross-entropy against a per-
+frame label marking whether the hand is visible in at least
+one non-blanked view, with weight λon=0.5.
+C. Masking and Augmentation Recipe
+Token masking rates: per-joint 0.20, whole-frame 0.10, con-
+tiguous temporal span 0.10 (span length 3), whole-view drop
+0.05 (the first three via the motion mask token, the last via
+the view-mask token); anchor frames (every T/4) are kept
+fully observed. Masked 2D observations always mask their
+associated ray information. Image augmentation: per-view
+Gaussian noise with standard deviation up to 0.08; random
+erasing with probability 0.5 (two rectangles covering 10–
+40% of each side); whole-view blanking with probability
+0.12; whole-frame blanking with probability 0.08, which
+also provides on-screen negatives.
+D. Camera-Motion Flow Token
+The flow token is the dense classical optical flow of the
+whole crop between two consecutive frames, encoded di-
+rectly as a conditioning input. It uses a fast learning-free
+dense estimator over all crop pixels (the hand is not masked
+out), runs online per frame, and needs no ground truth, so
+every frame carries a token.
+The crops are hand-following: each frame’s crop has its
+own intrinsic Kt (its centre and scale track the detected hand
+every frame), so even a static camera produces apparent
+motion purely from the moving crop window. Using the
+crop intrinsics — known at inference — we compensate
+this before measuring flow: the previous crop is warped by
+the homography Ht = Kt+1K−1
+t
+into the current crop’s
+coordinates, so the crop-follow displacement cancels and the
+remaining flow reflects real scene motion under the camera.
+Dense flow on this compensated pair is downsampled by
+median pooling over an 8 × 8 grid, normalized by the 224-
+pixel crop side, with a per-cell in-frame validity flag:
+ft = [vec(Ft/224), vec(Mt)] ∈R192,
+(8)
+where Ft ∈R8×8×2 is the flow grid (128 values) and
+Mt ∈{0, 1}8×8 (64 values) marks in-frame cells, for
+128+64=192 dimensions; median pooling rejects flow out-
+liers.
+Crucially, the token carries the full motion field — the
+camera egomotion and the hand’s own motion together —
+and we do not separate them by hand. The token is fed
+to the motion encoder directly and, being a conditioning
+input rather than a reconstruction target, is never part of the
+random token-masking objective. The image and motion
+tokens, by contrast, are masked during training; unable to
+lean on the masked appearance, the encoder is forced to read
+the global, scene-wide component of the flow as camera
+motion and attribute the residual, hand-localized component
+to articulation. The decoupling of hand and camera motion
+is thus learned from this always-present flow cue, rather than
+absorbing head or crop motion into finger pose.
+E. Implementation Details
+The model dimension is 512 with 8 attention heads: 4 stereo-
+transformer blocks, 4 temporal-transformer blocks, and 2
+fusion-decoder layers over 16-frame clips. The full model
+totals 354.5M parameters, of which the frozen DINOv3-L
+backbone accounts for 303.1M; the trainable remainder is
+51.3M (image-encoder blocks and heads 21.9M, motion en-
+coder 12.8M, fusion decoder 16.6M). The decoder gate of
+each query is predicted by an MLP from the query state, the
+13
+
+
+pooled mean of each source, and four evidence statistics:
+the mean and minimum predicted visibility, the magnitude
+of the triangulated wrist, and the triangulation spread. The
+DINOv3-L backbone is frozen. The image encoder is pre-
+trained, then the full model is trained jointly with AdamW
+(learning rate 2 × 10−4, cosine schedule, 500 warmup steps,
+gradient clipping 1.0, bfloat16 autocast, losses in fp32). Left
+hands are handled by mirroring the stereo rig, and predic-
+tions are un-mirrored for evaluation and projection. At de-
+ployment the detector is used only for hand localization,
+cropping, and left-right stereo matching.
+F. Camera Setups
+Our head-mounted RGB stereo rig is two synchronized color
+cameras on a rigid headband with a 6.2 cm baseline, cal-
+ibrated once per device. It is a pinhole pair — per eye,
+focal 624 px and principal point (924, 606) at 1920 × 1200
+— which is what the network sees directly. The HOT3D
+devices instead carry strongly distorted wide-FOV fisheye
+cameras: both Project Aria and Quest 3 use the Fisheye624
+model (FisheyeRadTanThinPrism: six radial, two tangential,
+and four thin-prism coefficients), on monochrome streams
+(640 × 480 for Aria, 1280 × 1024 for Quest 3). Table 5 lists
+the per-eye resolution, focal length, and baseline of every
+setup; full intrinsics, distortion, and extrinsics are released
+with the benchmark. Rectifying these fisheye views to pin-
+hole is a design choice, so we ablate several undistortion
+strategies (Appendix M, Table 8); the HOT3D numbers in
+the main text use the strategy with the best average accuracy,
+and ESTHER is in any case nearly invariant to the choice.
+Why rectify HOT3D to pinhole. The HOT3D fisheye
+streams are undistorted to a pinhole crop before they enter
+the model, for two reasons. First, the 2D hand detectors
+(YOLO11-pose, ViTPose) are trained on perspective im-
+agery and localize markedly worse on curved fisheye frames;
+rectification restores straight-line geometry and thus reliable
+detection and cropping. Second, a pinhole crop makes the
+Plucker-ray tokens trivial to compute — each pixel back-
+projects to a single straight ray through K−1 — and matches
+the parameterization our RGB rig already provides, so the
+same network consumes the HOT3D fisheye rigs unchanged.
+Undistortion and its costs.
+For the Fisheye624
+HOT3D cameras we unproject each pixel with the released
+model and reproject onto a pinhole camera, baking the
+fisheye→undistort→crop→resize chain into a single per-
+crop intrinsic K. Rectifying a wide-FOV fisheye to a pinhole
+plane is not free: the periphery is magnified, so edge pixels
+are upsampled and lose effective resolution; the full field of
+view cannot map to a finite pinhole image, so only a central
+FOV is kept and hands near the rim can be cropped out;
+and the distortion model leaves a growing residual repro-
+jection error toward large incidence angles. Together with
+the grayscale modality and different focal length, this is the
+Table 5. Camera setups used in this work (per-eye resolution and
+focal length; stereo baseline). Fisheye rigs are rectified to pinhole
+before use.
+Setup
+Resolution
+Focal (px)
+Baseline (mm)
+Modality
+Collection rig (ours)
+1920 × 1200
+623
+62
+RGB
+Test-set rig (mocap)
+1920 × 1200
+623
+62
+RGB
+HOT3D Project Aria
+640 × 480
+241
+138
+monochrome
+HOT3D Quest 3
+1280 × 1024
+504
+64
+monochrome
+domain gap that the small HOT3D fine-tuning (main text)
+closes.
+G. ESTHER3D Training Set: In-the-Wild Source
+Collection
+The training set of ESTHER3D is the in-the-wild source
+collection, which comprises about 194 hours of egocen-
+tric stereo video spanning six industry categories, 44 scene
+categories, and 308 distinct real-world venues, with about
+800 distinct manipulation tasks performed by 121 collectors
+(main text). Below we list the scene categories and represen-
+tative manipulation tasks per industry, ordered by prevalence;
+Figure 9 shows examples of these in-the-wild scenes.
+Retail (44.0 h; 11 scene categories, 44 venues). Con-
+venience stores dominate, followed by department stores,
+supermarkets, clothing stores, daily-goods stores, food and
+beverage retail, leather fashion, hardware and tool shops, and
+toy stores. Representative tasks: stocking and displaying
+merchandise, arranging bagged and boxed snacks, hanging
+cable and accessory products, arranging bracelets and orna-
+ments, tidying shelves, folding and arranging garments, and
+cleaning the store.
+Household (40.0 h; 8 scene categories, 71 venues). Multi-
+story rural homes, penthouse apartments, and apartments of
+diverse layouts from one-bedroom to duplex. Representative
+tasks: cleaning floors, making beds, organizing clothes and
+wardrobes, tidying kitchens, bedrooms, and living rooms,
+arranging desktop items and sofa cushions, washing dishes,
+wiping surfaces, and cooking.
+Dining (32.0 h; 8 scene categories, 57 venues). Fast-
+food restaurants in urban, village, and roadside settings, tea
+houses, cafes and drink shops, dine-in restaurants and barbe-
+cue venues, and food stalls. Representative tasks: arranging
+tables and chairs, cleaning counters and table tops, sweeping
+and mopping, laying out tableware, clearing dishes, washing
+kitchen containers, and sorting vegetables.
+Life services (30.0 h; 6 scene categories, 44 venues).
+Auto repair shops, daily-service shops, beauty salons, and
+electronics, phone, and motorcycle repair shops. Representa-
+tive tasks: removing and installing car headlight parts, chas-
+sis repair, phone repair, applying screen protectors, cleaning
+devices and counters, organizing tools, washing hair, and
+washing towels.
+Factory (26.0 h; 5 scene categories, 42 venues). Printing
+and book-printing workshops, metalwork shops for tools
+14
+
+
+t = 0 s
++0.2 s
++0.4 s
++0.6 s
++0.8 s
+L
+R
+Retail
+L
+R
+Household
+L
+R
+Dining
+L
+R
+Life services
+L
+R
+Factory
+L
+R
+Office
+Figure 9. ESTHER on in-the-wild ESTHER3D scenes across six industries. Each block shows five timesteps of one scene (columns, spaced
+0.2 s apart); per timestep ESTHER’s MANO meshes are projected into both stereo eyes side by side — marked L (left) and R (right); pink
+right, blue left hand — with the same metric meshes in 3D below.
+and doors, and wooden furniture workshops. Representative
+tasks: operating the main workstation, cutting panels, grind-
+ing and polishing, repairing machinery and press machines,
+positioning and punching, carrying materials, and packaging
+profiles.
+Office (22.0 h; 6 scene categories, 50 venues). Corporate
+office towers and government service centers. Representa-
+tive tasks: tidying office desks, arranging bookshelf items,
+tidying reception coffee tables and tea sets, cleaning office
+areas, and clearing floor litter.
+H. ESTHER3D Test Set: Motion-Capture Studio
+The test set of ESTHER3D is captured in a motion-
+capture studio by the same head-mounted stereo rig (Kalibr-
+calibrated, 6.2 cm baseline) synchronized with a Vicon
+system, giving true metric ground truth (glove-solved
+MANO/BVH hand skeletons plus raw marker trajectories).
+It totals about 10 hours from 6 subjects over 50 scripted ma-
+nipulation tasks, distributed across six instrumented scene
+zones that mirror the six training industries: retail shelv-
+ing (12 tasks), a life-services walking/inspection corridor
+(10), housekeeping (8), factory workbench (7), office re-
+ception (7), and dining (6). Each zone uses high-texture
+backgrounds so the on-board visual odometry stays stable,
+and every method is evaluated zero-shot.
+To cover manipulation broadly, the protocol is organized
+around a taxonomy of 14 elementary hand actions, and the
+15
+
+
+50 tasks are designed so that every action is exercised. Each
+action maps to a concrete manipulation: wipe (surface and
+equipment cleaning), grasp (picking goods and tools), place
+(aligning and setting down), twist (screw- and cap-turning),
+fold/spread (folding garments, bed-making), gather (clearing
+and tidying), shelve (restocking, book returns), press (but-
+tons and switches), carry (two-handed lifting), flip (turning
+objects and pages), point (guiding and reception gestures),
+bimanual (asymmetric two-hand assembly and packaging),
+pinch (fine part- and screw-picking), and hand-over (pass-
+ing an object to another person). Table 1 of the main pa-
+per reports the per-method accuracy on this set. Figure 10
+visualizes the motion-capture ground truth used for evalua-
+tion: glove-solved MANO hand skeletons projected into the
+head-mounted camera across six test sequences and seven
+timesteps each.
+I. Teacher Pipeline Validation
+We validate the teacher pipeline on the motion-capture test
+set of Appendix H, where it runs without access to the ground
+truth.
+Ground-truth-to-camera chain. Predictions are com-
+pared to ground truth directly in the camera frame, with no
+per-clip alignment. The camera’s per-frame six-degree-of-
+freedom pose in the mocap world comes from a four-marker
+rigid body on the rig combined with the calibrated device-
+to-camera extrinsic; ground-truth hands are mapped into
+the camera via a fixed similarity solved from wrist markers
+(residual 10.4 mm, approximately the joint-versus-marker
+offset). Each link of the chain is verified independently:
+forward-kinematics bone lengths, joint correspondence via
+a shuffle test, and time synchronization solved twice by un-
+related procedures — a model-free marker-versus-detection
+alignment and a pose-based sweep — agreeing to 10 ms.
+Evaluation uses 60 detection-reliable clips of 16 frames,
+both hands.
+The teacher’s accuracy on this set (and the per-method
+comparison) is reported in the main text; here we only give
+the measurement chain above and additional ground-truth
+examples in Figure 10.
+J. Statistical Rigor: Bootstrap Confidence Intervals
+All architectures in Table 1 share the same frozen image
+evidence, training data, forward-kinematics losses, budget,
+and a single fixed seed, so the comparison isolates the fusion
+architecture. To test whether the reported gaps — the jitter
+margin in particular — could be a sampling or single-run ar-
+tifact, we bootstrap the ESTHER3D motion-capture test set:
+2000 resamples of its 120 per-clip scores give a mean, stan-
+dard deviation, and 95% confidence interval per method and
+metric (Table 6). ESTHER’s pose and temporal smoothness
+are separated from every baseline by non-overlapping inter-
+vals: its P-MPJPE interval [16.9, 18.7] lies entirely below the
+Table 6. Bootstrap statistics on the ESTHER3D test set (120 clips,
+2000 resamples): mean ± std. Errors in mm, jitter in m/s2. ES-
+THER’s P-MPJPE and jitter 95% intervals do not overlap any
+baseline’s.
+Method
+P-MPJPE ↓
+PA-MPJPE ↓
+Wrist ↓
+Jitter ↓
+Hiera-FTL
+43.4 ± 1.2
+10.0 ± 0.2
+277 ± 5
+79.5 ± 3.6
+Epipolar Trans.
+19.0 ± 0.5
+9.0 ± 0.1
+20.9 ± 0.5
+13.3 ± 0.4
+MVGFormer
+19.2 ± 0.6
+8.9 ± 0.1
+21.0 ± 0.4
+8.7 ± 0.3
+POEM-v2
+19.4 ± 0.6
+8.9 ± 0.1
+22.5 ± 0.4
+8.5 ± 0.3
+ESTHER (ours)
+17.7 ± 0.4
+8.6 ± 0.1
+21.3 ± 0.5
+3.3 ± 0.1
+best baseline’s [18.1, 20.0], and its jitter interval [3.10, 3.52]
+lies entirely below the best baseline’s [7.98, 9.17] — even
+the top of ESTHER’s jitter interval is less than half the bot-
+tom of any baseline’s. The 3–4× jitter advantage is therefore
+statistically significant, not a seed run; ESTHER’s wrist
+(21.3 mm) is on par with the best multi-view methods. Ta-
+bles 2 and 3 are deterministic perturbation sweeps of this
+same model and carry no seed variance; the bootstrap here
+quantifies the sampling variance of the headline comparison.
+K. Failure-Mode Robustness
+Beyond the missing views and dropped frames of the main
+text, we stress ESTHER with seven photometric and tem-
+poral corruptions applied to the ESTHER3D test frames,
+spanning the main egocentric failure modes: over- and under-
+exposure and non-linear gamma (lighting), motion blur, sen-
+sor noise, a hue shift (skin tone / color), and desaturation
+(Table 7, Figure 11). The gloved appearance gap is the test
+condition itself (Appendix H): ESTHER is trained on bare
+in-the-wild hands, yet every number here is measured on the
+gloved motion-capture subject, so the bare-hand-to-gloved
+shift is already priced in.
+Across all seven corruptions the metrics barely move:
+P-MPJPE stays within 0.5 mm of the clean 17.7 (worst
+case 18.2 under sensor noise), PA-MPJPE within 0.2 mm,
+wrist within about 2 mm of the clean 21.3, and jitter within
+0.4 m/s2. Frozen DINOv3 evidence and heavy training-time
+image augmentation make the encoder largely appearance-
+invariant, and the temporal motion encoder absorbs blur as
+it absorbs dropped frames. Skin-tone (hue) and illumination
+shifts in particular leave pose essentially unchanged (17.7
+versus 17.7 clean).
+L. On-Screen Gating and Jitter Protocol
+Jitter definition. Jitter is the mean second temporal differ-
+ence of the joint positions, ∥St−1 −2St + St+1∥averaged
+over the 21 joints and scaled by fps2 (fps = 30), taken only
+over triplets whose three frames are all on-screen. No ac-
+celeration is formed across an off-screen frame or an on/off
+boundary, so a hand that is gated off contributes nothing to
+jitter.
+On-screen gating and off-screen frames. A hand is
+on-screen (ground truth) when at least half of its 21 joints
+16
+
+
+L
+R
+Seq 1
+0.00 s
+0.13 s
+0.27 s
+0.40 s
+0.53 s
+0.67 s
+0.80 s
+L
+R
+Seq 2
+L
+R
+Seq 3
+L
+R
+Seq 4
+L
+R
+Seq 5
+L
+R
+Seq 6
+Figure 10. Motion-capture ground truth of the ESTHER3D test set. Six sequences (Seq 1–6), each shown as two rows — the left eye (L,
+cam0) and right eye (R, cam1) of the head-mounted stereo rig — across seven timesteps (columns, labeled by time). The ground-truth hands
+(MANO fitted to the motion-capture hand joints) are projected into each view; they are the true metric supervision against which all methods
+are evaluated zero-shot.
+17
+
+
+(a) clean
+(b) over-exp.
+(c) low light
+(d) gamma 2.2
+(e) motion blur
+(f) sensor noise
+(g) hue shift
+(h) desaturate
+Figure 11. ESTHER under input corruptions on an ESTHER3D motion-capture clip: MANO meshes projected on the degraded left view
+(top) and shown in 3D (bottom), for the clean input (a) and seven corruptions (b–h) spanning lighting, blur, noise, and color shifts. The mesh
+stays stable throughout.
+Table 7. ESTHER under input corruption on the ESTHER3D test
+set. Errors in mm, jitter in m/s2; every row is within noise of the
+clean condition.
+Corruption
+P-MPJPE
+PA-MPJPE
+Wrist
+Jitter
+clean
+17.7
+8.60
+21.3
+3.31
+over-exposure (×1.6)
+17.6
+8.66
+20.1
+3.71
+low light (×0.5)
+17.7
+8.57
+21.5
+3.34
+gamma 2.2
+17.7
+8.49
+21.9
+3.33
+motion blur (k=15)
+18.0
+8.66
+19.5
+3.24
+sensor noise (σ=25)
+18.2
+8.68
+21.6
+3.73
+hue shift (+25, skin tone)
+17.7
+8.60
+21.9
+3.37
+desaturate (×0.4)
+17.8
+8.64
+22.1
+3.39
+project inside the image in at least one eye; ESTHER predicts
+a per-frame on-screen probability that we threshold at 0.5.
+Pose, wrist, and jitter are scored only on on-screen frames
+— off-screen frames have no valid target and are excluded —
+so the gate decides which frames enter every metric.
+Gate accuracy and its effect on jitter. On the motion-
+capture test set the gate is exact: precision, recall, and F1 are
+all 1.00 over 1920 hand-frames (no false positives or nega-
+tives), so the all-frame, ground-truth-gated, and prediction-
+gated jitter coincide at 3.31 m/s2 — the reported value does
+not depend on the gating protocol here. To probe gate errors
+we run an off-screen stress test that blanks the middle four
+frames of every clip. The gate flags them off-screen (re-
+call 1.00); prediction-gated jitter holds at 3.35 m/s2, whereas
+ungated jitter rises to 4.61 because the on/off/on transition
+injects a spurious acceleration spike. A missed off-screen
+frame (a false negative) would thus inflate jitter through such
+boundary spikes; the gate is what keeps the metric clean.
+M. HOT3D Undistortion-Strategy Robustness
+Because the HOT3D cameras are wide-FOV Fisheye624
+(Appendix F), the rectified pinhole crop fed to the network
+is a design choice, and a natural question is how much the
+results depend on it. On a held-out HOT3D split we re-
+run every method under four undistortion strategies: axis-
+aligned wide-pinhole undistortion at a virtual focal of 120 px
+Table 8. HOT3D undistortion-strategy robustness on a held-out
+split. Each cell: P-MPJPE / wrist (mm) / jitter (m/s2). The compar-
+ison is each method’s stability across strategies, not head-to-head
+accuracy: ESTHER barely moves (including on the 90/150 px fo-
+cals it was not trained on) while the multi-view baselines swing
+widely.
+Method
+offbb120
+offbb90
+offbb150
+hc
+ESTHER (ours)
+32.4 / 20.8 / 16.3
+32.5 / 22.8 / 16.6
+32.3 / 23.6 / 16.8
+28.9 / 48.0 / 15.6
+POEM-v2
+101.3 / 656 / 635
+100.9 / 450 / 395
+103.6 / 928 / 1044
+46.3 / 65.7 / 48
+MVGFormer
+95.9 / 429 / 449
+95.9 / 291 / 265
+97.6 / 633 / 767
+43.1 / 69.9 / 52
+Epipolar Trans.
+69.4 / 414 / 318
+70.6 / 303 / 191
+69.9 / 571 / 541
+43.2 / 66.9 / 66
+Hiera-FTL
+80.9 / 401 / 105
+78.7 / 390 / 100
+82.8 / 435 / 118
+78.1 / 377 / 91
+(offbb120, our default), the same pipeline at 90 px (narrow)
+and 150 px (wide), and a ray-aligned adaptive-focal hand
+crop with minimal black border (hc). This is not a head-
+to-head accuracy comparison — ESTHER is trained on the
+offbb120 rectification and the multi-view baselines are run
+off-the-shelf, which would make an absolute ranking unfair.
+What Table 8 measures instead is each method’s stability:
+how much its own numbers move when only the rectification
+changes, all else fixed.
+By that within-method measure ESTHER is essentially
+invariant to the choice — its P-MPJPE stays within 32.3–
+32.5 mm and its jitter within 16.3–16.8 m/s2 across the three
+offbb focals, including the 90 and 150 px settings it never
+saw in training — whereas the multi-view baselines swing
+violently: POEM’s wrist error moves 656→450→928 mm
+across the focal sweep alone, and the anchor-based methods
+only recover on the bare-crop hc strategy. This is a direct
+consequence of the absolute-wrist design: ESTHER’s de-
+coded wrist does not depend on a triangulated anchor whose
+geometry shifts with the rectification, so the reconstruction
+is stable under the undistortion pipeline rather than tuned to
+one.
+N. Label Quality Analysis
+The motion-capture test set measures the labeling procedure
+against true metric ground truth, but only in the studio. Here
+we bound the error of the in-the-wild labels themselves,
+using only their 2D evidence.
+18
+
+
+Residual. For every labeled hand-frame we project the
+21 label joints into both rectified pinhole views through
+the calibrated rig and compare them with the fused 2D key-
+points of Appendix A (YOLO11-pose and ViTPose, detected
+on the same views); the residual r is the mean pixel dis-
+tance over all joints of both views whose confidence exceeds
+τ=0.3. This is exactly the quantity of the fine 2D check (Ap-
+pendix A), which rejects hand-frames with r > 15 px. The
+statistics cover the in-the-wild training set of ESTHER3D
+(Appendix G).
+From 2D residual to 3D error. A residual of r pixels
+at hand depth z corresponds to an in-plane (image-parallel)
+displacement of rz/f, the component of the 3D error that
+2D observes directly. The component along the viewing
+ray is only constrained through the disparity between the
+two views: a disparity error δd shifts the triangulated depth
+by δz = z2δd/(fb). With independent errors in the two
+views δd ≈
+√
+2 r; if both views err in opposite directions,
+δd ≤2r. Table 9 reports the per-hand-frame distributions of
+these quantities.
+Table 9. In-the-wild label quality from 2D (hand-frames passing
+the 15 px check). Depth z is the label wrist depth.
+Quantity
+Median
+Mean
+p90
+Reprojection residual r (px)
+5.3
+5.8
+8.6
+Hand depth z (m)
+0.32
+0.33
+0.46
+In-plane error rz/f (mm)
+2.8
+3.0
+4.6
+Depth per pixel of disparity z2/(fb) (mm)
+2.8
+3.2
+5.6
+Admissible depth error, independent views (mm)
+21.3
+25.1
+44.2
+Admissible depth error, worst case (mm)
+30.1
+35.5
+62.5
+94.6% of the hand-frames pass the 15 px check and 94.6%
+of those lie below 10 px.
+Bounds. The in-plane error of about 3 mm (median;
+4.6 mm at p90) is the lower end of the label error: whatever
+the labels get wrong in 3D, at least this much is visible
+in the image. The upper end is set by depth, which the
+short baseline constrains only weakly: the same residual still
+admits about 21 mm (median) along the ray. The motion-
+capture error of the teacher, 15.9 mm P-MPJPE and 19.1 mm
+wrist (main text), falls inside this band, consistent with depth
+rather than image alignment being the limiting factor. Two
+caveats apply. First, the residual also contains the keypoint
+detector’s own error, so the in-plane figure is a level of
+2D agreement rather than a strict bound on the label’s true
+2D error. Second, the admissible depth error is a worst-
+case allowance, not a measurement; the metric error itself is
+measured only on the motion-capture set.
+O. Ethics Statement
+All human data in ESTHER3D — both the in-the-wild col-
+lection and the motion-capture recordings — was gathered
+from participants who gave informed consent prior to record-
+ing and were compensated for their time. Participants were
+told how the footage would be used (training and evaluating
+hand-reconstruction models and releasing an anonymized
+research benchmark) and consented on that basis. The data
+captures only hands and the manipulated objects/workspace,
+contains no personally identifying facial imagery, and is
+released for non-commercial research use only.
+19

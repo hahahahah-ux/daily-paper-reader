@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-02</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-04</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 27 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>15</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-02 19:04:55 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-04 00:39:09 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日扫读27篇、精读15篇、速读12篇，UniWAM以10.0分领跑，肌腱驱动双向灵巧手9.0分紧随。</p>
-<p>最值得看的是《UniWAM: Unified World-Action Model》与《Antagonistic Tendon-Driven Dexterous Robotic Hand with Bidirectional Operation》，速读可关注轨迹变形、触觉奖励和事件驱动语义对齐。</p>
-<p>普通读者建议先读这两篇高分精读的摘要，再沿“灵巧操作+触觉/世界模型”线索挑速读，不必一上来啃完27篇。</p>
+<p>2026-10-04 日报精选19篇机器人VLA研究，精读7篇速读12篇。最值得看双臂操作数据集与零样本操作框架，FineART和MotorMind均获9.0分。普通读者可先速览RawVLA等三篇8分速读，再按需精读。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">15 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="UniWAM: Unified World-Action Model">UniWAM: Unified World-Action Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="Design and Validation of an Antagonistic Tendon-Driven Dexterous Robotic Hand with Bidirectional Operation">Design and Validation of an Antagonistic Tendon-Driven Dexterous Robotic Hand with Bidirectional Operation</span></li><li><span class="dpr-home-dashboard-paper-title" title="One from Infinity: Actualizing Futures from Pretrained World Models into Robot Actions">One from Infinity: Actualizing Futures from Pretrained World Models into Robot Actions</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="FineART: Fine-Grained Annotated Robotic Trajectory Dataset and Vision-Language-Action Model for Bimanual Manipulation">FineART: Fine-Grained Annotated Robotic Trajectory Dataset and Vision-Language-Action Model for Bimanual Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="MotorMind: Scaffolding General Vision Language Models for Zero-Shot Robot Manipulation">MotorMind: Scaffolding General Vision Language Models for Zero-Shot Robot Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="The Planning Limits of Latent World Models">The Planning Limits of Latent World Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>12</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>7</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,7 +94,7 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Kinematic Nonlinear Spatio-Temporal Trajectory Warping for Contact-Rich Dexterous Manipulation Demonstrations">Kinematic Nonlinear Spatio-Temporal Trajectory Warping for Contact-Rich Dexterous Manipulation Demonstrations</span></li><li><span class="dpr-home-dashboard-paper-title" title="TaRL: Learning General and Physical Rewards from Tactile Demonstrations">TaRL: Learning General and Physical Rewards from Tactile Demonstrations</span></li><li><span class="dpr-home-dashboard-paper-title" title="CogWAM: Aligning Semantic Cognition with World Action Modeling via Event-Driven Interfaces">CogWAM: Aligning Semantic Cognition with World Action Modeling via Event-Driven Interfaces</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation">RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rho: A Foundation for Efficiently Adaptable VLA Models">Rho: A Foundation for Efficiently Adaptable VLA Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Systematically Exploring the Capabilities of GPT-6 Astra as Embodied Policies">Systematically Exploring the Capabilities of GPT-6 Astra as Embodied Policies</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>11</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
 </section>
