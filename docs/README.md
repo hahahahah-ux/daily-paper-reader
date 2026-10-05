@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-04</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-05</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 29 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>12</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>17</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-04 22:23:10 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-05 18:59:58 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>10月4日机器人VLA日报：29篇中精读12篇、速读17篇，双手机器人操作与零样本操控成最高分焦点。</p>
-<p>最值得看FineART（9.0）的双臂轨迹数据集+VLA，以及MotorMind（9.0）用通用视觉语言模型做零样本机器人操作；速读可补RawVLA、GPT-6 Astra、Cue the Flow。</p>
-<p>普通读者建议先读这两篇9分工作，再按兴趣看速读里的具身ISP、GPT-6策略与流匹配配送操控。</p>
+<p>今天扫完19篇机器人论文，精读7篇、速读12篇，焦点集中在触觉灵巧操作与世界-动作模型。</p>
+<p>最值得看的是两篇9分精读：软触觉皮肤用于灵巧操作，以及重思世界-动作模型做组合式与上下文机器人操作。</p>
+<p>普通读者可先读这两篇精读，再按兴趣追8分的触觉好奇心、人形全身数据预训练或视触觉动态世界动作模型。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +80,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="FineART: Fine-Grained Annotated Robotic Trajectory Dataset and Vision-Language-Action Model for Bimanual Manipulation">FineART: Fine-Grained Annotated Robotic Trajectory Dataset and Vision-Language-Action Model for Bimanual Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="MotorMind: Scaffolding General Vision Language Models for Zero-Shot Robot Manipulation">MotorMind: Scaffolding General Vision Language Models for Zero-Shot Robot Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rho: A Foundation for Efficiently Adaptable VLA Models">Rho: A Foundation for Efficiently Adaptable VLA Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SoTa: Soft Tactile Skins for Dexterous Manipulation">SoTa: Soft Tactile Skins for Dexterous Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rethinking World-Action Model for Compositional and In-Context Robotic Manipulation">Rethinking World-Action Model for Compositional and In-Context Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="SimpleTouch: Can Vision-Language-Action Models Master Contact-Rich Manipulation Without Tactile Policy Pretraining?">SimpleTouch: Can Vision-Language-Action Models Master Contact-Rich Manipulation Without Tactile Policy Pretraining?</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>12</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -93,12 +93,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">17 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation">RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Systematically Exploring the Capabilities of GPT-6 Astra as Embodied Policies">Systematically Exploring the Capabilities of GPT-6 Astra as Embodied Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Cue the Flow: Steering Flow-Matching Policies for Open-World Delivery Manipulation">Cue the Flow: Steering Flow-Matching Policies for Open-World Delivery Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Tactile Curiosity Drives Robot Interaction">Tactile Curiosity Drives Robot Interaction</span></li><li><span class="dpr-home-dashboard-paper-title" title="Towards a General Humanoid Loco-Manipulation Model via Egocentric Whole-Body Human Data Pretraining">Towards a General Humanoid Loco-Manipulation Model via Egocentric Whole-Body Human Data Pretraining</span></li><li><span class="dpr-home-dashboard-paper-title" title="TacDyn-WAM: Learning Implicit Tactile Dynamics in a Heterogeneous Visuo-Tactile World Action Model">TacDyn-WAM: Learning Implicit Tactile Dynamics in a Heterogeneous Visuo-Tactile World Action Model</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>15</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>10</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
 </section>
 </div>
 

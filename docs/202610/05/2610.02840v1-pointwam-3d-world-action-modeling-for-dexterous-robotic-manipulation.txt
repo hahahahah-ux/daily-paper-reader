@@ -1,0 +1,1665 @@
+Preprint
+POINTWAM: 3D WORLD ACTION MODELING
+FOR DEXTEROUS ROBOTIC MANIPULATION
+Chunghyun Park1∗
+Beomjun Kim2∗
+Seungcheol Park4†
+Heeseung Kwon4†
+Yashu Shukla3,4
+Seunghoon Sim2
+Jinwoo Shin2,4
+Minsu Cho1,4
+1POSTECH
+2KAIST
+3Hanyang University
+4RLWRLD
+ABSTRACT
+World action models jointly learn to forecast world dynamics and predict robot
+actions, such that the learned internal world dynamics guide accurate actions. Ex-
+isting approaches typically represent the world as RGB frames or latent counter-
+parts while predicting actions as end-effector poses or joint angles, but they often
+struggle to capture the 3D spatial structure and contact geometry central to dex-
+terous manipulation. We introduce Point World Action Model (PointWAM), a 3D
+world action model that decomposes the world into a scene (i.e., environment)
+and hands (i.e., actor), and jointly forecasts both as 3D point trajectories within
+a shared space-time coordinate frame. This explicit, disentangled representation
+enables effective pre-training on large-scale human demonstration videos without
+requiring any task-specific object or keypoint selection. Given a colored point
+cloud and a language instruction, PointWAM predicts how the scene and hands
+co-evolve in 3D space over time, then retargets the forecast hand motion to robot
+actions. Pre-training on human videos improves average DexJoCo success by 56.9
+percentage points, and scene-trajectory supervision adds 10.9 points over forecast-
+ing the hands alone. With both, PointWAM surpasses the prior state of the art on
+ten DexJoCo tasks by 11.7 points and outperforms strong VLAs on a real robot.
+Project page: https://chrockey.github.io/PointWAM
+Large-scale pre-training on 1.15M human demo episodes
+Transfer learning to dexterous robotic manipulation
+Scene and hands forecast as 3D point trajectories
+Figure 1: PointWAM forecasts the scene and hands as 3D point trajectories. PointWAM pre-
+trains on human demonstration videos and fine-tunes on robot demonstrations, both expressed as 3D
+point trajectories (left; depth below RGB). Given a language instruction, its scene and hand forecasts
+share one space-time coordinate frame (right), and it retargets the hand trajectories to robot actions.
+1
+INTRODUCTION
+Dexterous robotic manipulation requires multiple fingers to precisely coordinate their 3D motion
+relative to object surfaces (Salisbury & Craig, 1982; Okamura et al., 2000), enabling robots to per-
+∗Co-first authors.
+†Equal contribution.
+1
+arXiv:2610.02840v1  [cs.RO]  2 Oct 2026
+
+
+Preprint
+form a wide range of tasks from grasping objects of varied shapes to tool use (Bicchi, 2000; An et al.,
+2026). Conventional Vision-Language-Action models (VLAs) (Black et al., 2025; NVIDIA et al.,
+2025) map observations to motor commands without explicitly forecasting how the scene evolves.
+World Action Models (WAMs) have recently emerged as a promising alternative by treating world
+and action modeling as deeply intertwined: they jointly learn to forecast how the world will change
+and what actions cause those changes (Li et al., 2025a).
+Many existing WAMs build on video generation backbones and represent the world as RGB
+frames (Du et al., 2023) or their latent counterparts (Li et al., 2025a; Liao et al., 2026). These
+representations are limited in their ability to capture key aspects of physical interaction, includ-
+ing 3D spatial structure and causal relations between the actor and the environment. Point-based
+policies (Haldar & Pinto, 2025; Kim et al., 2026a) address the 3D action prediction problem by
+forecasting trajectories of 3D points, but do not model how the environment evolves. They also rely
+on humans or external perception models to select task-relevant objects for their scene inputs. Con-
+versely, action-conditioned 3D world models forecast dense 3D scene trajectories, yet treat robot
+actions as inputs rather than quantities to be predicted (Huang et al., 2026).
+In this work, we introduce Point World Action Model (PointWAM), a 3D world action model that
+decomposes the world into a scene (i.e., environment) and hands (i.e., actor), and represents both
+as three-dimensional point trajectories within a shared space-time coordinate frame (Fig. 1). This
+explicit, disentangled world representation enables effective learning of cause-and-effect relations
+between the environment and the actor by modeling how their points co-evolve in 3D space over
+time. Given a colored point cloud and a language instruction, PointWAM forecasts trajectories for
+every observed scene point and hand keypoint in a common coordinate frame. Its action retargeter
+then converts the forecast hand trajectories into the corresponding robot actions.
+The proposed approach offers three additional advantages. First, modeling both the scene and
+hands in a shared 3D space enables effective pre-training on human demonstration videos from
+EgoDex (Hoque et al., 2026) and VITRA (Li et al., 2026b). Second, no task-specific objects or
+scene keypoints need to be selected in advance, so scene forecasting is not restricted to a predefined
+set of target objects. Third, by decoupling hand-point trajectories from the scene, the forecast hand
+motion is amenable to effective retargeting onto robot hands for action prediction.
+Our main contributions can be summarized as follows.
+• We introduce PointWAM, which jointly forecasts the 3D trajectories of scene points and hand
+keypoints in a shared space-time coordinate frame, unifying world and action modeling.
+• We demonstrate that 3D world modeling benefits dexterous manipulation. Scene-trajectory su-
+pervision improves average DexJoCo success by 10.9 percentage points over the same model
+without it, and our 3D encoder outperforms lifted image features by 5.4 percentage points.
+• We show that pre-training on human demonstrations from EgoDex and VITRA improves average
+DexJoCo success by 56.9 percentage points over training from scratch. With this pre-training,
+PointWAM surpasses the prior best multi-task success rate on DexJoCo by 11.7 percentage points
+and outperforms robot-pre-trained VLAs on a real robot by up to 25 percentage points.
+2
+RELATED WORK
+We discuss the closest work here and provide a broader review in Appendix A.
+World action models (WAMs).
+WAMs unify predictive world modeling with action prediction;
+unlike conventional VLAs, which map a visual observation straight to a motor command, a WAM is
+trained to forecast how the world will change and predict what actions the robot must perform (Du
+et al., 2023; Hu et al., 2025; Liao et al., 2026; Kim et al., 2026d; Li et al., 2025a). Existing WAMs
+typically forecast future visual representations in the latent space of pretrained video models while
+predicting robot actions as end-effector poses. These models must therefore learn how changes in
+latent visual features correspond to robot motion, rather than explicitly modeling both scene and
+hand motion as 3D trajectories. Closest to ours, EgoWAM (Li et al., 2026a), PointWorld (Huang
+et al., 2026), and PointZero (Duisterhof et al., 2026) forecast dense 3D scene motion. EgoWAM
+jointly learns scene forecasting and action prediction but maps human hand motion to the actions of
+2
+
+
+Preprint
+shared space-time coordinate frame
+scene points
+3D Encoder
+
+hand keypoints
+MLP
+“Grasp the watering can and
+apply water to the plant.”
+Text Encoder
+
+3D Tokenization
+zoomed-in view
+vision
+tokens
+text tokens
+Transformer Encoder
+Detokenization
+MLPu
+MLPv
+3D Trajectory Forecaster
+v1
+v2
+vT
+st
+context
+Ct
+Transformer
+Decoder
+· · ·
+learnable
+queries Q
+· · ·
+action chunk At
+Action Retargeter
+Figure 2: PointWAM architecture. The 3D trajectory forecaster (left) encodes scene points, hand
+keypoints, and a language instruction, and jointly forecasts scene u and hand v trajectories in a
+shared space-time coordinate frame. The action retargeter (right) maps v and the robot state st to
+an action chunk At. MLP denotes a multilayer perceptron, and  marks frozen modules.
+parallel-jaw grippers, a 6-DoF pose and a gripper state per hand, which lacks individual finger mo-
+tions. Pri4R (Kim et al., 2026c) likewise targets grippers, adding a training-only 3D point-trajectory
+head to a VLA fine-tuned on robot demonstrations. PointWorld forecasts scene motion with a 3D
+point-cloud network (Wu et al., 2024) conditioned on future robot trajectories, so it needs a separate
+planner that selects them with a task cost. PointZero pre-trains a similar world model without robot
+data and, like PointWorld, predicts no actions. PointWAM instead pre-trains on human demonstra-
+tion videos for dexterous hands, jointly forecasts scene and hand trajectories in a shared space-time
+coordinate frame, and retargets the hand trajectories to robot actions without a separate planner.
+Point trajectories from human demonstration videos.
+Human demonstration videos show hand
+and scene motion from which trajectory supervision can be extracted without recorded robot actions.
+Point-based policies can learn to forecast hand keypoint trajectories from these videos and retarget
+the forecasts to robot actions. Point Policy (Haldar & Pinto, 2025) and Dexterous Point Policy (Kim
+et al., 2026a), however, rely on humans or external perception models to select the objects in the
+policy’s scene input, object keypoints specified by a human for Point Policy and object point clouds
+segmented by external models for Dexterous Point Policy. Neither performs explicit world model-
+ing through scene-motion forecasting. 3PoinTr (Hung et al., 2026) does forecast dense 3D scene
+trajectories from human demonstration videos. Extracted video tracks supervise its forecasts, and a
+separate policy trained on robot demonstrations predicts actions from the forecast tracks. PointWAM
+instead forecasts trajectories for every observed scene point and hand keypoint with one backbone,
+and a retargeter converts the hand trajectories into robot actions without a separate policy.
+3
+POINT WORLD ACTION MODEL
+We first formulate the task and outline our approach (Section 3.1). We then describe the trajec-
+tory forecaster and action retargeter shown in Fig. 2 (Sections 3.2 and 3.3), followed by trajectory
+supervision and two-stage training on human and robot demonstrations (Section 3.4).
+3.1
+PROBLEM STATEMENT AND OVERVIEW
+Given an instruction ℓ, a scene point cloud Pt, and the current robot state st, the goal is to predict
+an action chunk At ∈RT ×da that carries out ℓ, where T is the horizon and da the action dimension.
+The point cloud Pt = {(p(i)
+t , c(i)
+t )}N
+i=1 contains 3D positions and colors from RGBD frames, while
+st records the end-effector pose and finger joint angles of each arm.
+We approach this problem by jointly forecasting scene and hand trajectories and retargeting the
+hand trajectories to robot actions. To establish a common representation for both human and robot
+hands, we use semantically corresponding 3D keypoints, as in point-based policies (Haldar & Pinto,
+2025; Kim et al., 2026a). Specifically, we represent the hands with K keypoints, ten per hand, as
+3
+
+
+Preprint
+Qt = {q(k)
+t
+}K
+k=1 in the scene’s coordinate frame. Their positions come from robot states or tracked
+human hands (Section 3.4). We express both trajectories as displacements from time t:
+u(i)
+t,τ = p(i)
+t+τ −p(i)
+t ,
+v(k)
+t,τ = q(k)
+t+τ −q(k)
+t
+,
+τ = 1, . . . , T.
+(1)
+Scene trajectories supervise world modeling, and hand trajectories serve as an intermediate action
+representation. A trajectory forecaster f(·) predicts both from the scene, hand keypoints, and in-
+struction, and an action retargeter g(·) maps forecast hand trajectories and robot state to actions:
+(Ut, Vt) = f(Pt, Qt, ℓ),
+At = g(Vt, st).
+(2)
+Here Ut ∈RN×T ×3 and Vt ∈RK×T ×3 stack the forecast scene and hand displacements, which we
+standardize per horizon step for training (Appendix B.5).
+3.2
+3D TRAJECTORY FORECASTER
+Scene and hand features. We first encode the observed scene point cloud and hand keypoints.
+A frozen Mosaic3D encoder (Lee et al., 2025), pre-trained to align 3D point features with text,
+extracts a feature vector for each scene point that captures local geometry and semantics. For each
+hand keypoint, a multilayer perceptron (MLP) maps a one-hot encoding of its index, concatenated
+with a hand ID, to a feature of the same dimension as the scene features.
+Tokenization. We place scene and hand features on a shared 1 cm voxel grid using their 3D co-
+ordinates, then aggregate neighboring features with a sparse-convolutional stem. We retain these
+stem features as St for decoding. Following Volt (Yilmaz et al., 2026), we divide this grid into
+non-overlapping patches of K3
+v voxels. For each nonempty patch, we concatenate its voxel features
+in a fixed spatial order and linearly project them into one vision token zv
+j ∈Rd, j = 1, . . . , M. A
+saved mapping It records the patch and voxel of each point. We linearly project the L features of
+the instruction ℓfrom a frozen text encoder (Li et al., 2025b) into instruction tokens zℓ
+1, . . . , zℓ
+L.
+Multimodal fusion and trajectory forecasting. We concatenate the instruction and vision tokens
+and process them with a transformer encoder backbone using global self-attention (Vaswani et al.,
+2017) and axial 3D rotary position embeddings (Su et al., 2024; Yilmaz et al., 2026), allowing each
+vision token to attend to all instruction and vision tokens:
+[Zℓ
+t ; Zv
+t ] = TransformerEncoder
+ [zℓ
+1, . . . , zℓ
+L, zv
+1, . . . , zv
+M]⊤
+.
+(3)
+We then recover per-point features from the output vision tokens and combine them with the stem
+features St through a residual MLP over their concatenation [·; ·], which retains local detail:
+Ft = F ′
+t + MLP([F ′
+t; St]),
+where
+F ′
+t = Detokenizer(Zv
+t ; It).
+(4)
+Here Detokenizer uses a linear layer to expand each token into K3
+v voxel features, then selects the
+feature for each point through It. We then split Ft into scene and hand features, F scene
+t
+and F hand
+t
+,
+and forecast their trajectories with two MLP heads:
+Ut = MLPu(F scene
+t
+),
+Vt = MLPv(F hand
+t
+).
+(5)
+The scene head forecasts a trajectory for every point in Pt, so it requires no task-specific selection
+of target objects or keypoints. More importantly, joint supervision encourages the shared backbone
+to learn how scene and hand points co-evolve in 3D over time.
+3.3
+ACTION RETARGETER
+The action retargeter maps forecast hand trajectories and the robot state to T robot actions; scene
+forecasts supervise the shared backbone but do not enter the retargeter. To construct its input, we
+encode the hand trajectories at each future step, add a step embedding, and append a state embedding
+to form a context Ct for action prediction. A transformer decoder (Vaswani et al., 2017) then uses
+this context and learnable action queries to predict the action chunk At:
+Ct =
+
+MLPdisp(Vt,1) + b1, . . . , MLPdisp(Vt,T ) + bT , MLPstate(st)
+⊤∈R(T +1)×dr,
+At = TransformerDecoder(Q, Ct) ∈RT ×da.
+(6)
+Here Vt,τ ∈RK×3 contains the hand displacements at future step τ, and bτ is a learned step
+embedding; both MLPs output dr-dimensional features. Each decoder block applies self-attention
+among the learnable action queries Q ∈RT ×dr, cross-attention to Ct, and a feed-forward network.
+A final linear layer maps the features to T actions of end-effector poses and finger joint targets.
+4
+
+
+Preprint
+3.4
+LEARNING FROM HUMAN AND ROBOT DEMONSTRATIONS
+We train the trajectory forecaster on human and robot demonstrations and the action retargeter on
+robot demonstrations alone, since only they record the end-effector poses and finger joint commands
+that the action retargeter learns to predict (Fig. 1, left).
+Human demonstrations. Human demonstration videos lack recorded states, so we estimate both
+trajectories from the videos themselves. Hand trajectories come from the 3D hand poses annotated
+in EgoDex (Hoque et al., 2026) and reconstructed by VITRA (Li et al., 2026b), mapped to the robot
+hand’s ten keypoints. Scene trajectories come from dense 2D point tracks of CoTracker3 (Karaev
+et al., 2025), lifted to 3D with monocular depth from VGGT-Ω(Wang et al., 2026b) scaled to the an-
+notated hands. The resulting 1.15M episodes share the trajectory format of the robot demonstrations,
+so both supervise the same forecaster; Appendix B.1 details the preprocessing.
+Robot demonstrations. Recorded robot states give hand trajectories through forward kinematics.
+Scene trajectories come from replaying DexJoCo (Wang et al., 2026a) demonstrations, which move
+each initial point with its object or rigid part, and on the real robot from CoTracker3 (Karaev et al.,
+2025) tracks lifted with Fast-FoundationStereo (Wen et al., 2026) depth. We process the RoboDojo-
+Precision demonstrations similarly to DexJoCo (Appendix B.2).
+Training. We first pre-train the backbone and both trajectory heads from scratch on human demon-
+strations using scene and hand trajectory supervision. On robot demonstrations, we then fine-tune
+these components and train the retargeter from scratch with joint trajectory and action supervision:
+Ltraj =
+X
+i,τ
+wi,τ ∥u(i)
+t,τ −u(i)∗
+t,τ ∥2
+2 +
+1
+KT
+X
+k,τ
+∥v(k)
+t,τ −v(k)∗
+t,τ ∥2
+2,
+Lrobot = Ltraj + λ
+At −A∗
+t
+
+1.
+(7)
+Here ∗marks ground truth, and λ = 1. The scene weights wi,τ sum to one over points and steps and
+favor motion without excluding static points (Huang et al., 2026).
+4
+EXPERIMENTS
+In this section, we describe the experimental setup (Section 4.1) and answer three questions.
+(1) Does PointWAM, pre-trained only on human demonstrations, outperform policies pre-trained
+on robot or video corpora in dexterous and high-precision manipulation? (Section 4.2)
+(2) Does human-demonstration pre-training transfer to robot control, and does it scale with the
+number of human demonstrations and with model size? (Section 4.3)
+(3) Does 3D world modeling enable more precise dexterous manipulation than 2D world modeling
+or a model without it, and does a 3D encoder help beyond lifted 2D features? (Section 4.4)
+4.1
+EXPERIMENTAL SETUP
+We pre-train PointWAM on 1.15M human demonstration episodes from EgoDex (Hoque et al.,
+2026) and VITRA (Li et al., 2026b), which provide scene and hand trajectories but no robot actions,
+and fine-tune it on the robot demonstrations of each benchmark and of the real robot.
+4.1.1
+BENCHMARKS AND PROTOCOLS
+DexJoCo. DexJoCo (Wang et al., 2026a) is a simulated benchmark of eleven dexterous tasks, six
+single-arm and five bimanual, on Franka Panda arms with 16-DoF Allegro hands. Its tasks require
+tool use, such as driving a nail with a hammer, and coordination of two hands. We use its object-
+placement setting, where no policy reported with the benchmark exceeds 5.3% success on bimanual
+assembly. We exclude bimanual unlock iPad, since 42 of its 100 demonstrations fail when replayed
+in the released environment; 959 of the other 1,000 demonstrations pass the replay check. We train
+one policy across the ten tasks (Table 1) and one per task. Each task has one fixed instruction, which
+tells the multi-task policy which task to perform. Following the official protocol, we run 50 closed-
+loop episodes per task on each of three evaluation seeds and report the success rate (SR) averaged
+5
+
+
+Preprint
+Table 1: DexJoCo success rate (%). One policy across the ten tasks in the object-placement setting.
+Subscripts are standard deviations over three seeds, /B marks bimanual tasks, and bold marks the
+row best. DP-T and π0.5 results are from Wang et al. (2026a); the others follow the same protocol.
+Task
+DP-T
+π0.5 GR00T N1.6 Fast-WAM PointACT PointWAM
+hammer nail
+58.75.0 86.73.1
+82.06.0
+43.31.9
+16.08.0
+85.32.3
+click mouse
+38.73.1 80.73.1
+67.37.6
+77.33.4
+37.33.1
+97.32.3
+pick bucket
+55.37.6 83.38.1
+88.73.1
+81.36.6
+74.77.6
+98.02.0
+pinch tongs
+6.05.3 45.36.1
+28.04.0
+47.36.6
+26.74.2
+52.05.3
+fold glasses
+11.35.0 42.06.0
+52.08.0
+62.73.8
+20.77.6
+74.05.3
+water plant
+60.06.9 84.04.0
+82.73.1
+42.70.9
+83.36.4
+86.73.1
+hanoi /B
+8.02.0
+6.00.0
+34.05.3
+42.05.9
+10.02.0
+50.09.2
+assembly /B
+1.32.3
+3.32.3
+6.04.0
+2.71.9
+2.00.0
+9.34.6
+microwave /B 42.76.4 39.313.0
+78.73.1
+88.74.1
+54.08.7
+84.04.0
+photograph /B 28.06.0 29.31.2
+53.38.1
+40.76.2
+12.03.5
+53.31.2
+avg.
+31.01.7 50.01.9
+57.31.8
+52.91.5
+33.71.8
+69.02.0
+hammer nail
+pick bucket
+assembly
+microwave
+Figure 3: Predicted 3D point trajectories. Scene u and hand v trajectories that PointWAM predicts
+on unseen DexJoCo layouts; scene trajectories are subsampled for visibility.
+over the ten tasks, with its standard deviation over seeds. Appendix C.2 details the protocol, and
+Appendix D reports the results of the single-task policies.
+RoboDojo-Precision. Although PointWAM is designed for dexterous hands, its point-trajectory
+representation is not tied to one embodiment. We therefore test whether it transfers to parallel-
+jaw grippers, using the Precision tasks of RoboDojo (Chen et al., 2026b), which hinge on precise
+placement. Two ARX X5 arms perform these eight tasks, such as inserting a key and fastening
+screws, and each task comes with 100 RGBD demonstrations. We train and evaluate every method
+on these tasks alone. The tasks are hard; on the benchmark leaderboard, policies trained on all of its
+tasks rarely complete them (Chen et al., 2026b). We therefore also report its partial-progress score,
+which separates methods when success is rare. Appendices B.2 and C.3 detail the setup.
+Real robot. To evaluate PointWAM’s manipulation performance in the real world, we use an Ope-
+nArm humanoid with two 7-DoF arms, two 6-DoF Inspire RH56F1 hands, and a ZED 2i stereo
+camera, as shown in Fig. 5a. We evaluate two tasks: banana pick-and-place (PnP) and square-peg
+insertion. Banana PnP evaluates general manipulation ability using a single arm, while square-peg
+insertion evaluates coordinated dexterous manipulation with both hands. We collect 54 demonstra-
+tions for banana PnP and 64 for square-peg insertion, and evaluate each method over 24 trials per
+task. For banana PnP, half of the trials use the banana seen in the demonstrations (in-domain), and
+the other half use an unseen box whose color resembles the table (out-of-domain). For square-peg
+insertion, we also report a progress score, the mean number of completed stages per trial out of
+three, lifting each of the two parts and inserting the peg.
+4.1.2
+BASELINES
+We take two baselines from DexJoCo (Wang et al., 2026a) with their published results. DP-T is
+the transformer variant of Diffusion Policy (Chi et al., 2023), trained from scratch on images, and
+π0.5 (Black et al., 2025) is a VLA fine-tuned from a policy pre-trained on robot demonstrations
+and web data. We then add three recent families and evaluate them under the same protocol (Ap-
+pendices C.2 and C.5). GR00T N1.6 (NVIDIA et al., 2025) represents VLAs whose pre-training
+6
+
+
+Preprint
+Table 2: RoboDojo-Precision results. Each cell reports the score (left) and success rate in % (right);
+the score measures partial task progress. One policy per method, one seed, 50 episodes per task.
+Method
+fasten
+plug in
+insert
+pour
+play
+deposit
+insert
+build
+avg.
+screws
+charger
+tubes
+balls
+xylophone
+coin
+key
+tower
+GR00T N1.6 0.4 / 0.0 0.0 / 0.0 20.4 / 8.0
+0.0 / 0.0
+0.0 / 0.0
+9.2 / 4.0 7.8 / 0.0 11.4 / 6.0 6.2 / 2.3
+Fast-WAM
+0.0 / 0.0 0.0 / 0.0
+0.4 / 0.0
+2.0 / 2.0
+0.0 / 0.0
+0.0 / 0.0 0.0 / 0.0
+0.0 / 0.0 0.3 / 0.2
+PointACT
+0.0 / 0.0 0.0 / 0.0
+6.4 / 0.0
+0.0 / 0.0
+0.0 / 0.0
+0.8 / 0.0 2.7 / 0.0
+3.2 / 0.0 1.6 / 0.0
+PointWAM
+1.2 / 0.0 0.0 / 0.0 32.4 / 12.0 14.0 / 14.0
+8.0 / 8.0
+6.4 / 2.0 3.0 / 0.0 5.2 / 2.0 8.8 / 4.8
+t = 0
+t = tend/2
+t = tend
+t = 0
+t = tend/2
+t = tend
+GR00T N1.6
+PointWAM
+(a) DexJoCo (bimanual hanoi)
+(b) RoboDojo-Precision (insert tubes)
+Figure 4: Qualitative comparison. Rollouts from one initial state per task, each until success (green
+border) or failure (red border) at its own tend. PointWAM succeeds on both; GR00T N1.6 times out.
+includes large-scale real and simulated robot demonstrations. Fast-WAM (Yuan et al., 2026) repre-
+sents world action models; it builds on a video generation backbone and learns robot actions with
+video-prediction supervision. PointACT (Chen et al., 2026a) represents policies that use depth,
+adding pre-trained 3D point features to the action expert of a vision-language policy. Only Fast-
+WAM forecasts future scenes, and it forecasts images rather than the 3D motion of the scene and
+hands. On the real robot, we compare with GR00T N1.6 and π0.5, fine-tuned on the same data.
+4.2
+COMPARISON WITH PREVIOUS APPROACHES
+DexJoCo. With one policy across the ten tasks, PointWAM achieves the highest success rate on eight
+tasks and reaches 69.0% average SR (Table 1), outperforming the strongest baseline, GR00T N1.6,
+by a large margin of 11.7 percentage points, and π0.5 by 19.0. Both pre-train on large-scale robot
+demonstrations and web data, whereas PointWAM uses no robot demonstrations beyond DexJoCo.
+PointWAM also ranks first with one policy per task, and its margin over the strongest baseline widens
+from 5.3 to 22.2 percentage points under full randomization of camera pose, lighting, and texture
+(Tables 5 and 6 in Appendix D). Figure 3 shows the scene and hand trajectories PointWAM predicts,
+and Fig. 4 shows bimanual hanoi rollouts from one initial state, where PointWAM succeeds and
+GR00T N1.6 times out; Appendix E shows more rollouts.
+RoboDojo-Precision. With no robot data beyond the benchmark’s own demonstrations, PointWAM
+reaches an average score of 8.8 and 4.8% SR (Table 2). Fast-WAM and PointACT also pre-train
+on no robot data, only on videos, image-text pairs, or 3D scenes, and stay near zero (0.3, 0.2%
+and 1.6, 0.0%), even though PointACT observes depth. GR00T N1.6, whose pre-training includes
+large-scale robot data with grippers, reaches 6.2 and 2.3%, still below PointWAM, and leads on
+three of the eight tasks. PointWAM, pre-trained on human hands alone, thus shows initial transfer
+to grippers, and depth alone does not account for its lead over Fast-WAM and PointACT.
+Real robot. Figure 5b summarizes the real-robot results. PointWAM outperforms both GR00T N1.6
+and π0.5 over all trials of each task. On banana PnP, it performs comparably with the in-domain ba-
+nana but reaches 58.3% SR with the out-of-domain unseen box, against 16.7% and 25.0%. Since the
+box resembles the table in color, the RGB-based baselines likely struggle to find it, while PointWAM
+can rely on its 3D shape. On square-peg insertion, PointWAM reaches 50.0% SR against 16.7% and
+25.0%. All three methods usually lift both parts, but the baselines often fail at the insertion, which
+needs precise bimanual placement; PointWAM inserts in 12 of 21 such trials, against 4 of 19 and 6
+of 18. Figure 12 in Appendix E shows example rollouts.
+7
+
+
+Preprint
+ZED 2i
+(Stereo)
+OpenArm
+(7 DoF)
+RH56F1
+(×2)
+(a) Platform
+banana pick-and-place
+square-peg insertion
+banana
+(in-domain)
+unseen box
+(out-of-domain)
+in-domain SR (%)
+83.3
+91.7
+83.3
+out-of-domain SR (%)
+16.7
+25.0
+58.3
+SR (%)
+16.7
+25.0
+50.0
+score (max 3)
+1.96
+1.92
+2.33
+GR00T N1.6
+π0.5
+PointWAM
+(b) Tasks, success rates (SR), and scores over 24 trials
+Figure 5: Real-robot evaluation. (a) The OpenArm platform. (b) The two tasks, one single-arm
+and one bimanual, with the success rate and score of each method.
+GR00T N1.6
+Fast-WAM
+PointACT
+PointWAM
+0
+20
+40
+60
+80
+DexJoCo SR (%)
+57.3
+56.6
+52.9
+54.3
+33.7
+33.9
+12.1
+60.1
+without
+with
+Figure 6: Pre-training gain.
+Average SR (%) with and
+without EgoDex pre-training.
+0
+324
+736
+1148
+# episodes (K)
+0
+20
+40
+60
+80
+DexJoCo SR (%)
+12.1
+60.1
+64.9
+69.0
+Figure 7: Data scaling. Each
+point plots average SR (%)
+versus pre-training episodes.
+39
+106
+326
+655
+# trainable parameters (M)
+0
+20
+40
+60
+80
+DexJoCo SR (%)
+52.3
+50.1
+64.2
+69.0
+Figure 8: Model scaling. Each
+point plots average SR (%)
+versus trainable parameters.
+4.3
+HUMAN-DEMONSTRATION PRE-TRAINING AND SCALING
+Transfer from human demonstration videos.
+We first measure how much EgoDex (Hoque
+et al., 2026) pre-training improves each method (Fig. 6; whiskers show ±1 standard deviation over
+three seeds), fixing Volt-H and 60k fine-tuning iterations for PointWAM. The baselines already
+build on large pre-trained models; GR00T N1.6 inherits vision-language and robot-policy pre-
+training (NVIDIA et al., 2025), and Fast-WAM and PointACT build on pre-trained Wan2.2 (Team
+Wan et al., 2025) video and Qwen2.5-VL (Bai et al., 2025) backbones (Yuan et al., 2026; Chen
+et al., 2026a). PointWAM instead trains its backbone from scratch, keeping only its frozen encoders
+pre-trained, and hence starts from a lower SR than the baselines.
+PointWAM nevertheless benefits far more from EgoDex pre-training. Its SR rises nearly fivefold,
+from 12.1% to 60.1%, whereas the baselines change by at most 1.4 percentage points (GR00T N1.6
+from 57.3% to 56.6%, Fast-WAM from 52.9% to 54.3%, and PointACT from 33.7% to 33.9%). Even
+Fast-WAM, which also forecasts the future but as video frames, gains little. These results suggest
+that the gain comes from the shared 3D representation, in which human and robot demonstrations
+take the same scene and hand point trajectories, rather than from world modeling alone.
+Data scaling. We next vary the amount of human demonstrations with the Volt-H backbone and
+60k fine-tuning iterations fixed, adding half and all of VITRA (Li et al., 2026b) to the 324K EgoDex
+episodes (Fig. 7; shading shows ±1 standard deviation over three seeds). SR rises from 60.1% with
+EgoDex alone to 64.9% with 736K episodes and 69.0% with the full 1.15M episodes. EgoDex alone
+already surpasses GR00T N1.6 (57.3%), and the full corpus adds 8.9 percentage points.
+Model scaling. We then vary the trainable capacity of the backbone with the full EgoDex and
+VITRA corpus and 60k fine-tuning iterations fixed (Fig. 8; shading shows ±1 standard deviation
+8
+
+
+Preprint
+Table 3: Component ablations. Average SR (%) of a Volt-L12 model pre-trained on EgoDex,
+varying one setting per panel (Section 4.4). Shading marks the reference, and subscripts are standard
+deviations over three seeds of 50 episodes per task.
+(a) vision encoder
+case
+SR (%)
+DINOv3
+59.01.3
+Mosaic3D 64.41.7
+(b) world modeling
+case
+SR (%)
+without
+53.52.7
+2D frame
+60.11.5
+3D points
+64.41.7
+(c) hand representation
+case
+points SR (%)
+keypoints
+10 64.41.7
+surface points
+10 43.60.8
+surface points
+512 44.60.9
+(d) voxel size
+size
+SR (%)
+0.5 cm 59.91.5
+1 cm
+64.41.7
+2 cm
+52.21.2
+over three seeds). SR stays near 50% for Volt-S (39M, 52.3%) and Volt-B (106M, 50.1%) and rises
+to 64.2% for Volt-L (326M) and 69.0% for Volt-H (655M). Appendix C lists the configurations.
+4.4
+COMPONENT ANALYSIS
+We change one setting at a time from a common reference, a Volt-L12 backbone, named for halv-
+ing the depth of Volt-L to 12 layers, pre-trained on EgoDex and fine-tuned for 60k iterations (Ta-
+ble 3). Since the ablations require many training runs, the reference is smaller and uses fewer human
+demonstration videos than the benchmark model, so its SR is lower than in Table 1. Appendix C
+gives the training settings, and Appendix D.2 further varies the patch size and encoder fine-tuning.
+Vision encoder (a). The 3D encoder Mosaic3D, which computes features on the point cloud,
+reaches 64.4%. Lifting DINOv3 (Sim´eoni et al., 2026) image features onto the points, as in Point-
+World (Huang et al., 2026), lowers SR to 59.0%. Lifted features carry 3D positions but are com-
+puted from images. The gap suggests that encoding the 3D structure of the scene in the features
+themselves, not only in their positions, matters for dexterous manipulation.
+World modeling (b).
+Removing scene-trajectory supervision from both pre-training and fine-
+tuning, with the depth input, 3D backbone, and hand head unchanged, lowers SR from 64.4% to
+53.5%. Forecasting the scene thus improves success beyond observing it in 3D, and Fig. 3 shows
+the predicted scene moving with the hands. The 2D frame row uses the DINOv3 encoder of (a) and
+forecasts the DINOv3 latents of the frame at t+T through learnable queries that read the backbone’s
+output tokens, as in FLARE (Zheng et al., 2025) but with DINOv3 rather than SigLIP-2 latents, so
+that its input and its target share one feature space. It reaches 60.1%, 6.6 percentage points above the
+model without world modeling but 4.3 below the reference. Forecasting the 3D trajectories of scene
+points from 3D features thus outperforms forecasting future image latents from image features.
+Hand representation and voxel size (c–d). In (c), anatomical keypoints reach 64.4%, whereas
+depth-sampled hand surface points reach 43.6% with 10 points per hand and 44.6% with 512. Key-
+points likely help because they correspond between human and robot hands (Section 3.1). In (d),
+1 cm voxels reach 64.4%, above both finer 0.5 cm voxels (59.9%) and coarser 2 cm voxels (52.2%).
+Coarser voxels may blur the contact geometry, while finer ones add little detail beyond the 224×224
+depth input. We therefore use 1 cm voxels in all experiments, including Table 1.
+5
+CONCLUSION
+We have introduced PointWAM, a 3D world action model that decomposes the world into a scene
+and hands. It jointly forecasts both as 3D point trajectories in a shared space-time coordinate frame
+and retargets the forecast hand motion to robot actions. Since human videos provide the same
+trajectories, PointWAM pre-trains on them without selecting task-specific points, raising average
+DexJoCo success from 12.1% to 69.0% and surpassing the strongest baseline by 11.7 percentage
+points. Observing the scene in 3D per se is not enough; forecasting the scene adds 10.9 percent-
+age points over forecasting the hands alone. These results suggest that a shared 3D point-trajectory
+representation lets robots learn dexterous manipulation largely from human videos. Since Point-
+WAM sees the world only through points, it can miss details finer than the point spacing, such as
+printed text, and surfaces that depth sensing cannot capture, such as transparent objects. Future work
+could extend what each point carries, from finer appearance to physical properties such as mass and
+friction, which govern how objects move under contact.
+9
+
+
+Preprint
+REFERENCES
+Shan An, Ziyu Meng, Chao Tang, et al. Dexterous manipulation through imitation learning: A
+survey. IEEE Transactions on Automation Science and Engineering (T-ASE), 23, 2026.
+Jimmy Lei Ba, Jamie Ryan Kiros, and Geoffrey E. Hinton. Layer normalization. arXiv, 2016.
+Shuai Bai, Keqin Chen, Xuejing Liu, et al. Qwen2.5-VL technical report. arXiv, 2025.
+Chen Bao, Helin Xu, Yuzhe Qin, and Xiaolong Wang. DexArt: Benchmarking generalizable dex-
+terous manipulation with articulated objects. In IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), 2023.
+Homanga Bharadhwaj, Roozbeh Mottaghi, Abhinav Gupta, and Shubham Tulsiani. Track2Act: Pre-
+dicting point tracks from internet videos enables generalizable robot manipulation. In European
+Conference on Computer Vision (ECCV), 2024.
+Hongzhe Bi, Lingxuan Wu, Tianwei Lin, Hengkai Tan, Zhizhong Su, Hang Su, and Jun Zhu. H-
+RDT: Human manipulation enhanced bimanual robotic manipulation. In AAAI Conference on
+Artificial Intelligence (AAAI), 2026.
+Antonio Bicchi. Hands for dexterous manipulation and robust grasping: A difficult road toward
+simplicity. IEEE Transactions on Robotics and Automation (T-RA), 16(6), 2000.
+Kevin Black, Noah Brown, James Darpinian, et al. π0.5: a vision-language-action model with open-
+world generalization. In Conference on Robot Learning (CoRL), 2025.
+Shizhe Chen, Paul Pacaud, and Cordelia Schmid. PointACT: Vision-language-action models with
+multi-scale point-action interaction. In Robotics: Science and Systems (RSS), 2026a.
+Tianxing Chen, Yue Chen, Zixuan Li, et al. RoboDojo: A unified sim-and-real benchmark for
+comprehensive evaluation of generalist robot manipulation policies. arXiv, 2026b.
+Cheng Chi, Siyuan Feng, Yilun Du, Zhenjia Xu, Eric Cousineau, Benjamin Burchfiel, and Shuran
+Song. Diffusion policy: Visuomotor policy learning via action diffusion. In Robotics: Science
+and Systems (RSS), 2023.
+Chris Choy and NVIDIA Research. WarpConvNet: High-performance 3D deep learning library.
+GitHub repository, 2025.
+Lingwei Dang, Juntong Li, Zonghan Li, Hongwen Zhang, Liang An, Wei Min, Yebin Liu, and
+Qingyao Wu. HarmoHOI: Harmonizing appearance and 3D motion for multi-view hand-object
+interaction synthesis. In SIGGRAPH Asia Conference Papers, 2026.
+Yilun Du, Mengjiao Yang, Bo Dai, Hanjun Dai, Ofir Nachum, Joshua B. Tenenbaum, Dale Schu-
+urmans, and Pieter Abbeel. Learning universal policies via text-guided video generation. In
+Advances in Neural Information Processing Systems (NeurIPS), 2023.
+Bardienus P. Duisterhof, Kaifeng Zhang, Adam Hung, Bowen Wen, Stan Birchfield, Yunzhu Li,
+Deva Ramanan, and Jeffrey Ichnowski. PointZero: 3D point track completion for learning trans-
+ferable 3D dynamics. arXiv, 2026.
+Yankai Fu, Qiuxuan Feng, Ning Chen, et al. CordViP: Correspondence-based visuomotor policy for
+dexterous manipulation in real-world. In Robotics: Science and Systems (RSS), 2025.
+GEAR Team. GR00T N1.6: An improved open foundation model for generalist humanoid robots.
+NVIDIA Research, 2025.
+Raktim Gautam Goswami, Amir Bar, David Fan, Tsung-Yen Yang, Gaoyue Zhou, Prashanth Kr-
+ishnamurthy, Michael Rabbat, Farshad Khorrami, and Yann LeCun. World models for learning
+dexterous hand-object interactions from human videos. In European Conference on Computer
+Vision (ECCV), 2026.
+10
+
+
+Preprint
+Jun Guo, Qiwei Li, Peiyan Li, Zilong Chen, Nan Sun, Yifei Su, Heyun Wang, Yuan Zhang, Xing-
+hang Li, and Huaping Liu.
+Unified 4D world action modeling from video priors with asyn-
+chronous denoising. arXiv, 2026.
+Siddhant Haldar and Lerrel Pinto. Point policy: Unifying observations and actions with key points
+for robot manipulation. In Conference on Robot Learning (CoRL), 2025.
+Jisang Han, Seonghu Jeon, Jaewoo Jung, Ren´e Zurbr¨ugg, Honggyu An, Tifanny Portela, Marco
+Hutter, Marc Pollefeys, Seungryong Kim, and Sunghwan Hong. Geometric action model for
+robot policy learning. arXiv, 2026.
+Dan Hendrycks and Kevin Gimpel. Gaussian error linear units (GELUs). arXiv, 2016.
+Ryan Hoque, Peide Huang, David J. Yoon, Mouli Sivapurapu, and Jian Zhang. EgoDex: Learn-
+ing dexterous manipulation from large-scale egocentric video. In International Conference on
+Learning Representations (ICLR), 2026.
+Yucheng Hu, Yanjiang Guo, Pengchao Wang, Xiaoyu Chen, Yen-Jen Wang, Jianke Zhang, Koushil
+Sreenath, Chaochao Lu, and Jianyu Chen. Video prediction policy: A generalist robot policy with
+predictive visual representations.
+In International Conference on Machine Learning (ICML),
+2025.
+Gao Huang, Yu Sun, Zhuang Liu, Daniel Sedra, and Kilian Q. Weinberger. Deep networks with
+stochastic depth. In European Conference on Computer Vision (ECCV), 2016.
+Wenlong Huang, Yu-Wei Chao, Arsalan Mousavian, Ming-Yu Liu, Dieter Fox, Kaichun Mo, and
+Fei-Fei Li.
+PointWorld: Scaling 3D world models for in-the-wild robotic manipulation.
+In
+IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2026.
+Adam Hung, Bardienus Pieter Duisterhof, and Jeffrey Ichnowski. 3PoinTr: From human videos to
+robot policies with 3D point-track plans. arXiv, 2026.
+Jiahao Jiang, Jianing Zhang, Zhenhan Yin, et al. WSA1: a 3D-centric world-spatial-action model
+for generalizable robot control. arXiv, 2026.
+Nikita Karaev, Yuri Makarov, Jianyuan Wang, Natalia Neverova, Andrea Vedaldi, and Christian
+Rupprecht. CoTracker3: Simpler and better point tracking by pseudo-labelling real videos. In
+IEEE/CVF International Conference on Computer Vision (ICCV), 2025.
+Beomjun Kim, Seong Hyeon Park, Seunghoon Sim, Seungjun Moon, Sanghyeok Lee, and Jinwoo
+Shin. Dexterous point policy: Learning point-based dexterous hand policies from human demon-
+strations. arXiv, 2026a.
+Byungjun Kim, Taeksoo Kim, Junyoung Lee, and Hanbyul Joo.
+Dexterous world models.
+In
+IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2026b.
+Jisoo Kim, Jungbin Cho, Sanghyeok Chu, et al.
+Pri4R: Learning world dynamics for vision-
+language-action models with privileged 4D representation. In Conference on Robot Learning
+(CoRL), 2026c.
+Moo Jin Kim, Yihuai Gao, Tsung-Yi Lin, et al. Cosmos policy: Fine-tuning video models for visuo-
+motor control and planning. In International Conference on Learning Representations (ICLR),
+2026d.
+Junha Lee, Chunghyun Park, Jaesung Choe, Yu-Chiang Frank Wang, Jan Kautz, Minsu Cho, and
+Chris Choy. Mosaic3D: Foundation dataset and model for open-vocabulary 3D segmentation. In
+IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2025.
+Seungjae Lee, Yoonkyo Jung, Jusuk Lee, Jonghun Shin, Amir Hossein Shahidzadeh, Yao-Chih Lee,
+H. Jin Kim, Jia-Bin Huang, and Furong Huang. µ0: A scalable 3D interaction-trace world model.
+In Conference on Robot Learning (CoRL), 2026.
+Baoyu Li, Xinchen Yin, Mengying Lin, Yixin Zhang, and Danfei Xu. EgoWAM: World action
+models beyond pixels with in-the-wild egocentric human data. In Conference on Robot Learning
+(CoRL), 2026a.
+11
+
+
+Preprint
+Qixiu Li, Yu Deng, Yaobo Liang, et al.
+Scalable vision-language-action model pretraining for
+robotic manipulation with real-life human activity videos. In IEEE International Conference
+on Robotics and Automation (ICRA), 2026b.
+Shuang Li, Yihuai Gao, Dorsa Sadigh, and Shuran Song. Unified video action model. In Robotics:
+Science and Systems (RSS), 2025a.
+Xianhang Li, Haoqin Tu, Mude Hui, et al.
+What if we recaption billions of web images with
+LLaMA-3? In International Conference on Machine Learning (ICML), 2025b.
+Yue Liao, Pengfei Zhou, Siyuan Huang, et al. Genie envisioner: A unified world foundation platform
+for robotic manipulation. In International Conference on Learning Representations (ICLR), 2026.
+Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. In International Confer-
+ence on Learning Representations (ICLR), 2019.
+Jiangran Lyu, Ziming Li, Xuesong Shi, Chaoyi Xu, Yizhou Wang, and He Wang. DyWA: Dynamics-
+adaptive world action model for generalizable non-prehensile manipulation. In IEEE/CVF Inter-
+national Conference on Computer Vision (ICCV), 2025.
+NVIDIA, Johan Bjorck, Fernando Casta˜neda, et al. GR00T N1: An open foundation model for
+generalist humanoid robots. arXiv, 2025.
+NVIDIA, Aditi, Niket Agarwal, et al. Cosmos 3: Omnimodal world models for physical AI. arXiv,
+2026.
+Allison M. Okamura, Niels Smaby, and Mark R. Cutkosky. An overview of dexterous manipulation.
+In IEEE International Conference on Robotics and Automation (ICRA), 2000.
+Yuzhe Qin, Binghao Huang, Zhao-Heng Yin, Hao Su, and Xiaolong Wang. DexPoint: Generalizable
+point cloud reinforcement learning for sim-to-real dexterous manipulation. In Conference on
+Robot Learning (CoRL), 2022a.
+Yuzhe Qin, Yueh-Hua Wu, Shaowei Liu, Hanwen Jiang, Ruihan Yang, Yang Fu, and Xiaolong
+Wang. DexMV: Imitation learning for dexterous manipulation from human videos. In European
+Conference on Computer Vision (ECCV), 2022b.
+Delin Qu, Haoming Song, Qizhi Chen, et al. SpatialVLA: Exploring spatial representations for
+visual-language-action model. In Robotics: Science and Systems (RSS), 2025.
+J. Kenneth Salisbury and John J. Craig. Articulated hands: Force control and kinematic issues. The
+International Journal of Robotics Research (IJRR), 1(1), 1982.
+Oriane Sim´eoni, Huy V. Vo, Maximilian Seitzer, et al. DINOv3. Transactions on Machine Learning
+Research (TMLR), 2026.
+Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng Liu. RoFormer: En-
+hanced transformer with rotary position embedding. Neurocomputing, 568, 2024.
+Team Wan, Ang Wang, Baole Ai, et al. Wan: Open and advanced large-scale video generative
+models. arXiv, 2025.
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez,
+Łukasz Kaiser, and Illia Polosukhin. Attention is all you need. In Advances in Neural Infor-
+mation Processing Systems (NeurIPS), 2017.
+Hanwen Wang, Weizhi Zhao, Xiangyu Wang, et al. DexJoCo: A benchmark and toolkit for task-
+oriented dexterous manipulation on MuJoCo. arXiv, 2026a.
+Jianyuan Wang, Minghao Chen, Shangzhan Zhang, Nikita Karaev, Johannes Sch¨onberger, Patrick
+Labatut, Piotr Bojanowski, David Novotny, Andrea Vedaldi, and Christian Rupprecht. VGGT-Ω.
+In IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2026b.
+12
+
+
+Preprint
+Bowen Wen, Shaurya Dewan, and Stan Birchfield. Fast-FoundationStereo: Real-time zero-shot
+stereo matching. In IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR),
+2026.
+Chuan Wen, Xingyu Lin, John So, Kai Chen, Qi Dou, Yang Gao, and Pieter Abbeel. Any-point
+trajectory modeling for policy learning. In Robotics: Science and Systems (RSS), 2024.
+Xiaoyang Wu, Li Jiang, Peng-Shuai Wang, Zhijian Liu, Xihui Liu, Yu Qiao, Wanli Ouyang, Tong
+He, and Hengshuang Zhao.
+Point Transformer V3: Simpler, faster, stronger.
+In IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR), 2024.
+Lishan Yang, Wenxuan Song, Xi Wang, et al. 4D-WAM: Infusing spatiotemporal awareness into
+world action models through trajectory fields. arXiv, 2026.
+Kadir Yilmaz, Adrian Kruse, Tristan H¨ofer, Daan de Geus, and Bastian Leibe. Volume Trans-
+former: Revisiting vanilla transformers for 3D scene understanding. In European Conference on
+Computer Vision (ECCV), 2026.
+Chengbo Yuan, Chuan Wen, Tong Zhang, and Yang Gao. General flow as foundation affordance for
+scalable robot learning. In Conference on Robot Learning (CoRL), 2024.
+Tianyuan Yuan, Zibin Dong, Yicheng Liu, and Hang Zhao. Fast-WAM: Do world action models
+need test-time future imagination? arXiv, 2026.
+Yanjie Ze, Gu Zhang, Kangning Zhang, Chenyuan Hu, Muhan Wang, and Huazhe Xu. 3D diffusion
+policy: Generalizable visuomotor policy learning via simple 3D representations. In Robotics:
+Science and Systems (RSS), 2024.
+Huajian Zeng, Lingyun Chen, Jiaqi Yang, Yuantai Zhang, Fan Shi, Peidong Liu, and Xingxing Zuo.
+FlowHOI: Flow-based semantics-grounded generation of hand-object interactions for dexterous
+robot manipulation. In Advances in Neural Information Processing Systems (NeurIPS), 2026.
+Jianing Zhang, Chenhao Zheng, Yajun Yang, et al. MolmoMotion: Forecasting point trajectories in
+3D with language instruction. arXiv, 2026.
+Yujia Zhang, Xiaoyang Wu, Yixing Lao, Chengyao Wang, Zhuotao Tian, Naiyan Wang, and Heng-
+shuang Zhao. Concerto: Joint 2D-3D self-supervised learning emerges spatial representations. In
+Advances in Neural Information Processing Systems (NeurIPS), 2025.
+Tony Z. Zhao, Vikash Kumar, Sergey Levine, and Chelsea Finn. Learning fine-grained bimanual
+manipulation with low-cost hardware. In Robotics: Science and Systems (RSS), 2023.
+Haoyu Zhen, Xiaowen Qiu, Peihao Chen, Jincheng Yang, Xin Yan, Yilun Du, Yining Hong, and
+Chuang Gan. 3D-VLA: A 3D vision-language-action generative world model. In International
+Conference on Machine Learning (ICML), 2024.
+Ruijie Zheng, Jing Wang, Scott Reed, et al. FLARE: Robot learning with implicit world modeling.
+In Conference on Robot Learning (CoRL), 2025.
+13
+
+
+Preprint
+A
+EXTENDED RELATED WORK
+In this section, we extend Section 2 to further world action models, 3D representations for robot
+policies, and other ways of learning from human demonstration videos.
+Future targets of world action models.
+Beyond the dense 3D scene motion forecast by EgoWAM
+and PointWorld, world action models differ in what future they forecast and what they condition it
+on. Several forecast geometric futures, such as object poses in DyWA (Lyu et al., 2025) and depth
+in GAM (Han et al., 2026). 3D-VLA (Zhen et al., 2024) forecasts goal RGBD images or point
+clouds, and WSA1 (Jiang et al., 2026) forecasts latent 3D scene states. Others keep an image future.
+Fast-WAM (Yuan et al., 2026) and Cosmos 3 (NVIDIA et al., 2026) build on video generation
+backbones, 4D-WAM (Yang et al., 2026) aligns its features with 3D trajectory fields during training,
+and FLARE (Zheng et al., 2025) aligns future tokens of its policy with image features of a future
+frame. X-WAM (Guo et al., 2026) forecasts multi-view RGB-D video alongside actions. In each of
+these, the forecast future takes a different form from the motion that produces the action, whereas
+PointWAM expresses the scene and the hands with the same 3D point trajectories and retargets only
+the hands to actions. Dexterous World Model (Kim et al., 2026b) conditions its interaction video
+on given hand trajectories, much as PointWorld conditions on future robot trajectories, so it also
+requires a supplied hand trajectory rather than forecasting one itself for robot control.
+3D representations for robot policies.
+PointWAM observes the scene as a point cloud, which
+gives a policy direct access to 3D geometry. DexPoint (Qin et al., 2022a) and DexArt (Bao et al.,
+2023) combine observed geometry with kinematics-derived point clouds for dexterous reinforce-
+ment learning, and DP3 (Ze et al., 2024) learns imitation policies from encoded point clouds. Even
+the image-based SpatialVLA (Qu et al., 2025) augments its features with 3D positions from esti-
+mated depth. In all of these, geometry serves only as input, and the control objective alone trains
+the backbone. CordViP (Fu et al., 2025) adds contact and hand–arm correspondence objectives.
+PointACT (Chen et al., 2026a) keeps a 2D vision–language backbone and admits pre-trained 3D
+point features only in its action expert, through multi-scale point–action attention, so geometry con-
+ditions the action but never the backbone’s representation. PointWAM also builds on pre-trained 3D
+features but supervises the backbone with future hand and scene trajectories, which human demon-
+stration videos supply without recorded robot actions.
+Other ways of learning from human demonstration videos.
+Beyond the point-based policies in
+Section 2, methods differ in what they transfer from the video to the robot. Retargeting the human
+hand pose (Qin et al., 2022b) transfers actions directly but sets no scene-forecasting objective, and
+neither do the hand and object poses of FlowHOI (Zeng et al., 2026). DexWM (Goswami et al.,
+2026) learns a latent world model from egocentric human videos with hand keypoints as actions,
+so it forecasts the effect of given hand motion rather than the motion itself, and HarmoHOI (Dang
+et al., 2026) co-generates hand–object interaction videos and 3D point tracks for synthesis rather
+than robot control. Track-based methods (Wen et al., 2024; Bharadhwaj et al., 2024) forecast the
+future image positions of arbitrary points, but the tracks and the features behind them stay in image
+space. General Flow (Yuan et al., 2024) forecasts 3D flow only at query points sampled on the
+manipulated object, MolmoMotion (Zhang et al., 2026) forecasts 3D trajectories of query points on
+an object of interest, and µ0 (Lee et al., 2026) forecasts 3D traces of interaction keypoints selected
+with a vision-language model. In all three, something outside the model decides which scene points
+it supervises. PointWAM instead encodes the full point cloud and supervises the trajectory of every
+observed point and of the hand, learned from human demonstration videos without robot actions.
+B
+IMPLEMENTATION DETAILS
+Appendix B.1 describes how we convert human demonstrations into point trajectories, and Ap-
+pendix B.2 does the same for DexJoCo and ends with the changes for RoboDojo-Precision. The
+remaining subsections give the model and training settings.
+14
+
+
+Preprint
+B.1
+HUMAN-DEMONSTRATION PREPROCESSING
+Human videos record neither robot states nor simulator states, so we estimate hand and scene tra-
+jectories from the videos themselves. EgoDex (Hoque et al., 2026) annotates an SE(3) transform
+for each of 25 joints per hand, and VITRA (Li et al., 2026b) reconstructs 21 joints for each visible
+hand. We keep the joint positions and map them to the hand keypoints described below. When a
+hand is missing, we mark its keypoints invalid instead of imputing them.
+Hand keypoints. We turn each human hand into the same ten keypoints as the robot hand (Ap-
+pendix B.2). Human demonstrations are first rotated, with their scenes, into a z-up frame like the
+robot-base frame of robot demonstrations. At each time t, we build a palm frame (ot, Bt) on the
+human hand, with its origin at the middle knuckle and its axes along the wrist-to-knuckle direction,
+along the knuckle row, and their cross product. Indexing the ten keypoints of one hand by k, the six
+palm keypoints overlay the robot palm on the human palm, placing the Allegro palm points at their
+fixed offsets d(k) from the robot’s palm in this frame. The four fingertip keypoints are the tracked
+tips f (k)
+t
+of the thumb, index, middle, and ring fingers:
+q(k)
+t
+= ot + Bt d(k)
+(k = 1, . . . , 6),
+q(k)
+t
+= f (k)
+t
+(k = 7, . . . , 10).
+(8)
+The little finger is omitted because the Allegro hand has no counterpart to it.
+Clips. We split each episode into 1 s clips of 11 frames at 10 Hz that start every 0.5 s, and dis-
+card clips whose summed wrist displacement is below 2 cm. We linearly resample each clip to 31
+frames, so that its future steps match the horizon T = 30 of the DexJoCo demonstrations. EgoDex
+contributes 5.2M clips from 324K episodes, and VITRA contributes 824,157 shorter episodes.
+Depth. VGGT-Ω(Wang et al., 2026b) predicts per-frame depth only up to scale. We recover the
+metric scale from the hands, which ARKit annotates in EgoDex and VITRA reconstructs. For each
+chunk of frames, we project the hand joints into the images, discard depth ratios zGT/zpred more than
+a factor of two from their median, and take the median of the remaining ratios as the scale.
+Scene tracks. We resize frames to 640×360, place queries on every second pixel of each clip’s first
+frame, and track them with CoTracker3 (Karaev et al., 2025) in offline mode. Backward tracking
+is unnecessary, since every query starts at the first frame. Each track reads the scaled depth at its
+pixels and is lifted to the world frame with the camera intrinsics and poses. We keep points that are
+visible with valid depth in the first frame, deduplicate them on a 1.5 cm grid, and subsample at most
+12,000. Since queries restart in every clip, point correspondence holds only within a clip.
+B.2
+ROBOT-DEMONSTRATION PREPROCESSING
+Point cloud and scene trajectories. In DexJoCo, robot fine-tuning and evaluation use 224 × 224
+depth images, which we unproject with the camera calibration, reduce to one point per 1 cm voxel,
+and crop to a box around the robot base, 1 m to each side and from 0.2 m below to 1 m above it. The
+box adapts the bounds filter of PointWorld (Huang et al., 2026), a cube about the scene center, to
+exclude the floor and walls. Since the DexJoCo dataset records object poses only at reset, we replay
+each demonstration to recover them over time. For each successful replay, simulator segmentation
+removes robot points from the initial point cloud and assigns every remaining point, background
+included, to an object or rigid part, whose rigid motion defines the point’s trajectory.
+Robot hand keypoints. Each robot hand has ten keypoints, six on the palm and four on the fin-
+gertips. The fingertip keypoints lie on the contact pads, since points on the distal joint axes would
+miss the motion of four finger joints during flexion. Separate kinematic chains compute the right
+and left hands, which record their joints in different orders, and each hand’s measured pose places
+its keypoints in the scene frame without mirroring one hand onto the other. Bimanual inputs list the
+right hand before the left and give each hand its own ID.
+RoboDojo-Precision. Its two ARX X5 arms carry parallel-jaw grippers, so we keep the pre-trained
+interface and change only what the embodiment requires. Following Point Policy (Haldar & Pinto,
+2025), which places robot points by a rigid transform about the gripper pose, each arm again has
+ten keypoints, the six palm offsets placed on the gripper frame from forward kinematics and the
+two fingertips, with the last point repeated to fill the ten slots. The point cloud fuses the depth of
+the head and two wrist cameras and drops points within 5 cm of the arm and finger segments. The
+15
+
+
+Preprint
+action replaces the sixteen finger joints with one gripper command, so da = 7 per arm, and the 30-
+step chunk spans 1.2 s at the benchmark’s 25 Hz. Since the released demonstrations carry no object
+poses or segmentation, scene trajectories cannot be reconstructed, and fine-tuning supervises only
+the hand keypoints and actions while the scene head stays frozen.
+B.3
+3D TRAJECTORY FORECASTER
+Tokenization. We build on the Volt (Yilmaz et al., 2026) implementation in WarpConvNet (Choy &
+NVIDIA Research, 2025). Where Volt projects the raw voxel features of each patch, this implemen-
+tation first computes a feature g(c) ∈Rdstem for every occupied voxel c with a sparse-convolutional
+stem. The stem applies a 33 sparse convolution to dstem = 64 channels, LayerNorm (Ba et al.,
+2016), GELU (Hendrycks & Gimpel, 2016), and two residual blocks. The token of patch j concate-
+nates the stem features of its K3
+v voxels in a fixed spatial order, with zeros for empty voxels, and
+projects them to width d:
+zv
+j = Wv[g(c1); . . . ; g(cK3v )] + bv ∈Rd.
+(9)
+Each patch spans Kv = 5 voxels, or 5 cm, per side, and the fixed order preserves where each voxel
+sits inside the patch, which pooling would discard.
+Backbone. The backbone is Volt-H, with 32 layers, 20 heads, and width d = 1280. The L instruc-
+tion features from the frozen Recap-CLIP text encoder (Li et al., 2025b) are projected to width d
+and precede the M vision tokens in Eq. (3). Axial 3D rotary position embeddings (Su et al., 2024;
+Yilmaz et al., 2026) encode the patch coordinates of vision tokens. Instruction tokens receive no ro-
+tation, since the text encoder already encodes word order. Attention is bidirectional and stays within
+one observation, and only the output vision tokens are decoded.
+Trajectory decoder. Before the Detokenizer of Eq. (4) expands a token, the token passes through
+LayerNorm, GELU, a linear layer, LayerNorm, and GELU. The saved mapping It then selects each
+point’s feature from the K3
+v expanded voxel features. The stem features St ∈R(N+K)×dstem give
+each scene point or hand keypoint the feature g(c) of its voxel. The fusion MLP consists of a linear
+layer, LayerNorm, GELU, and a zero-initialized linear layer, so training starts from the detokenized
+features alone. A final LayerNorm and GELU applied to the residual sum give the per-point features
+Ft that the scene and hand heads of Eq. (5) read to forecast trajectories.
+B.4
+ACTION RETARGETER
+The retargeter of Eq. (6) stacks two decoder blocks with four attention heads.
+MLPdisp and
+MLPstate each have two linear layers with a SiLU between them, and MLPdisp reads the K rows
+of Vt,τ as one vector in a fixed order, which preserves hand and keypoint identities. Each block
+applies LayerNorm before its self-attention, cross-attention, and feed-forward layers. Self-attention
+among the action queries is unmasked, so the decoder predicts the whole action chunk in parallel
+rather than one step at a time. With Ht ∈RT ×dr the output queries of the last block, the final linear
+layer follows a LayerNorm:
+At = LayerNorm(Ht) Wa + ba.
+(10)
+The retargeter learns the map from robot demonstrations instead of solving inverse kinematics, so
+it enforces no explicit joint limits or collision constraints. Its targets are recorded actions, which
+already respect joint limits and avoid collisions since a robot executed them.
+B.5
+NORMALIZATION AND LOSS WEIGHTING
+Trajectory normalization. The heads of Eq. (5) forecast standardized displacements. We standard-
+ize scene and hand displacements separately, with coordinate-wise means µscene
+τ
+, µhand
+τ
+∈R3 and
+standard deviations σscene
+τ
+, σhand
+τ
+∈R3 for each horizon step, and fine-tuning keeps the statistics of
+pre-training. With ¯u(i)
+t,τ and ¯v(k)
+t,τ the entries of Ut and Vt, we recover the displacements of Eq. (1) as
+u(i)
+t,τ = µscene
+τ
++ σscene
+τ
+⊙¯u(i)
+t,τ,
+v(k)
+t,τ = µhand
+τ
++ σhand
+τ
+⊙¯v(k)
+t,τ ,
+(11)
+16
+
+
+Preprint
+Table 4: Training settings for human-demonstration pre-training and DexJoCo fine-tuning.
+Pre-training
+Fine-tuning
+Data
+EgoDex + VITRA (1.15M episodes)
+DexJoCo (959 demos)
+Iterations
+60k
+60k
+Global batch size
+192
+192
+GPUs
+4 NVIDIA B200
+4 NVIDIA B200
+Optimizer
+AdamW (Loshchilov & Hutter, 2019)
+AdamW
+Learning rate
+10−4
+10−4
+Learning-rate schedule
+constant
+constant
+Weight decay
+0.01
+0.01
+Warm-up
+none
+none
+Gradient-norm clipping
+5.0
+5.0
+Stochastic depth (Huang et al., 2016)
+0 to 0.3 over depth
+0 to 0.3 over depth
+Precision
+bfloat16 mixed
+bfloat16 mixed
+Window length
+31 frames (1 s of video)
+31 frames (0.6 s simulated)
+Voxel size
+1 cm
+1 cm
+Patch size Kv
+5
+5
+Maximum scene points
+12,000
+unrestricted
+Hand keypoints
+20
+10 or 20
+Trainable / frozen parameters
+651M / 592M
+655M / 592M
+Frozen encoders
+Mosaic3D, Recap-CLIP text
+Mosaic3D, Recap-CLIP text
+Retargeter
+not used
+trained
+Initialization
+random
+pre-training checkpoint (60k)
+Training time
+34 h
+19 h
+where ⊙denotes coordinate-wise multiplication. Adding them to p(i)
+t
+and q(k)
+t
+gives the forecast
+positions. Before standardization, we clip every coordinate of the scene displacements to the range
+[−0.5, 0.5] m, and the losses of Eq. (7) compare standardized displacements.
+Action normalization. Following the Franka–Allegro interface of DexJoCo (Wang et al., 2026a),
+each arm has three end-effector position coordinates, three rotation coordinates, and sixteen finger-
+joint targets, so da = 22 per arm. We express each target relative to the robot state st, as differences
+for positions and finger joints and as a rotation vector for orientation, then standardize each coor-
+dinate per horizon step with statistics of the robot demonstrations. The target A∗
+t of Eq. (7) is a
+recorded chunk after this map, which we invert at inference. Single-arm and bimanual embodiments
+have separate retargeters and action statistics but share the trajectory forecaster, whose per-point
+outputs do not depend on the layout of the action space.
+Loss weighting. In Eq. (7), a hand keypoint is valid when its hand is present and fills a real
+slot of the bimanual layout rather than padding, and the hand loss averages over valid keypoint–
+step pairs. Following PointWorld (Huang et al., 2026), the scene weights exclude points without a
+valid target and softly emphasize motion between adjacent frames. Their unnormalized values are
+sigmoid(5(δi,τ/0.005 −1)), with δi,τ = ∥p(i)
+t+τ −p(i)
+t+τ−1∥2 in meters, so a static point keeps a
+small positive weight; we normalize them over valid point–step pairs in the batch. Each squared
+error is divided by 3 and the action error by Tda, so every term is a per-coordinate mean. Hand and
+action errors average over valid batch elements, and all loss coefficients equal one.
+C
+EXPERIMENTAL DETAILS
+C.1
+TRAINING SETTINGS
+Main model. Table 4 lists the settings of the Volt-H multi-task model in Table 1. We pre-train it for
+60k iterations on EgoDex and VITRA (1,148,324 episodes in total) and fine-tune it for 60k iterations
+on DexJoCo, with the 3D and text encoders frozen in both stages.
+Component ablations. Ablations use Volt-L12, a backbone with width 1024, 12 layers, and 16
+heads, which trains 175M parameters. We pre-train it on EgoDex for 40k iterations and fine-tune it
+for 60k, starting from the pre-training snapshot with the lowest held-out hand-trajectory error (35k
+for the reference). Every variant, surface points included, changes both pre-training and fine-tuning.
+17
+
+
+Preprint
+Model scaling. The model-scaling study varies backbone width and depth while keeping the other
+components fixed. The Volt-S, Volt-B, Volt-L, and Volt-H configurations in Fig. 8 have widths of
+384, 768, 1024, and 1280 and depths of 12, 12, 24, and 32. All share frozen encoders with 592M
+parameters, and during fine-tuning they train 39M, 106M, 326M, and 655M parameters, including
+the 4.6M-parameter retargeter. Table 1 uses the largest configuration, Volt-H.
+C.2
+DEXJOCO EVALUATION PROTOCOL
+Inference timing. DexJoCo’s evaluator runs asynchronously. It requests a new chunk once fewer
+than 24 of the 30 actions remain and holds the robot’s pose whenever the buffer empties, so inference
+latency affects the executed behavior. On one B200 GPU, the Volt-L12 reference of Table 3 takes
+55 ms per forward pass, 37 ms of it in the frozen encoder. Each simulator control step spans 20 ms,
+so a 30-step chunk covers 0.6 s. Human clips carry the same 31 frames over 1 s (Appendix B.1), so
+one predicted step spans about 33 ms in pre-training and 20 ms in fine-tuning.
+Checkpoint selection. For the Volt-H multi-task model, we consider the 20k, 40k, and 60k fine-
+tuning snapshots and select on the first seed’s ten-task average, which selects 60k; all component
+ablations use 60k. Single-task policies are trained with the view augmentation of Appendix D for
+20k iterations (30k for bimanual hanoi and microwave) and evaluated at that final snapshot.
+C.3
+ROBODOJO-PRECISION EVALUATION PROTOCOL
+We use the official RoboDojo evaluator (Chen et al., 2026b). Unlike the DexJoCo evaluator, it
+runs synchronously. The simulator waits for each query, executes the whole action chunk, and then
+queries again, so inference latency does not affect the outcome. The evaluation seed selects a fixed
+set of initial layouts, and we run 50 episodes per task on seed 0, taking the layouts in order. An
+episode ends at success or at a task-specific step limit, from 300 steps for insert key and deposit coin
+to 1,900 steps for fasten screws, that is, 12 to 76 s at the benchmark’s 25 Hz.
+We report the success rate and the benchmark’s partial-progress score, each averaged over the eight
+tasks with equal weight. PointWAM is fine-tuned once from the 60k pre-training checkpoint, and
+we evaluate its 60k fine-tuning snapshot without further selection. The published benchmark instead
+trains three seeds per policy and evaluates each for 50 trials; we use one training seed and one
+evaluation seed for every method in Table 2. We leave out the public leaderboard entries, since they
+are trained on all RoboDojo tasks rather than the Precision demonstrations alone.
+C.4
+REAL-WORLD EXPERIMENTS DETAILS
+Banana PnP. This task evaluates basic single-arm pick-and-place and, more importantly, the ability
+to rely on geometry when color cues are ambiguous. We collect 54 demonstrations in which the robot
+picks up a banana from various positions on the table and places it in a basket at a fixed location.
+We run 24 evaluation trials per method with positions sampled from those in the demonstrations, 12
+with the banana and 12 with a box unseen in the demonstrations whose color closely matches the
+tabletop. A trial succeeds if the object lies entirely inside the basket at the end of the episode.
+Square-peg insertion. This task evaluates precise grasping and tight bimanual coordination: the
+robot must lift a square peg and a blue hole, align them, and insert the peg into the hole. Because the
+peg is slippery, an imprecise grasp allows it to tilt between the fingers, which causes the insertion
+to fail. We collect 64 demonstrations with the peg and hole placed at various positions, and run 24
+evaluation trials per method with positions sampled from those in the demonstrations. Since one
+end of the hole is capped, a trial is successful only if the peg remains in the hole at the end of the
+episode. To capture partial progress, we additionally score each trial on a scale from 0 to 3:
+• 0: fails to lift the peg.
+• 1: lifts the peg but fails to lift the hole.
+• 2: lifts both objects but fails to insert the peg.
+• 3: inserts the peg, which remains in the hole until the end of the episode (success).
+18
+
+
+Preprint
+C.5
+BASELINES
+C.5.1
+GR00T N1.6
+Following the official recipe,1 we fine-tune from the released GR00T N1.6-3B checkpoint (GEAR
+Team, 2025). We use the AdamW optimizer with a learning rate of 1 × 10−4, an action horizon of
+30, and input images at 224 × 224, with all remaining hyperparameters left at their defaults. With a
+global batch size of 256, we train a separate model per task for 30K steps (single-arm) or 60K steps
+(bimanual) in the DexJoCo single-task setting, and a single model across tasks for 60K steps in each
+of the DexJoCo multi-task and RoboDojo settings. For evaluation, we follow the default protocols
+of DexJoCo and RoboDojo-Precision. For the EgoDex (Hoque et al., 2026) pre-training experiment
+in Fig. 6, we follow H-RDT (Bi et al., 2026) and convert the ARKit hand annotations of EgoDex
+into a 44-D bimanual state per frame, consisting of the 3D position and quaternion orientation of
+each wrist, which serves as the end-effector pose, and the 3D positions of the five fingertips of each
+hand. Since human demonstrations carry no commanded actions, we define the action at step t as
+the next state, so that the model directly regresses future hand states. We pre-train for 30K steps
+with a global batch size of 192, the same budget as for the other baselines.
+C.5.2
+FAST-WAM
+We use the official codebase2 with the pre-trained Wan2.2-5B model. We train for 100K steps with a
+cosine learning-rate schedule initialized at 1×10−4, an action horizon of 32, and a global batch size
+of 64. For DexJoCo, we concatenate three 224 × 224 camera views, while for RoboDojo-Precision,
+we concatenate three 192 × 256 views. For evaluation, we follow the default protocols of DexJoCo
+and RoboDojo-Precision. In Fig. 6, we pretrain Fast-WAM on EgoDex with the same hand-state
+actions and budget as for GR00T N1.6, with single-view 224 × 224 videos as visual supervision.
+C.5.3
+POINTACT
+Following the official implementation3, we initialize the VLM backbone from Qwen2.5-VL-3B-
+Instruct (Bai et al., 2025) and keep it frozen, initialize the point encoder from the pretrained Con-
+certo (Zhang et al., 2025) PTv3-Large (Wu et al., 2024) checkpoint, and train the remaining modules
+from scratch. We use the AdamW optimizer with a learning rate of 5 × 10−5 and a cosine learning
+rate schedule, with random rotations of the point cloud about the gravity axis and image augmenta-
+tions as in the official implementation. With a global batch size of 256, we train a separate model
+per task for 30K steps in the DexJoCo single-task setting, and a single model across tasks for 60K
+steps in each of the DexJoCo multi-task and RoboDojo settings. Depth maps for both benchmarks
+are obtained in the same manner as for PointWAM. In Fig. 6, we pretrain PointACT on EgoDex with
+the same hand-state actions and budget as for GR00T N1.6.
+D
+ADDITIONAL QUANTITATIVE RESULTS
+D.1
+SINGLE-TASK DEXJOCO RESULTS
+Table 5 trains one policy per task in the object-placement setting. PointWAM averages 61.8%, 5.3
+percentage points above the strongest published baseline, π0.5 at 56.5%, and is best on five of the
+ten tasks. It falls below π0.5 on hammer nail and fold glasses, below DP-C on pinch tongs, below
+GR00T N1.6 and DP-T on bimanual microwave, and below DP-T, π0.5, and both GR00T models on
+bimanual photograph, where it reaches only 24.0%.
+Table 6 evaluates the same policies under full randomization, which also varies the table height,
+camera pose, lighting, and texture. The single-task PointWAM policies of both tables are trained
+with view augmentation in 3D. Under full randomization, PointWAM averages 62.9% and is best on
+all ten tasks. Every baseline loses 9.4 to 32.8 percentage points, so the margin of PointWAM over
+the strongest baseline widens from 5.3 to 22.2 percentage points.
+1https://github.com/NVIDIA/Isaac-GR00T
+2https://github.com/yuantianyuan01/FastWAM
+3https://github.com/cshizhe/robot-PointAct
+19
+
+
+Preprint
+Table 5: Single-task success rate (%) on DexJoCo. One policy per task in the object-placement set-
+ting; notation as in Table 1. Our Avg. is computed per seed over the ten retained tasks and averaged
+over the three seeds. ACT (Zhao et al., 2023), DP (Chi et al., 2023), π0.5, and GR00T N1.5 (NVIDIA
+et al., 2025) results are from Wang et al. (2026a); GR00T N1.6 follows the same protocol.
+Task
+DP-T
+DP-C
+ACT
+π0.5 GR00T N1.5 GR00T N1.6 PointWAM
+hammer nail
+81.33.1 58.74.2 50.07.2 84.75.0
+67.34.2
+58.02.0
+82.04.0
+click mouse
+62.02.0 74.05.3 61.33.1 64.78.1
+85.33.1
+66.04.0
+89.34.2
+pick bucket
+83.33.1 70.02.0 64.04.0 84.07.2
+72.06.0
+94.02.0
+96.71.2
+pinch tongs
+22.75.8 57.36.4 31.33.1 24.06.9
+12.72.3
+33.36.4
+50.012.2
+fold glasses
+53.33.1 54.015.9 47.311.0 72.03.5
+27.32.3
+51.38.3
+62.04.0
+water plant
+84.03.5 63.33.1 47.34.6 88.73.1
+72.71.2
+77.39.0
+94.71.2
+hanoi /B
+24.74.6 12.73.1
+6.02.0 15.33.1
+0.71.2
+24.71.2
+36.013.9
+assembly /B
+4.73.1
+3.31.2
+0.00.0
+5.31.2
+0.71.2
+4.02.0
+11.37.0
+microwave /B 73.311.6 54.012.5 66.02.0 70.03.5
+50.74.6
+76.78.1
+72.010.0
+photograph /B 56.74.6 24.08.7
+7.31.2 56.75.0
+40.77.0
+30.06.9
+24.02.0
+avg.
+54.61.6 47.12.4 38.11.5 56.51.6
+43.01.2
+51.51.8
+61.81.1
+Table 6: Single-task success rate (%) on DexJoCo under full randomization. Object placement,
+table height, camera pose, lighting, and texture vary. ACT, DP, π0.5, and GR00T N1.5 results are
+from Wang et al. (2026a); notation follows Table 5. PointWAM evaluates the same viewpoint-
+augmented policies as Table 5, trained as described in Appendix D.
+Task
+DP-T
+DP-C
+ACT
+π0.5 GR00T N1.5 GR00T N1.6 PointWAM
+hammer nail
+18.71.2 19.33.1 22.76.1 17.35.0
+38.78.3
+26.77.0
+77.36.4
+click mouse
+25.38.1 34.74.2 48.75.0 54.77.0
+74.02.0
+50.74.2
+94.71.2
+pick bucket
+58.715.0 68.03.5 36.05.3 78.76.1
+69.36.1
+85.33.1
+96.04.0
+pinch tongs
+18.73.1 28.711.7 23.37.0 18.71.2
+5.32.3
+38.02.0
+47.35.8
+fold glasses
+11.31.2 15.37.6
+7.33.1 39.33.1
+20.73.1
+38.02.0
+66.010.6
+water plant
+56.08.7 54.05.3 52.78.1 75.36.4
+66.05.3
+76.74.2
+94.02.0
+hanoi /B
+0.71.2
+9.36.1
+4.72.3 15.32.3
+0.00.0
+22.06.0
+47.36.1
+assembly /B
+0.00.0
+0.00.0
+0.00.0
+0.00.0
+1.31.2
+0.00.0
+3.31.2
+microwave /B
+21.34.6 62.76.4 50.06.9 54.76.1
+42.07.2
+52.77.0
+74.04.0
+photograph /B
+7.31.2
+8.74.2
+3.31.2 21.32.3
+18.77.0
+16.78.1
+29.31.2
+avg.
+21.8
+30.1
+24.9
+37.5
+33.6
+40.72.6
+62.92.2
+Table 7: Additional component ablations. Same Volt-L12 reference and protocol as Table 3;
+shading marks the reference setting, and M is the average number of vision tokens per sample.
+(a) patch size
+Kv
+M SR (%)
+3
+1150 67.11.6
+5
+452 64.41.7
+7
+249 44.51.6
+(b) encoder fine-tuning
+case
+SR (%)
+frozen
+64.41.7
+fine-tuned
+54.90.9
+20
+
+
+Preprint
+D.2
+PATCH SIZE AND ENCODER FINE-TUNING
+Table 7 varies the patch size and encoder fine-tuning from the Volt-L12 reference of Table 3. With
+1 cm voxels, reducing Kv from 5 to 3 raises SR from 64.4% to 67.1% but costs 1.63× the training
+step time and 1.66× the peak memory, while Kv = 7 lowers SR to 44.5% (a). We therefore keep
+Kv = 5, which balances manipulation success against training time and memory. Fine-tuning the
+Mosaic3D encoder instead of keeping it frozen lowers SR from 64.4% to 54.9% (b), so the encoder
+stays frozen in all other experiments of this paper.
+E
+ADDITIONAL QUALITATIVE RESULTS
+Figures 9 and 10 show successful and failed PointWAM rollouts on the ten DexJoCo tasks. For
+each task, we take the first success and the first failure among eight rollouts, one episode on each
+of evaluation seeds 0–7; water plant succeeds in all sixteen rollouts we ran, so it has no failure row.
+In most failures, PointWAM grasps the object but stops short of the last step until the time limit. It
+holds the hammer above the nail, the peg beside the hole, the glasses next to the box, and the camera
+without pressing the shutter. Figure 11 shows rollouts on the eight RoboDojo-Precision tasks, and
+Figure 12 compares GR00T N1.6, π0.5, and PointWAM on the two real-robot tasks.
+21
+
+
+Preprint
+t = 0
+t = tend/3
+t = 2tend/3
+t = tend
+hammer nail
+click mouse
+pick bucket
+pinch tongs
+fold glasses
+water plant
+hanoi /B
+assembly /B
+microwave /B
+photograph /B
+Figure 9: Successful PointWAM rollouts on DexJoCo. One rollout per task from the multi-task
+policy, the first success among evaluation seeds 0–7, shown at four points up to its own tend.
+22
+
+
+Preprint
+t = 0
+t = tend/3
+t = 2tend/3
+t = tend
+hammer nail
+click mouse
+pick bucket
+pinch tongs
+fold glasses
+hanoi /B
+assembly /B
+microwave /B
+photograph /B
+Figure 10: Failed PointWAM rollouts on DexJoCo. One failed rollout per task from the multi-task
+policy, the first failure among the same rollouts as Figure 9, shown at four points up to its own tend.
+Water plant has no row: all 16 of its rollouts (seeds 0–15) succeed.
+23
+
+
+Preprint
+t = 0
+t = tend/3
+t = 2tend/3
+t = tend
+fasten screws
+plug in charger
+insert tubes
+pour balls
+play xylophone
+deposit coin
+insert key
+build tower
+Figure 11: PointWAM rollouts on RoboDojo-Precision. One rollout per task, shown at four points
+up to its own tend: a successful one (green border) for the five tasks PointWAM solves at least once,
+and a failed one (red border) for the other three tasks.
+24
+
+
+Preprint
+t = 0
+t = tend/3
+t = 2tend/3
+t = tend
+banana pick-and-place
+banana (in-domain)
+GR00T N1.6
+π0.5
+PointWAM
+banana pick-and-place
+unseen box (out-of-domain)
+GR00T N1.6
+π0.5
+PointWAM
+square-peg insertion
+GR00T N1.6
+π0.5
+PointWAM
+Figure 12: Real-robot rollouts. GR00T N1.6, π0.5, and PointWAM on the two tasks, each shown
+at four points up to its own tend with a green border for success and a red border for failure. Banana
+pick-and-place shows one trial each with the in-domain banana and the out-of-domain unseen box.
+25
