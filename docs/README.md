@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-05</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-06</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 21 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-05 18:59:58 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-06 19:04:51 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,9 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今天扫完19篇机器人论文，精读7篇、速读12篇，焦点集中在触觉灵巧操作与世界-动作模型。</p>
-<p>最值得看的是两篇9分精读：软触觉皮肤用于灵巧操作，以及重思世界-动作模型做组合式与上下文机器人操作。</p>
-<p>普通读者可先读这两篇精读，再按兴趣追8分的触觉好奇心、人形全身数据预训练或视触觉动态世界动作模型。</p>
+<p>2026-10-06 日报共筛出 21 篇机器人学习论文，精读 9 篇、速读 12 篇，聚焦灵巧操作与移动操作两大方向。最值得关注的是满分 9.0 的 DexJoCo-X 多手灵巧操作动作表示基准，以及 MobiAgent 面向长时程移动操作的双环递归策略自改进；速读中 VLM 智能体回溯世界建模与全身安全框架也值得一瞥。普通读者可先从 DexJoCo-X 了解灵巧操作评测标准，再顺着 MobiAgent 看移动操作如何靠自改进提升长任务表现。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -80,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">9 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SoTa: Soft Tactile Skins for Dexterous Manipulation">SoTa: Soft Tactile Skins for Dexterous Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rethinking World-Action Model for Compositional and In-Context Robotic Manipulation">Rethinking World-Action Model for Compositional and In-Context Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="SimpleTouch: Can Vision-Language-Action Models Master Contact-Rich Manipulation Without Tactile Policy Pretraining?">SimpleTouch: Can Vision-Language-Action Models Master Contact-Rich Manipulation Without Tactile Policy Pretraining?</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DexJoCo-X: Benchmarking Action Representations for Multi-Hand Dexterous Manipulation">DexJoCo-X: Benchmarking Action Representations for Multi-Hand Dexterous Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="MobiAgent: Dual-Loop Recursive Policy Self-Improvement for Long-Horizon Mobile Manipulation">MobiAgent: Dual-Loop Recursive Policy Self-Improvement for Long-Horizon Mobile Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="GOTT: Object-centric Dexterous Manipulation with a Reusable Cross-Embodiment Primitive">GOTT: Object-centric Dexterous Manipulation with a Reusable Cross-Embodiment Primitive</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">hand-manip <strong>5</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -96,9 +94,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Tactile Curiosity Drives Robot Interaction">Tactile Curiosity Drives Robot Interaction</span></li><li><span class="dpr-home-dashboard-paper-title" title="Towards a General Humanoid Loco-Manipulation Model via Egocentric Whole-Body Human Data Pretraining">Towards a General Humanoid Loco-Manipulation Model via Egocentric Whole-Body Human Data Pretraining</span></li><li><span class="dpr-home-dashboard-paper-title" title="TacDyn-WAM: Learning Implicit Tactile Dynamics in a Heterogeneous Visuo-Tactile World Action Model">TacDyn-WAM: Learning Implicit Tactile Dynamics in a Heterogeneous Visuo-Tactile World Action Model</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Beyond Prediction: Steering VLM Agents with Retrospective World Modeling">Beyond Prediction: Steering VLM Agents with Retrospective World Modeling</span></li><li><span class="dpr-home-dashboard-paper-title" title="WBAG: A Whole-Body and Attached-Geometry Safety Framework for Vision-Language-Action Manipulation">WBAG: A Whole-Body and Attached-Geometry Safety Framework for Vision-Language-Action Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="FlashDexRetarget: Accelerating Dexterous Manipulation Data Generation through Multi-Motion Retargeting">FlashDexRetarget: Accelerating Dexterous Manipulation Data Generation through Multi-Motion Retargeting</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>10</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>7</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>5</strong></span></div>
 </section>
 </div>
 

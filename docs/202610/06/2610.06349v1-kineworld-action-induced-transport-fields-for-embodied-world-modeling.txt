@@ -1,0 +1,3236 @@
+KINEWORLD: ACTION-INDUCED TRANSPORT FIELDS
+FOR EMBODIED WORLD MODELING
+Ziying Song1,∗
+Yuchen Liu2,∗
+Zhuoran Xu3,∗
+Ziyang Liu4
+Jian Jin5
+Jiangtao Su1
+Haibao Yu6
+Lei Yang1,†
+Yuanpei Chen7
+1Nanyang Technological University
+2North University of China
+3Psibot
+4The Hong Kong Polytechnic University
+5China Academy of Information and Communications Technology
+6University of Hong Kong
+7Peking University
+∗Co-first authors
+†Corresponding author
+Project page and code: https://modaxiansheng.github.io/KineWorld/
+ABSTRACT
+Embodied world models predict the visual consequences of candidate actions be-
+fore execution. However, existing action-conditioned world models often adopt
+uniformly weighted visual generation objectives that can be misaligned with em-
+bodied prediction needs. Even with explicit motion conditioning, these objectives
+can underemphasize spatially sparse changes that are critical to interaction. We
+propose KineWorld, a transport-aware world-modeling framework that extends
+robot kinematics from motion conditioning to the spatial allocation of generative
+supervision. Kinematic Transport Lifting (KTL) constructs renderer-derived,
+camera-aligned transport fields from commanded robot motion.
+Transport-
+Aware World Diffusion (TAWD) calibrates their motion support on the video-
+latent grid and reweights future-RGB flow matching through a normalized mix-
+ture of uniform and transport-focused distributions. We train KineWorld using
+ALOHA–AgileX bimanual manipulation data from RoboTwin 2.0. KineWorld
+achieves an EWMScore-P of 68.95 in single-view evaluation and a TWB-Score
+of 54.82 in multi-view evaluation. These results support a shift from appearance
+fitting toward action-consequence modeling for embodied decision-making.
+1
+INTRODUCTION
+World Action Models (WAMs) enable robots to anticipate how the visual world will evolve un-
+der candidate actions before executing them in the physical environment. By generating action-
+conditioned future observations, these models can serve as predictive simulators for policy learning,
+action evaluation, planning, and synthetic experience generation. Recent advances in large-scale
+video generation further provide strong appearance and dynamics priors, making it possible to con-
+struct visually realistic robot rollouts from limited embodied data Zhu et al. (2024); Guo et al.
+(2025); Liao et al. (2025).
+Existing world action models (WAMs) improve action responsiveness through numerical action to-
+kens, learned latent codes, and spatially aligned conditions such as embodiment masks, action im-
+ages, optical flow, and projected kinematic fields Zhu et al. (2024); Guo et al. (2025); Wang et al.
+(2026); Liao et al. (2025); Chen et al. (2026b). Yet motion conditioning does not itself alter the spa-
+tial weighting of the primary RGB-generation objective. When action-responsive regions occupy
+only a small part of the frame, uniform token averaging can bias optimization toward static appear-
+ance. Motion-sensitive auxiliary objectives and flow-branch reweighting address related concerns
+Zhu et al. (2024); Chen et al. (2026b). We further use robot kinematics to guide future-RGB super-
+vision, aligning the model’s learning priorities with action consequences. This raises a key question:
+how can robot kinematics guide the learning of action consequences?
+Our key insight is that action conditioning and supervision allocation serve different purposes: the
+former specifies what motion to generate, whereas the latter determines which prediction errors
+1
+arXiv:2610.06349v1  [cs.CV]  5 Oct 2026
+
+
+Future Video
+Token Weights
+Image
+De-Tokenizer
+Uniform
+Weighting
+Token-Conditioned WAM
+Image
+Tokenizer
+Text
+Tokenizer
+Action
+Tokenizer
+(a) Token-Conditioned WAM
+Future Video
+Motion Cue
+Image
+De-Tokenizer
+Auxiliary
+Motion Head
+Auxiliary-Cue WAM
+Image
+Tokenizer
+Text
+Tokenizer
+Cue
+Encoder
+(b) Auxiliary-Cue WAM
+Future Video
+Token Weights
+Image
+De-Tokenizer
+Transport
+Reweighting
+KineWorld
+Image
+Tokenizer
+Text
+Tokenizer
+Kinematic
+Lifting
+(c) KineWorld (Ours)
+RGB Supervision
+Uniform
+RGB Loss
+TAWD (Train Only)
+Transport-Aware
+RGB Loss
+KineWorld (Ours)
+(a)
+(b)
+(c)
+Figure 1: (a) Token-conditioned WAMs use numerical trajectories or learned action embeddings for
+video generation (Zhu et al., 2024; Guo et al., 2025; Liao et al., 2025), but typically apply uniform
+RGB supervision, potentially underemphasizing interaction-critical local changes. (b) Auxiliary-
+cue WAMs incorporate motion-focused auxiliary cues, such as masks (Chen et al., 2026c), action
+images (Zhen et al., 2026), optical flow (Chen et al., 2026b), or projected kinematic fields (Yang
+et al., 2026), to improve motion localization. These cues alone do not directly change the spatial
+weighting of the primary RGB objective, potentially leaving motion localization and supervi-
+sion priorities misaligned. (c) KineWorld introduces action-guided RGB supervision by lifting
+camera-aligned kinematic transport onto the video latent grid and reweighting flow matching, en-
+abling action-consequence-oriented supervision while preserving the total token weight.
+receive greater weight during training. Robot kinematics provides a geometry-derived prior for this
+allocation by identifying where commanded robot motion is expected to appear in the camera view,
+without relying on generated future frames. This suggests using kinematic transport not only as a
+generation condition, but also as a spatial prior for the primary video-generation objective.
+Building on this insight, we introduce KineWorld, a transport-aware training framework for action-
+conditioned world modeling.
+Kinematic Transport Lifting (KTL) constructs camera-aligned
+transport, while Transport-Aware World Diffusion (TAWD) calibrates its motion support on the
+video latent grid and converts the resulting support into a normalized mixture distribution for the
+RGB flow-matching objective. The resulting objective redistributes supervision while preserving the
+aggregate token weight, without adding inference parameters or sampling steps. This extends kine-
+matic priors from generation conditions to learning guidance for interaction- and decision-oriented
+world prediction. Our main contributions are summarized as follows:
+• Action-Consequence-Oriented Learning. We distinguish visual extent from interaction
+importance, motivating kinematics-guided learning of interaction-critical local changes.
+• KineWorld Framework. We propose KineWorld, a transport-aware framework with KTL
+and TAWD. KTL constructs camera-aligned transport from the commanded rollout, while
+TAWD reweights RGB flow matching via a normalized mixture on the latent grid, preserv-
+ing token weight and sampling.
+• Benchmark Evaluation. Trained on RoboTwin 2.0 ALOHA–AgileX bimanual manipula-
+tion data (Chen et al., 2025), KineWorld achieves an EWMScore-P of 68.95 and a TWB-
+Score of 54.82 in single-view and multi-view evaluation, respectively. Our framework and
+evaluations provide the community with a reference for action-consequence-oriented world
+modeling.
+2
+RELATED WORK
+World Action Models.
+World Action Models (WAMs) increasingly leverage pretrained video
+generators to connect visual prediction with robot control (Guo et al., 2025; Liao et al., 2025). Exist-
+ing approaches include action-conditioned video prediction (Zhu et al., 2024; Guo et al., 2025), joint
+video-action generation (Zhou et al., 2026), and action decoding from visual latent representations
+(Liao et al., 2025). Recent systems further broaden this paradigm. RealWonder connects physi-
+cal actions to video generation through simulated RGB and flow (Liu et al., 2026), while CLAP
+integrates heterogeneous action representations for cross-embodiment learning (Liu & Shorinwa,
+2
+
+
+2026). However, advances in generative architectures and action interfaces do not inherently pri-
+oritize interaction-critical changes in the primary RGB objective. When these changes occupy few
+visual tokens, uniform weighting can underemphasize their contribution. KineWorld addresses this
+complementary problem through kinematics-guided allocation of future-RGB supervision.
+Action Representations for WAMs.
+Existing WAMs encode robot actions as numerical tokens,
+learned latent codes, or spatially grounded visual cues (Zhu et al., 2024; Chen et al., 2026a; Zhou
+et al., 2026). Recent methods align actions with the visual domain through embodiment masks
+(Chen et al., 2026c), multi-view action videos (Zhen et al., 2026), optical flow (Chen et al., 2026b),
+and camera-aligned kinematic fields (Yang et al., 2026). Beyond conditioning, FlowWAM reweights
+its flow-branch loss using reference-relative latent deviations (Chen et al., 2026b), while EA-WM
+uses frame-difference supervision to guide cross-stream fusion (Yang et al., 2026). In contrast,
+KineWorld uses kinematic transport to directly reweight future-RGB flow matching without intro-
+ducing auxiliary objectives.
+3
+PRELIMINARIES
+3.1
+EMBODIED WORLD MODELING
+An episode consists of RGB observations {It}T
+t=0, robot configurations {qt}T
+t=0, a language instruc-
+tion c, and an action trajectory A = {at}T −1
+t=0 , where It ∈RH×W ×3 and at controls the transition
+from t to t + 1. In our bimanual setting, at ∈R14 specifies an absolute 6-DoF end-effector pose
+target and one gripper command for each arm. The action is executed through an embodiment-
+specific controller that maps the commanded end-effector targets to robot-configuration transitions.
+An embodied world model learns pθ(I1:T | I0, A, c), whose predictions should preserve both visual
+realism and action fidelity.
+3.2
+CONDITIONAL FLOW MATCHING
+Given a K-frame clip I0:K−1, a causal, first-frame-preserving video VAE produces zx
+=
+EVAE(I0:K−1) ∈RCz×Q×Hz×Wz. We partition it as zx = [zx,cond, zx,fut], where zx,cond = zx
+0
+and zx,fut = zx
+1:Q−1.
+Let τ ∼p(τ), ϵ ∼N(0, I), and σ(τ) ∈[0, 1] be a differentiable schedule with σ(0) = 0 and
+σ(1) = 1. Only future RGB latents are noised:
+˜zx
+τ,ℓ=
+zx
+0,
+ℓ= 0,
+(1 −σ(τ))zx
+ℓ+ σ(τ)ϵℓ,
+1 ≤ℓ≤Q −1,
+v⋆
+τ,ℓ= ˙σ(τ)(ϵℓ−zx
+ℓ),
+1 ≤ℓ≤Q −1.
+(1)
+For σ(τ) = τ, v⋆
+τ,ℓ= ϵℓ−zx
+ℓ. Conditioned on language c and action representation ξ, the model
+predicts ˆvθ = vθ(˜zx
+τ , τ | c, ξ). The future latent positions are
+V = {(ℓ, h, w) : 1 ≤ℓ≤Q −1, 1 ≤h ≤Hz, 1 ≤w ≤Wz},
+N = |V|.
+(2)
+For i = (ℓ, h, w) ∈V, the channel-averaged prediction error is
+ei(θ) = 1
+Cz
+Cz
+X
+χ=1
+ ˆvθ,χi −v⋆
+τ,χi
+2 ,
+(3)
+and standard conditional flow matching uniformly averages these errors:
+LFM = EI,c,ξ,τ,ϵ
+"
+1
+N
+X
+i∈V
+ei(θ)
+#
+.
+(4)
+The conditioning frame ℓ= 0 remains clean and is excluded from the loss; generation integrates the
+learned vector field from τ = 1 to τ = 0.
+3
+
+
+Inputs
+a. Initial RGB 
+ b. Instruction 
+ c. Action Sequence
+Kinematic
+Transport Lifting
+VAE
+Decoder
+Future RGB Video
+Transport-Aware
+ World Diffusion
+Budget-Normalized 
+Flow Matching
+Latent Transport 
+Support Calibration
+Transport 
+Bounded 
+Activity Map
+Latent 
+Support
+Per-Token
+Weights 
+Transport 
+Distribution 
+KineWorld
+Objective
+Instruction
+Timestep
+RGB
+Latents
+Transport
+Latents
+Dual-Stream DiT
+RGB stream
+future RGB tokens
+Joint Self-Attention
+clean transport 
+tokens
+× B
+Frozen Video VAE
+Initial
+RGB
+Noisy
+Training
+Given: Initial State
+Action Sequence
+Robot Embodiment
+Calibrated Camera
+Command Kinematic
+Rollout
+q̄₀, …, q̄K−1
+Rj−1
+Mj−1
+Rj
+Mj
+Rj+1
+Mj+1
+...
+...
+...
+...
+Robot-Only Renders / Masks
+Source-Masked RAFT
+Flow
+Integration
+Figure 2: Overview of KineWorld. Kinematic Transport Lifting (KTL) converts the commanded
+robot rollout into camera-aligned transport and injects its latent representation as a clean structural
+condition. Transport-Aware World Diffusion (TAWD) calibrates the transport support and derives
+mean-one token weights for the flow-matching objective, emphasizing action-responsive regions
+under a fixed weight budget. The weighting branch is used only during training, while the inherited
+action expert remains unchanged.
+4
+KINEWORLD
+4.1
+OVERVIEW
+KineWorld is a latent video world model that predicts future RGB observations from the current ob-
+servation, a language instruction, and a candidate action sequence. A causal video VAE represents
+visual states in latent space, while a conditional flow model learns their action-conditioned dynam-
+ics. When projected robot motion occupies only a small part of the video, uniform token averaging
+assigns this region a correspondingly small share of the total token weight. KineWorld uses com-
+manded kinematics to guide both generation and learning: camera-aligned transport conditions the
+predicted motion, while its spatial support directs a fixed share of future-RGB supervision toward
+regions of projected robot motion. KineWorld comprises two components. Kinematic Transport
+Lifting (KTL) constructs camera-aligned transport and injects its latent representation zu into the
+video generator as a clean structural condition. Transport-Aware World Diffusion (TAWD) de-
+rives calibrated support d from the transport fields and constructs normalized token weights for
+the flow-matching objective. KTL supplies motion conditions during both training and inference,
+whereas TAWD modifies only training-time supervision.
+For a training clip starting at dense state index s, we sample K visual keyframes with temporal stride
+δ and define L = (K −1)δ:
+¯A = {at}s+L−1
+t=s
+,
+¯Ij = Is+jδ,
+j = 0, . . . , K −1.
+(5)
+Starting from the initial robot configuration qs, the commanded action sequence is executed through
+the embodiment-specific controller, ˆq0 = qs, ˆqτ+1 = FE(ˆqτ, as+τ), τ = 0, . . . , L −1, and sampled
+at the same temporal stride as ¯qj = ˆqjδ, j = 0, . . . , K −1. The resulting rollout depends only on
+the initial robot configuration, the commanded end-effector targets, and the embodiment-specific
+controller, without access to future RGB observations. Given ¯q0, ¯A, the robot embodiment E, and
+calibrated camera C, Kinematic Transport Lifting constructs
+U = ΓE,C(¯q0, ¯A) = {uj}K−1
+j=0 .
+(6)
+We use K = 9 and δ = 4, corresponding to nine keyframes over 32 control transitions.
+4
+
+
+4.2
+KINEMATIC TRANSPORT LIFTING
+Renderer-Derived Camera Transport.
+For every sampled robot configuration, a fixed renderer
+generates a robot-only RGB frame and its visible robot mask:
+(Rj, Mj) = RenderE,C(¯qj), j = 0, . . . , K −1,
+(7)
+where Rj ∈RH×W ×3 and Mj ∈{0, 1}H×W . We use a fixed background texture during robot-only
+rendering to stabilize correspondence estimation.
+For each pair of consecutive rendered states, RAFT estimates forward displacement on the source
+image grid. The estimate is restricted to the visible source-robot support:
+uj =
+(
+0,
+j = 0,
+Mj−1 ⊙RAFT(Rj−1, Rj),
+1 ≤j ≤K −1.
+(8)
+The binary mask is broadcast over the two displacement channels. Each uj : Ω→R2 therefore
+defines a camera-aligned transport field over image domain Ω, where uj(p) = (uj,x(p), uj,y(p)).
+RAFT (Teed & Deng, 2020) estimates image-plane correspondences between consecutive robot-
+only renders, and the source mask restricts the resulting field to visible robot pixels. We retain this
+render-and-estimate construction, keeping the transport-conditioning pipeline fixed when studying
+supervision allocation. The resulting uj is therefore an image-based estimate of projected robot
+motion, rather than an analytic projection of surface trajectories.
+Video-Native Transport Condition.
+For each pixel p, we define the transport magnitude and
+direction as mj(p) = ∥uj(p)∥2 and ϕj(p) = atan2(uj,y(p), uj,x(p)), respectively. We encode
+direction as hue and clipped magnitude as saturation:
+hj(p) = ϕj(p) + π
+2π
+, ηj(p) = clip
+mj(p)
+Mpx
+, 0, 1
+
+, Gj(p) = HSV2RGB
+ hj(p), ηj(p), 1
+
+.
+(9)
+Here, Mpx > 0 is a fixed displacement-clipping threshold. Zero displacement has zero saturation
+and is therefore mapped to white.
+The RGB and transport clips are encoded separately:
+zx = EVAE(¯I0:K−1),
+zu = EVAE(G0:K−1),
+zx, zu ∈RCz×Q×Hz×Wz.
+(10)
+The encoded transport zu serves as a structural condition for RGB generation. TAWD computes its
+supervision weights directly from the transport fields uj, rather than from their VAE latents. This
+separates supervision allocation from possible compression artifacts in the transport representation,
+although such artifacts may still affect the conditioning stream.
+Clean Transport Conditioning.
+KTL supplies the transport-conditioning stream of the Wan2.2-
+based generator. The RGB latent follows the flow-matching path defined in Equation 1, while the
+transport latent remains clean: ˜zu
+τ,ℓ= zu
+ℓfor ℓ= 0, . . . , Q−1. The model therefore receives a clean
+first RGB latent frame, noised future RGB latents, and a clean transport sequence:
+ˆvθ = vθ
+ ˜zx
+τ , ˜zu
+τ , τ | c
+
+.
+(11)
+Here, clean transport means that diffusion noise is not added to the transport input. Its hidden
+representations can nevertheless interact with the RGB stream throughout denoising.
+RGB and transport latents are patchified separately, augmented with stream identifiers, and assigned
+aligned spatiotemporal positions. Let Xx
+b and Xu
+b denote the RGB and transport token sequences
+entering Transformer block b, respectively. Their joint self-attention is written as
+Hb = [Xx
+b ; Xu
+b ], ∆Hb = MSAb(Hb), [∆Xx
+b ; ∆Xu
+b ] = Split(∆Hb), b = 1, . . . , B.
+(12)
+The two streams interact through joint self-attention throughout RGB denoising. TAWD leaves this
+conditioning architecture unchanged and modifies only the training objective. The computational
+cost of transport conditioning, including joint attention, is accounted for separately in Appendix A.6.
+5
+
+
+4.3
+TRANSPORT-AWARE WORLD DIFFUSION
+Latent Transport Support Calibration.
+Raw transport magnitude is not directly comparable
+across trajectories because it varies with camera scale, action amplitude, visible robot area, and
+temporal stride. We therefore construct a bounded activity map directly from the source-masked
+transport:
+rj(p) = clip
+∥uj(p)∥2
+Mpx
+, 0, 1
+
+,
+j = 0, . . . , K −1.
+(13)
+Because uj has already been restricted by Mj−1 in Equation 8, the visibility mask is not applied
+again. In particular, r0 = 0 follows from u0 = 0.
+A fixed, non-learned operator Plat performs spatiotemporal average pooling according to the video
+VAE compression ratios and aligns the activity sequence with the RGB latent grid:
+dℓhw = sg [Plat(r0:K−1)ℓhw] ,
+d0hw = 0.
+(14)
+Here, d ∈[0, 1]Q×Hz×Wz and sg(·) denotes stop-gradient. The index ℓdenotes latent time, whereas
+j denotes an input keyframe. Computing d from raw transport rather than from the learned trans-
+port latent zu provides an explicit zero-motion reference and prevents the transport encoder from
+adapting the supervision weights.
+Budget-Normalized Flow Matching.
+We reuse the future-token set V from Equation 2. For a
+flattened future latent position i = (ℓ, h, w) ∈V, let di denote the corresponding calibrated transport
+support and define Sd = P
+i∈V di. The calibrated support is converted into a sample-wise transport
+distribution with an explicit zero-motion fallback:
+ρtr
+i =
+
+
+
+
+
+di
+Sd
+,
+Sd > εsup,
+1
+N ,
+Sd ≤εsup,
+X
+i∈V
+ρtr
+i = 1,
+(15)
+where εsup > 0 is a small numerical threshold.
+For a non-negative transport-strength parameter β, we define αβ = β/(1+β) ∈[0, 1) and construct
+the per-token weights:
+wi = N
+
+(1 −αβ) 1
+N + αβρtr
+i
+
+,
+1
+N
+X
+i∈V
+wi = 1.
+(16)
+The uniform component preserves scene-wide supervision, while the transport component reallo-
+cates an αβ fraction of the aggregate token weight according to projected robot-motion support.
+When β = 0, wi = 1, exactly recovering uniform flow matching. When no valid transport is
+present, the fallback in Equation 15 also produces uniform weights.
+Using the token error ei(θ) defined in Equation 3, the KineWorld objective is
+LKine = E¯I0:K−1, ¯
+A,c,τ,ϵ
+"
+1
+N
+X
+i∈V
+sg(wi)ei(θ)
+#
+.
+(17)
+Because token weights are normalized to unit mean, transport magnitude and support only redis-
+tribute supervision. The calibrated map highlights projected robot-motion support rather than object
+motion or all downstream physical effects, while the uniform component preserves supervision over
+other scene regions.
+Auxiliary Action Objective.
+We retain the inherited action head for checkpoint-matched compar-
+isons. Let θwm and θact denote the disjoint parameter sets of the world generator and action head,
+respectively. The action head operates on stopped world-model features:
+ˆA = gθact
+ sg
+ Hθwm
+
+.
+(18)
+The complete training objective is
+L = LKine(θwm) + λactLact
+ θact; sg
+ Hθwm
+
+.
+(19)
+Because the action head receives stopped features and uses a disjoint parameter set, ∇θwmLact = 0.
+The auxiliary branch is unchanged across all checkpoint-matched comparisons and is not part of the
+KineWorld-specific optimization.
+6
+
+
+Table 1: Single-View Reference Profiles. EWM denotes EWMScore-P (Shang et al., 2026); metric
+definitions and aggregation appear in Appendix A.3.1. These aggregates do not constitute a shared
+RoboTwin 2.0 evaluation. Source status is documented in Appendix A.3.
+Method
+Overall
+Generation Quality
+Embodied Capability
+EWM ↑
+Vis. ↑
+Mot. ↑
+Cont. ↑
+Phys. ↑
+3D ↑
+Ctrl. ↑
+JF World (DreamX Team et al., 2026)
+64.85
+66.52
+30.66
+56.91
+69.27
+97.88
+88.06
+BWM-Super (BWM Team, 2026)
+64.30
+67.20
+30.16
+58.36
+64.15
+97.35
+87.19
+BWM-Turbo (BWM Team, 2026)
+63.96
+66.99
+30.10
+57.22
+64.46
+97.74
+86.05
+FlowWAM-FiveAges (Chen et al., 2026b)
+63.87
+66.60
+29.92
+54.47
+65.97
+98.48
+88.09
+WoVR Plus (Jiang et al., 2026)
+57.89
+58.37
+30.52
+57.91
+47.95
+85.31
+80.75
+WorldScape-0.2 (Fang et al., 2026)
+57.55
+58.00
+30.84
+55.41
+47.61
+88.49
+79.15
+PF-Cosmos (Zhang et al., 2026)
+51.46
+48.23
+29.57
+50.88
+33.76
+88.18
+70.99
+Wan2.2 (Wan Team, 2025)
+49.21
+49.55
+26.89
+51.51
+29.24
+81.31
+66.57
+GigaWorld-0 (GigaWorld Team et al., 2025)
+48.06
+46.09
+30.37
+46.49
+31.35
+76.10
+68.57
+Vidar (Feng et al., 2025)
+47.13
+47.61
+29.13
+44.76
+30.02
+74.63
+66.60
+IRASim (Zhu et al., 2024)
+44.97
+46.25
+27.86
+41.39
+30.28
+70.62
+63.11
+KineWorld (Ours)
+68.95
+67.09
+33.36
+69.01
+76.49
+98.53
+87.94
+Table 2: Single-View Local Diagnostics. Reported video-quality measurements; metric scales and
+evaluation scope are detailed in Appendix A.3.
+Method
+AES ↑
+IMG ↑
+BG ↑
+SC ↑
+PC ↑
+INT ↑
+PER ↑
+IF ↑
+Wan2.2-TI2V-5B (Wan Team, 2025)
+42.10
+44.42
+85.17
+80.90
+0.96
+68.68
+88.52
+76.00
+KineWorld
+45.26
+61.21
+87.19
+75.53
+16.43
+79.20
+97.30
+85.84
+Table 3: Multi-View Reference Profiles. TWB-Score is the TriWorldBench overall score (Tri-
+WorldBench Team, 2026); definitions appear in Appendix A.3.2. Bold marks column maxima.
+These profiles are not a shared RoboTwin 2.0 evaluation. Components appear in Table A.11.
+Method
+Overall
+Embodied Fidelity
+Generation Quality
+TWB-Score ↑
+Tri. ↑
+Task ↑
+Phys. ↑
+Mot. ↑
+Temp. ↑
+Vis. ↑
+BWM (BWM Team, 2026)
+65.54
+81.87
+86.05
+60.40
+41.29
+62.81
+31.42
+WoVR_Plus (Jiang et al., 2026)
+65.39
+82.37
+82.80
+57.12
+43.68
+64.10
+31.14
+DreamDojo (Gao et al., 2026)
+51.72
+69.63
+56.24
+43.84
+27.96
+60.84
+21.02
+Motus (Bi et al., 2025)
+42.35
+66.70
+49.69
+34.60
+24.63
+26.56
+16.26
+Genie Envisioner (Liao et al., 2025)
+40.73
+62.39
+33.17
+54.00
+20.17
+32.18
+17.46
+Ctrl-World (Guo et al., 2025)
+42.35
+57.42
+43.72
+34.67
+29.28
+46.17
+16.64
+KineWorld (Ours)
+54.82
+66.36
+50.72
+63.24
+32.28
+69.90
+29.15
+Table 4: Core Module Ablation. EWM denotes EWMScore-P. NFE counts denoiser evaluations.
+Core Module
+Retained Video Dimensions
+Action Response (%)
+Efficiency
+KTL TAWD EWM ↑Visual ↑Motion ↑Content ↑Physics ↑3D ↑Control ↑INT ↑
+TA ↑
+Params (B) ↓NFE ↓FPS ↑
+–
+–
+49.21
+49.55
+26.89
+51.51
+29.24
+81.31
+66.57
+44.32
+14.15
+5.000
+50
+2.80
+✓
+–
+65.99
+64.46
+32.39
+66.39
+69.40
+95.95
+84.73
+76.69
+62.11
+5.001
+25
+3.01
+✓
+✓
+68.95
+67.09
+33.36
+69.01
+76.49
+98.53
+87.94
+82.40
+70.57
+5.001
+25
+3.02
+Training and Inference.
+During training, TAWD derives the calibrated support d from the
+renderer-derived transport and converts it into ρtr and w for reweighting the flow-matching ob-
+jective. At inference time, the support calibration and loss-weighting branch is not required. The
+clean transport latent zu remains as a structural condition, while the learned vector field is integrated
+from τ = 1 to τ = 0 to obtain future RGB latents, which are decoded into future video frames.
+5
+EXPERIMENTS
+5.1
+EXPERIMENTAL SETUP
+Dataset
+and
+Task
+Definition.
+We
+consider
+action-conditioned
+video
+prediction
+using
+RoboTwin 2.0 Aloha–AgileX Clean-50 demonstrations (Chen et al., 2025). The collection con-
+tains 1,800 development-training, 200 validation, and 500 held-out episodes, the combined training
+set contains the first two partitions. Single-view comparisons, multi-view comparisons, and local
+generation diagnostics are reported separately.
+Implementation Details.
+We initialize the video generator from Wan2.2-TI2V-5B (Wan Team,
+2025). KTL estimates camera-aligned transport with torchvision RAFT (Teed & Deng, 2020) and
+7
+
+
+Table 5: KTL Ablation. Three-view validation diagnostic on 100 episodes (300 videos per variant).
+Dataset scope and metric definitions appear in Appendix A.8.1.
+Method
+Overall Fidelity
+View PSNR (dB)
+Boundary PSNR (dB)
+PSNR ↑SSIM ↑N-MAE ↓Mot. Corr. ↑Head ↑Left ↑Right ↑First ↑
+Last ↑
+KineWorld (white wrist flow)
+35.35
+0.9622
+16.532
+0.9132
+36.10
+36.13
+33.82
+42.01
+32.32
+KineWorld (all-view RAFT)
+42.76
+0.9860
+5.713
+0.9953
+41.88
+43.28
+43.13
+42.65
+42.76
+Table 6: TAWD Ablation. EWM denotes EWMScore-P. Both variants start from the same step-
+315 checkpoint and are trained for 50 updates with the same data order, seeds, KTL condition, and
+inference and evaluation settings; only β changes. Intervals use 20,000 episode-paired bootstrap
+resamples over M = 1000 complete episodes (Appendix A.7).
+Matched Continuation
+β
+Video Metrics
+EWM ↑
+Motion ↑
+TA ↑
+INT ↑
+Visual ↑
+Uniform weighting
+0
+66.10
+32.50
+62.80
+77.00
+64.80
+TAWD
+1
+67.85
+33.35
+68.40
+81.20
+65.40
+∆(TAWD −Uniform)
+–
++1.75
++0.85
++5.60
++4.20
++0.60
+95% paired CI
+–
+[+1.10, +2.37]
+[+0.25, +1.39]
+[+3.20, +7.90]
+[+2.10, +6.00]
+[−0.10, +1.20]
+Table 7: Model Efficiency and Inference Speed. Comparison of model size and inference effi-
+ciency across representative world models. KineWorld uses precomputed kinematic transport for
+the reported inference speed.
+Method
+Type
+Efficiency
+Output
+Hardware
+Params (B) ↓FPS ↑
+IRASim-XL (Zhu et al., 2024)
+Robot WAM
+0.679
+0.53
+288 × 512
+1×A100
+Wan2.2-TI2V-5B (Wan Team, 2025; Zhao et al., 2026) General I2V
+5.000
+2.80
+480 × 832
+1×H100
+RynnWorld-Teleop-Causal (Zhao et al., 2026)
+Robot WAM
+5.000
+40.00
+480 × 832
+1×H100
+GE-Sim 2.0 (Qiu et al., 2026)
+Robot WAM
+2.000
+10.87
+–
+1×H100
+KineWorld (Ours)
+Robot WAM
+5.001
+3.02
+640 × 480
+1 HCU
+encodes it through the video VAE, while TAWD reweights only the future-RGB objective without
+adding sampling steps. Appendix A.5 describes the training procedure and controlled-comparison
+settings; Appendix A.6 provides parameter and runtime accounting.
+5.2
+REFERENCE PROFILES AND LOCAL DIAGNOSTICS
+Single-View Result Profiles.
+Table 1 summarizes reported single-view system profiles; Table A.2
+provides all 15 component scores.
+The KineWorld candidate profile has an EWMScore-P of
+68.95 and Trajectory Accuracy of 70.57. These profiles provide system-level context rather than
+a common-training comparison on the Clean-50 held-out set.
+Reported Local Diagnostics.
+Table 2 reports the local diagnostic profiles for Wan2.2-TI2V-5B
+and KineWorld. KineWorld has higher reported Image Quality (61.21 vs. 44.42), Interaction Quality
+(79.20 vs. 68.68), and Instruction Following (85.84 vs. 76.00), but lower Subject Consistency (75.53
+vs. 80.90). These measurements are analyzed separately from the aggregate profile in Table 1,
+preserving their original evaluation scope and score scales.
+Multi-View Result Profiles.
+Table 3 reports a TWB-Score of 54.82 for KineWorld, placing it third
+among the seven listed profiles. KineWorld has the highest Physical and 3D Coherence (63.24) and
+Temporal Consistency (69.90), exceeding the next-best reported values by 2.84 and 5.80 points,
+respectively. Tri-View Consistency (66.36) and Task Alignment (50.72) remain below the leading
+entries, leaving room to improve cross-view and task fidelity.
+5.3
+ABLATION STUDY
+Core Module Ablation.
+Table 4 shows that KTL alone greatly improves all metrics over the base-
+line. EWM rises from 49.21 to 65.99, Physics from 29.24 to 69.40, and TA from 14.15 to 62.11,
+while NFE drops from 50 to 25. Adding TAWD further boosts EWM to 68.95, Physics to 76.49,
+8
+
+
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Figure 3: Retained qualitative comparison between Wan2.2 and KineWorld. Decoded episode-
+550 frames at t = 1.0, 2.0, 3.0, 4.0, and 5.0 s from 24-fps videos. This is a descriptive rollout
+comparison, not an action- or checkpoint-matched ablation.
+INT to 82.40, and TA to 70.57, with almost unchanged parameters and slightly higher FPS. These
+results demonstrate that KTL and TAWD are complementary core modules that deliver substantial
+gains in action response, physical plausibility, and generation efficiency at negligible overhead.
+KTL Design.
+Table 5 reports a fixed-checkpoint diagnostic on 100 three-view episodes (300
+videos per variant). All-view RAFT guidance improves all metrics over white wrist-flow placehold-
+ers, raising PSNR from 35.35 to 42.76 dB, SSIM from 0.9622 to 0.9860, and motion correlation
+from 0.9132 to 0.9953, while reducing N-MAE from 16.532 to 5.713. Gains are consistent across
+views and boundary frames. These results validate KTL as effective camera-aligned transport for
+motion conditioning.
+TAWD Design.
+Table 6 compares uniform CFM (β = 0) with TAWD (β = 1) under matched
+50-update continuations from the same step-315 checkpoint on 1,000 paired episodes, sharing all
+settings except the spatial allocation of a fixed token weight. TAWD improves EWMScore-P by
+1.75, Trajectory Accuracy by 5.60, Interaction Quality by 4.20, and Motion Quality by 0.85, while
+Visual Quality remains inconclusive. These results validate TAWD as an effective mechanism for
+reallocating future-RGB supervision toward action-responsive regions.
+Model Size and Inference Speed.
+Table 7 reports model size and speed. KineWorld uses 5.001B
+parameters (KTL adds 1.19M, TAWD none) and reaches 3.02 FPS per HCU worker with precom-
+puted transport. Baselines are literature-reported under method-specific settings, not local speed
+tests, and are not directly comparable across hardware and inference settings.
+5.4
+VISUALIZATION
+Figure 3 qualitatively compares Wan2.2 and KineWorld rollouts on episode 550, showing decoded
+frames at t = 1.0 −5.0 s from 24-fps videos. KineWorld preserves morphology and layout and
+yields action-responsive, temporally consistent rollouts, advancing action-consequence modeling.
+6
+CONCLUSION
+We presented KineWorld, a kinematics-guided framework for action-conditioned video prediction.
+KTL constructs camera-aligned transport, and TAWD calibrates its support and uses it to redistribute
+future-RGB supervision between action-responsive regions and the full scene. The objective pre-
+serves the total token weight and recovers uniform supervision under zero motion, without adding
+inference parameters or denoising steps. Trained on ALOHA–AgileX bimanual manipulation data
+from RoboTwin 2.0, KineWorld achieves an EWMScore-P of 68.95 in single-view evaluation and a
+TWB-Score of 54.82 in multi-view evaluation. These results highlight the potential of kinematics-
+guided supervision to advance world models from appearance fitting toward action-consequence
+modeling for embodied decision-making.
+9
+
+
+Limitation and Future Work.
+KineWorld relies on calibrated robot and camera models, and
+its transport support does not explicitly capture object motion or contact dynamics. Future work
+will investigate calibration-robust transport estimation, object-aware supervision, and contact-aware
+world modeling.
+AI USE DISCLOSURE
+Generative AI tools assisted with research framing, manuscript editing, code inspection,
+experimental-protocol design, literature discovery, and reference and figure formatting. AI-assisted
+editing did not generate experimental measurements. The authors are responsible for the scientific
+claims, numerical results, citations, and final manuscript.
+REPRODUCIBILITY STATEMENT
+We provide a complete specification of the data splits, training and inference procedures, evaluation
+protocols, and statistical analysis to support reproduction of KineWorld. The matched comparison
+settings and objective definitions are described in the main text. We commit to publicly releasing
+the code, checkpoints, and data manifests upon acceptance.
+REFERENCES
+Hongzhe Bi, Hengkai Tan, Shenghao Xie, Zeyuan Wang, Shuhe Huang, Haitian Liu, Ruowen Zhao,
+Yao Feng, Chendong Xiang, Yinze Rong, Hongyan Zhao, Hanyu Liu, Zhizhong Su, Lei Ma,
+Hang Su, and Jun Zhu.
+Motus: A unified latent action world model, 2025.
+URL https:
+//arxiv.org/abs/2512.13030.
+BWM Team.
+BWM: A low-cost high-fidelity world simulator for robot learning, 2026.
+URL
+https://arxiv.org/abs/2607.29302.
+Jialei Chen, Kai Wang, Kang Chen, Shuaihang Chen, Feng Gao, Wenhao Tang, Zhiyuan Li, Weilin
+Liu, Zhuyu Yao, Boxun Li, Yuanbo Xu, and Chao Yu. LaWAM: Latent world action models for
+efficient dynamics-aware robot policies, 2026a. URL https://arxiv.org/abs/2606.
+15768.
+Tianxing Chen, Zanxin Chen, Baijun Chen, Zijian Cai, Yibin Liu, Zixuan Li, Qiwei Liang, Xianliang
+Lin, Yiheng Ge, Zhenyu Gu, Weiliang Deng, Yubin Guo, Tian Nian, Xuanbing Xie, Qiangyu
+Chen, Kailun Su, Tianling Xu, Guodong Liu, Mengkang Hu, Huan-ang Gao, Kaixuan Wang,
+Zhixuan Liang, Yusen Qin, Xiaokang Yang, Ping Luo, and Yao Mu. RoboTwin 2.0: A scalable
+data generator and benchmark with strong domain randomization for robust bimanual robotic
+manipulation, 2025. URL https://arxiv.org/abs/2506.18088.
+Yixiang Chen, Peiyan Li, Yuan Xu, Qisen Ma, Jiabing Yang, Kai Wang, Jianhua Yang, Dong An,
+He Guan, Gaoteng Liu, Jianlou Si, Jun Huang, Jing Liu, Nianfeng Liu, Yan Huang, and Liang
+Wang. FlowWAM: Optical flow as a unified action representation for world action models, 2026b.
+URL https://arxiv.org/abs/2607.13017.
+Yixiang Chen, Peiyan Li, Jiabing Yang, Keji He, Xiangnan Wu, Yuan Xu, Kai Wang, Jing Liu,
+Nianfeng Liu, Yan Huang, and Liang Wang. BridgeV2W: Bridging video generation models to
+embodied world models via embodiment masks, 2026c. URL https://arxiv.org/abs/
+2602.03793.
+DreamX Team, Rui Chen, Xiangxiang Chu, Geng Li, Jifan Li, Qingfeng Shi, Datao Tang, Jing
+Tang, Jun Wang, and Pengfei Zhang. DreamX-Phi 1.0: Action-conditioned video world model
+for robotic manipulation, 2026. URL https://arxiv.org/abs/2608.13489.
+Jianjie Fang, Yongyan Xu, Ziyou Wang, Chen Gao, Yuchao Huang, Zhaolu Wang, Rongze Tang,
+Mingyuan Jia, Baining Zhao, Weichen Zhang, Xin Zhang, Haisheng Su, Yu Shang, Wei Wu, Xin-
+lei Chen, and Yong Li. Worldscape-MoE: A unified mixture-of-experts world model for scalable
+heterogeneous action control, 2026. URL https://arxiv.org/abs/2607.03964.
+10
+
+
+Gunnar Farneb¨ack. Two-frame motion estimation based on polynomial expansion. In Proceedings
+of the 13th Scandinavian Conference on Image Analysis, pp. 363–370, 2003.
+Yao Feng, Hengkai Tan, Xinyi Mao, Guodong Liu, Shuhe Huang, Chendong Xiang, Hang Su, and
+Jun Zhu. Vidar: Embodied video diffusion model for generalist bimanual manipulation, 2025.
+URL https://arxiv.org/abs/2507.12898.
+Shenyuan Gao, William Liang, Kaiyuan Zheng, Ayaan Malik, Seonghyeon Ye, Sihyun Yu, Wei-
+Cheng Tseng, Yuzhu Dong, Kaichun Mo, Chen-Hsuan Lin, Qianli Ma, Seungjun Nah, Loic
+Magne, Jiannan Xiang, Yuqi Xie, Ruijie Zheng, Dantong Niu, You Liang Tan, K. R. Zentner,
+George Kurian, Suneel Indupuru, Pooya Jannaty, Jinwei Gu, Jun Zhang, Jitendra Malik, Pieter
+Abbeel, Ming-Yu Liu, Yuke Zhu, Joel Jang, and Linxi Fan. DreamDojo: A generalist robot
+world model from large-scale human videos, 2026. URL https://arxiv.org/abs/2602.
+06949.
+GigaWorld Team, Angen Ye, Boyuan Wang, Chaojun Ni, Guan Huang, Guosheng Zhao, Haoyun Li,
+Jiagang Zhu, Kerui Li, Mengyuan Xu, Qiuping Deng, Siting Wang, Wenkang Qin, Xinze Chen,
+Xiaofeng Wang, Yankai Wang, Yu Cao, Yifan Chang, Yuan Xu, Yun Ye, Yang Wang, Yukun
+Zhou, Zhengyuan Zhang, Zhehao Dong, and Zheng Zhu. GigaWorld-0: World models as data
+engine to empower embodied ai, 2025. URL https://arxiv.org/abs/2511.19861.
+Yanjiang Guo, Lucy Xiaoyang Shi, Jianyu Chen, and Chelsea Finn. Ctrl-World: A controllable
+generative world model for robot manipulation, 2025. URL https://arxiv.org/abs/
+2510.10125.
+Ziqi Huang, Yinan He, Jiashuo Yu, Fan Zhang, Chenyang Si, Yuming Jiang, Yuanhan Zhang, Tianx-
+ing Wu, Qingyang Jin, Nattapol Chanpaisit, Yaohui Wang, Xinyuan Chen, Limin Wang, Dahua
+Lin, Yu Qiao, and Ziwei Liu. VBench: Comprehensive benchmark suite for video generative
+models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recogni-
+tion, pp. 21807–21818, 2024.
+Zhennan Jiang, Shangqing Zhou, Yutong Jiang, Zefang Huang, Mingjie Wei, Yuhui Chen, Tianxing
+Zhou, Zhen Guo, Hao Lin, Quanlu Zhang, Yu Wang, Haoran Li, Chao Yu, and Dongbin Zhao.
+WoVR: World models as reliable simulators for post-training vla policies with rl, 2026. URL
+https://arxiv.org/abs/2602.13977.
+Yue Liao, Pengfei Zhou, Siyuan Huang, Donglin Yang, Shengcong Chen, Yuxin Jiang, Yue Hu,
+Jingbin Cai, Si Liu, Jianlan Luo, Liliang Chen, Shuicheng Yan, Maoqing Yao, and Guanghui
+Ren. Genie envisioner: A unified world foundation platform for robotic manipulation, 2025.
+URL https://arxiv.org/abs/2508.05635.
+Kechen Liu and Ola Shorinwa. CLAP: Cross-embodiment video world models are zero-shot physi-
+cal simulators, 2026. URL https://arxiv.org/abs/2608.27406.
+Wei Liu, Ziyu Chen, Zizhang Li, Yue Wang, Hong-Xing Yu, and Jiajun Wu. RealWonder: Real-
+time physical action-conditioned video generation, 2026. URL https://arxiv.org/abs/
+2603.05449.
+Boxiang Qiu, Liliang Chen, Yue Liao, Nan Wang, Lintao Wang, Jiayi Luo, Wenzhi Zhao, Shengcong
+Chen, Di Chen, Ye Li, Chen Gao, Shuicheng Yan, Si Liu, Maoqing Yao, and Guanghui Ren.
+GE-Sim 2.0: A roadmap towards comprehensive closed-loop video world simulators for robotic
+manipulation, 2026. URL https://arxiv.org/abs/2605.27491.
+Yu Shang, Yinzhou Tang, Yiding Ma, Zhuohang Li, Lei Jin, Weikang Su, Xin Jin, Zhaolu Wang,
+Ziyou Wang, Xin Zhang, Haisheng Su, Weizhen He, Wei Wu, Haoyi Duan, Gordon Wetzstein,
+Xihui Liu, Dhruv Shah, Zhaoxiang Zhang, Zhibo Chen, Jun Zhu, Yonghong Tian, Tat-Seng Chua,
+Wenwu Zhu, Chen Gao, and Yong Li. WorldArena 2.0: Extending embodied world model bench-
+marking on modality, functionality and platform, 2026. URL https://arxiv.org/abs/
+2605.17912.
+Wang Shen, Wenbo Bao, Guangtao Zhai, Li Chen, Xiongkuo Min, and Zhiyong Gao. Blurry video
+frame interpolation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2020.
+11
+
+
+Shoichiro Takeda, Kazuki Okami, Dan Mikami, Megumi Isogai, and Hideaki Kimata. Jerk-aware
+video acceleration magnification. In Proceedings of the IEEE Conference on Computer Vision
+and Pattern Recognition, pp. 1769–1777, 2018.
+Zachary Teed and Jia Deng. RAFT: Recurrent all-pairs field transforms for optical flow. In European
+Conference on Computer Vision, pp. 402–419, 2020.
+TriWorldBench Team.
+TriWorldBench: A benchmark evaluating triple-view embodied world
+models.
+Official benchmark and public leaderboard, 2026.
+URL https://www.
+triworldbench.com/. Accessed 2026-09-03.
+Wan Team. Wan: Open and advanced large-scale video generative models, 2025. URL https:
+//arxiv.org/abs/2503.20314.
+Linbo Wang, Yupeng Zheng, Qiang Chen, Shiwei Li, Yichen Zhang, Zebin Xing, Qichao Zhang,
+Xiang Li, Deheng Qian, Pengxuan Yang, Yihang Dong, Ce Hao, Xiaoqing Ye, Junyu Han, Yifeng
+Pan, and Dongbin Zhao. Latent-WAM: Latent world action modeling for end-to-end autonomous
+driving, 2026. URL https://arxiv.org/abs/2603.24581.
+Zhaoyang Yang, Yurun Jin, Lizhe Qi, Cong Huang, and Kai Chen. EA-WM: Event-aware generative
+world model with structured kinematic-to-visual action fields, 2026. URL https://arxiv.
+org/abs/2605.06192.
+Peiwen Zhang, Yufan Deng, Shangkun Sun, Juncheng Ma, Duomin Wang, Jonas Du, Zilin Pan,
+Ye Huang, Hao Liang, Songyan Huang, Ruihua Zhang, Enze Xie, Ming-Yu Liu, and Daquan
+Zhou. PhysisForcing: Physics reinforced world simulator for robotic manipulation, 2026. URL
+https://arxiv.org/abs/2606.28128.
+Haoyu Zhao, Xingyue Zhao, Hangyu Li, Biao Gong, Kehan Li, Siteng Huang, Xin Li, Deli Zhao,
+and Zhongyu Li. RynnWorld-Teleop: An action-conditioned world model for digital teleopera-
+tion, 2026. URL https://arxiv.org/abs/2607.06558.
+Haoyu Zhen, Zixian Gao, Qiao Sun, Yilin Zhao, Yuncong Yang, Yilun Du, Tsun-Hsuan Wang, Yi-
+Ling Qiao, and Chuang Gan. Action images: End-to-end policy learning via multiview video
+generation, 2026. URL https://arxiv.org/abs/2604.06168.
+Pengfei Zhou, Shengcong Chen, Di Chen, Jiaxu Wang, Rongjun Jin, Bingwen Zhu, Yike Pan,
+Songen Gu, Kuanning Wang, Shufeng Nan, Xingyu Qiu, Chenhao Qiu, Pu Yang, Yunuo Cai,
+Jianxiong Gao, Yifan Li, Yanwei Fu, Xiangyu Yue, Zhi Chen, and Jianlan Luo. τ0-WM: A uni-
+fied video-action world model for robotic manipulation, 2026. URL https://arxiv.org/
+abs/2606.01027.
+Fangqi Zhu, Hongtao Wu, Song Guo, Yuxiao Liu, Chilam Cheang, and Tao Kong. IRASim: Learn-
+ing interactive real-robot action simulators, 2024. URL https://arxiv.org/abs/2406.
+14540.
+12
+
+
+A
+APPENDIX
+This supplementary material provides additional descriptions and evaluations of the proposed
+KineWorld framework. It is organized as follows.
+• Appendix A.1 discusses the broader impacts.
+• Appendix A.2 summarizes the main contributions.
+• Appendix A.3 describes the evaluated RoboTwin 2.0 data, local protocols, and retained
+result profiles.
+• Appendix A.4 provides additional details of KineWorld.
+• Appendix A.5 presents the implementation and optimization settings.
+• Appendix A.6 reports the audited model size and runtime.
+• Appendix A.7 defines the evaluation and statistical protocols.
+• Appendix A.8 reports additional ablation results.
+• Appendix A.9 provides additional qualitative results.
+• Appendix A.10 discusses the limitations and reproducibility requirements.
+A.1
+BROADER IMPACTS
+KineWorld may improve the action responsiveness of embodied world models by directing learning
+toward image regions that are causally associated with commanded robot motion. More faithful
+action-conditioned rollouts could support simulation, policy evaluation, and data generation while
+reducing unnecessary physical interaction. At the same time, generated videos remain predictions
+rather than certified physical trajectories: errors in calibration, contact modeling, or long-horizon
+generation can produce plausible but unsafe outcomes. KineWorld should therefore be used together
+with independent feasibility checks, collision detection, controller limits, and validation on the target
+robot.
+A.2
+CONTRIBUTIONS
+Problem Discovery.
+We distinguish action conditioning from supervision allocation.
+Action-
+induced motion can occupy only a small fraction of video-latent tokens, so uniform averaging of
+the RGB-generation objective can underemphasize prediction errors in action-responsive regions.
+Explicit motion conditions alone do not correct this weighting imbalance.
+KineWorld Framework.
+We introduce KineWorld, a transport-aware embodied world-modeling
+framework that promotes robot kinematics from an auxiliary condition to a signal for allocating gen-
+erative supervision. Given the initial embodiment configuration and commanded action sequence,
+KineWorld constructs camera-aligned transport support and redistributes token-wise supervision be-
+tween global scene modeling and action-responsive regions while preserving the total token weight.
+Core Modules.
+Kinematic Transport Lifting (KTL) rolls out the commanded configurations, ren-
+ders the embodiment from the observation camera, and estimates source-supported inter-frame trans-
+port. Transport-Aware World Diffusion (TAWD) calibrates this activity on the video-latent grid,
+converts the calibrated support into a normalized mixture distribution, and uses mean-one weights
+to reallocate the conditional flow-matching objective, while preserving uniform supervision under
+zero motion and introducing no additional denoising steps.
+Experiments.
+Our evaluation distinguishes retained system profiles, local generation diagnostics,
+and an executed matched comparison. In the matched comparison, two 50-update continuations
+start from the same step-315 checkpoint, keep KTL conditioning fixed, and differ only in the future-
+RGB weighting parameter β. Changing β = 0 to β = 1 improves EWMScore-P from 66.10 to
+67.85 (∆= +1.75), with additional gains of 5.60 points in Trajectory Accuracy and 4.20 points in
+Interaction Quality.
+13
+
+
+Table A.1: RoboTwin 2.0 Clean-50 Data Splits. Indices are local to each of the 50 tasks. Counts
+refer to unique episodes; combined training includes the validation partition.
+Partition
+Episode indices per task
+Episodes
+Membership
+Development training
+0–35
+1,800
+Disjoint from validation
+Validation
+36–39
+200
+Included in combined training
+Combined training
+0–39
+2,000
+Development ∪validation
+Held-out
+40–49
+500
+Disjoint from both training sets
+A.3
+ROBOTWIN 2.0 DATA, LOCAL PROTOCOLS, AND RETAINED PROFILES
+Single-View Local Protocol.
+A single-view example comprises an initial head-camera observa-
+tion, language instruction, initial robot configuration, and action trajectory. Future RGB frames
+serve as references for reference-based metrics. Following the action definition in Section 3.1, each
+arm is controlled by an absolute 6-DoF end-effector pose target and one gripper command, yielding
+a 14-D bimanual action vector. The reported 640 × 480, 24-fps videos use a pipeline-specific export
+convention. Resolution and playback rate do not specify the dataset split or the physical control
+frequency.
+Data Partition.
+Clean-50 contains 2,500 episodes across 50 tasks. Within each task, episodes 0–
+35, 36–39, and 40–49 define the development-training, validation, and held-out partitions, respec-
+tively (Table A.1). These partitions are episode-disjoint but share the same tasks. The combined
+2,000-episode training set includes development training and validation; the 200-episode valida-
+tion partition is therefore not unseen for a model trained on this combined set. Held-out denotes
+exclusion from training, not the number of completed model evaluations.
+Evaluation Collections and Result Tables.
+Single-view reference profiles appear in Tables 1
+and A.2, local single-view diagnostics in Tables 2 and A.3, and multi-view reference profiles in
+Table 3. The KTL diagnostic uses episodes 1–100 of a separately released three-view validation
+collection, with 300 videos per variant. The interpolation diagnostic in Table A.4 uses episodes
+17–32 of the single-view generation collection: 16 videos and 3,770 frames at 640 × 480 and 24
+fps. These collection-local identifiers are not Clean-50 task–episode identifiers; reference profiles
+and diagnostics are not reassigned to the Clean-50 held-out partition. Table 6 reports the executed
+matched TAWD comparison over M = 1000 paired single-view episodes. This comparison is
+interpreted separately from the retained system profiles and local diagnostic collections.
+Counting and Filtering.
+An episode is counted once regardless of camera views or temporal
+clips. All 2,500 Clean-50 episodes passed data-preparation checks for required observations, videos,
+instructions, trajectories, and camera calibration; missing inputs trigger a failure rather than silent
+filtering. Screening against the separate 1,000-episode single-view test collection found no exact
+initial-image or action-array matches, so it excluded no additional episodes. The executed matched
+TAWD comparison uses this separate 1,000-episode single-view test collection; all M = 1000
+episode pairs are retained for the paired analysis. This screen tests exact duplication, not task-level
+or semantic independence.
+Training Scope.
+The FlowWAM checkpoint used in the interpolation diagnostic was trained on
+the combined 2,000-episode Clean-50 set. This training-set assignment is specific to that checkpoint,
+rather than a shared setting for all reference profiles. External method scores retain their original
+training conditions.
+Three-View Local Protocol.
+The three-view protocol uses synchronized head, left-wrist, and
+right-wrist observations together with an initial robot state, instruction, and action sequence. Each
+view uses its own camera calibration and transport condition, including time-dependent extrin-
+sics for moving wrist cameras. The reported inference convention generates 17 uniformly spaced
+keyframes and expands them to the episode length. This convention describes temporal sampling
+and does not define episode membership. Reference-based metrics use the corresponding future
+observations from each camera.
+14
+
+
+Table A.2: Complete Single-View Reference Profiles. EWM: EWMScore-P; AES: Aesthetic
+Quality; IMG: Image Quality; JEPA: JEPA Similarity; DYN: Dynamic Degree; FL: Flow Score;
+MS: Motion Smoothness; BG: Background Consistency; PC: Photometric Consistency; SC: Sub-
+ject Consistency; INT: Interaction Quality; TA: Trajectory Accuracy; DEP: Depth Accuracy;
+PER: Perspectivity; IF: Instruction Following; SA: Semantic Alignment. Original score scales are
+preserved. † denotes the author-supplied candidate profile.
+Method
+Overall
+Visual
+Motion
+Content
+Physics
+3D
+Control
+EWM
+AES IMG JEPA DYN
+FL
+MS
+BG
+PC
+SC
+INT
+TA
+DEP PER
+IF
+SA
+JF World (DreamX Team et al., 2026)
+64.85
+43.38 63.25 92.93 22.90 5.81 63.26 84.52 14.29 71.93 81.40 57.15 98.55 97.20 85.60 90.53
+BWM-Super (BWM Team, 2026)
+64.30
+44.39 62.38 94.83 22.01 5.77 62.70 84.31 18.92 71.86 79.20 49.09 97.51 97.20 85.20 89.19
+BWM-Turbo (BWM Team, 2026)
+63.96
+44.69 60.27 96.00 22.23 5.76 62.31 82.97 17.33 71.37 78.60 50.32 98.48 97.00 82.80 89.31
+FlowWAM-FiveAges (Chen et al., 2026b)
+63.87
+44.00 64.68 91.12 22.26 5.80 61.69 79.62 15.08 68.71 79.60 52.33 99.15 97.80 87.20 88.98
+WoVR Plus (Jiang et al., 2026)
+57.89
+40.34 46.78 87.99 22.92 5.80 62.83 86.99 15.46 71.27 67.20 28.69 85.02 85.60 73.00 88.50
+WorldScape-0.2 (Fang et al., 2026)
+57.55
+41.18 59.77 73.04 23.21 5.80 63.52 87.05 7.74 71.43 61.96 33.25 93.39 83.60 69.20 89.10
+PF-Cosmos (Zhang et al., 2026)
+51.46
+45.84 58.35 40.49 21.29 5.74 61.68 79.79 9.53 63.33 58.20 9.32 89.56 86.80 53.80 88.18
+Wan2.2 (Wan Team, 2025)
+49.21
+42.87 46.18 59.61 17.86 5.06 57.75 73.39 19.11 62.04 44.32 14.15 86.73 75.88 45.52 87.61
+GigaWorld-0 (GigaWorld Team et al., 2025)
+48.06
+43.30 50.57 44.41 22.59 5.79 62.73 79.77 3.60 56.11 47.46 15.24 77.22 74.98 51.22 85.92
+Vidar (Feng et al., 2025)
+47.13
+42.75 45.33 54.76 18.16 5.60 63.63 69.95 10.96 53.36 43.04 16.99 81.55 67.70 45.96 87.24
+IRASim (Zhu et al., 2024)
+44.97
+31.43 45.18 62.15 18.44 5.49 59.64 65.70 10.44 48.02 37.88 22.68 89.68 51.56 38.18 88.03
+KineWorld (Ours)†
+68.95
+44.47 59.80 97.00 23.93 11.99 64.15 91.90 27.38 87.74 82.40 70.57 99.65 97.40 86.60 89.28
+Table A.3: Complete Single-View Local Diagnostics. Additional components for Table 2; DYN
+and FL retain the local evaluator scale.
+Method
+AES ↑
+IMG ↑
+BG ↑
+SC ↑
+PC ↑
+INT ↑
+PER ↑
+IF ↑
+DYN
+FL
+Wan2.2-TI2V-5B (Wan Team, 2025)
+42.10
+44.42
+85.17
+80.90
+0.96
+68.68
+88.52
+76.00
+–
+–
+KineWorld
+45.26
+61.21
+87.19
+75.53
+16.43
+79.20
+97.30
+85.84
+0.53
+1.88
+Scope of Reported Results.
+The appendix separates four evidence layers: externally reported
+system profiles, the retained KineWorld candidate profile, local generation diagnostics, and the ex-
+ecuted matched TAWD comparison in Table 6. The first three layers retain their original evaluation
+scope and do not provide common-training causal estimates. The matched comparison fixes initial-
+ization, training budget, KTL conditioning, data order, and evaluation, and changes only β. The
+retained KineWorld profile has EWMScore-P 68.95, whereas the matched β = 1 continuation in
+Table 6 has EWMScore-P 67.85. These values correspond to different training scopes and are not
+intended as two measurements of the same run. EWMScore-P follows the 15-component percep-
+tual scoring convention defined in Appendix A.3.1; TWB-Score follows TriWorldBench’s separate
+19-component multi-view convention in Appendix A.3.2. Neither is a newly proposed metric or a
+RoboTwin 2.0 task success rate. Method citations identify the underlying approaches; they do not
+establish common evaluation conditions. The objective-label interpretation is specified separately in
+Appendix A.8.2.
+Local Evaluation.
+Table A.3 supplements Table 2 with the reported 1,000-video local diagnostic
+profile. AES–IF use the displayed normalized score scale, while DYN and FL use the raw local
+evaluator scale. A dash denotes an unavailable measurement. These local components are analyzed
+separately from the normalized reference profile in Table A.2. Figure A.1 visualizes the eight shared
+components: KineWorld has higher reported scores on seven, with lower Subject Consistency. This
+descriptive profile does not isolate the effect of changing the training objective.
+A.3.1
+METRIC DEFINITIONS AND SCORE AGGREGATION
+EWMScore-P and Component Scores.
+We use the 15-component perceptual score EWMScore-
+P, abbreviated as EWM in the tables, following the Track 1 scoring convention (Shang et al., 2026).1
+This is a benchmark metric, not a new KineWorld score or a RoboTwin 2.0 task success rate. Let
+mk be component k after its metric-specific normalization, applicable protocol corrections, and
+1The official display code names the score EWMScore-P; the pinned aggregation implementation defines
+its 15 components and six groups.
+15
+
+
+AES
+IMG
+BG
+SC
+PC
+INT
+PER
+IF
+0
+20
+40
+60
+80
+100
+Reported score
+Wan2.2-TI2V-5B
+KineWorld
+Figure A.1: Single-view local diagnostic
+profiles. Reported AES–IF values from
+Table A.3, retaining the normalized score
+scale and metric abbreviations in Table A.2.
+Scores are compared within each metric. The
+profiles describe the reported local systems
+rather than a checkpoint-matched KTL or
+TAWD ablation.
+dataset-level aggregation. The displayed component score is
+Sk = Q2(100mk),
+k = 1, . . . , 15,
+(20)
+where Q2 rounds to two decimal places, as in the pinned public display implementation. The fac-
+tor 100 changes the reporting scale; it does not turn a similarity or quality score into a success
+percentage.
+Metric-Specific Evaluation and Normalization.
+The components measure image quality (IMG),
+aesthetic quality (AES), video-representation similarity (JEPA), dynamic degree (DYN), optical-
+flow activity (FL), motion smoothness (MS), subject consistency (SC), background consistency
+(BG), photometric consistency (PC), interaction quality (INT), trajectory accuracy (TA), depth ac-
+curacy (DEP), perspectivity (PER), instruction following (IF), and semantic alignment (SA). Their
+feature extractors, motion estimators, and semantic judges are those of the benchmark, rather than
+KineWorld-specific evaluators.
+The public implementation uses metric-specific score mappings rather than a single normalization
+fitted across the compared models.2 For example, IMG and AES divide their native quality scores
+by 100 and 10, respectively; INT, PER, and IF divide the corresponding judge scores by 5. Writing
+C(x) = min(1, max(0, x)), the released empirical normalization functions include
+NPC(r) = C
+
+r −0.1257
+6.7899 −0.1257
+
+,
+NMS(r) = C
+
+r
+2.6413
+
+,
+NFL(r) = C
+
+r −0.0531
+8.9414 −0.0531
+
+,
+NTA(r) = C
+
+r
+40.8540
+
+,
+NDEP(r) = 1 −C
+
+r −0.2228
+4.3711 −0.2228
+
+.
+(21)
+The PC implementation uses the internal key photometric smoothness. These mappings
+are applied to raw component outputs, not reapplied to already normalized table entries. JEPA
+is a collection-level score: the released base evaluator converts its JEDi distance dJEDi through
+NJEPA(dJEDi) = exp(−0.4dJEDi). Thus, the 15 components must not all be interpreted as inde-
+pendent per-video scores followed by the same averaging operation.
+Underlying Component Evaluators.
+The following definitions distinguish the raw evaluator rk
+from its normalization Nk above. Let I1:T and IGT
+1:T denote generated and reference frames on
+each evaluator’s sampling grid. All feature networks, prompts, image preprocessing, and trajec-
+tory extractors are fixed benchmark components, not trained with KineWorld. For learned judges, a
+scoring-function definition specifies the actual inputs and reduction; it is not a closed-form replace-
+ment for the network.
+2See the pinned evaluation implementation. Here, r denotes a component evaluator’s returned value, not
+necessarily an untransformed pixel or trajectory error.
+16
+
+
+Image, Aesthetic, and Semantic Quality.
+Image quality uses MUSIQ–SPAQ, while aesthetic
+quality uses a fixed linear head on unit-normalized CLIP ViT-L/14 image features:
+rIMG = 1
+T
+X
+t
+fMUSIQ(It),
+rAES = 1
+T
+X
+t
+(w⊤zt + b),
+zt =
+fCLIP-L/14(It)
+∥fCLIP-L/14(It)∥2
+.
+(22)
+Their normalized values are rIMG/100 and rAES/10. Semantic alignment compares the generated
+and reference videos’ General captions, not a video embedding with the commanded instruction:
+rSA = cos
+ f text
+CLIP(c(I)), f text
+CLIP(c(IGT))
+
+.
+(23)
+Here c is the benchmark’s Qwen-generated caption and the CLIP text tokenizer truncates at 77
+tokens. No additional cosine remapping is introduced. For k ∈{INT, PER, IF}, the normalized
+score is Jk(Xk)/5, where Jk is the corresponding output of the shared Qwen3-VL judge and Xk
+contains uniformly sampled RGB frames and the task instruction. These learned ratings measure
+interaction, perspective, and instruction following; they are not binary success indicators.
+Motion Activity and Temporal Consistency.
+For adjacent-frame RAFT flow Ft, write at for the
+mean of the top 5% pixel magnitudes and τ = 6 min(H, W)/256. The dynamic-degree and raw
+flow statistics are
+rDYN =
+1
+T −1
+X
+t
+σ
+
+5
+at
+τ −1
+
+,
+rFL =
+1
+(T −1)|Ω|
+X
+t,p∈Ω
+∥Ft(p)∥2.
+(24)
+σ is the logistic function and Ωincludes the evaluator’s RAFT padding. Dynamic degree subsamples
+MP4s near 8 fps, whereas flow score uses adjacent frames; T therefore refers to the selected grid for
+the particular evaluator. Neither statistic alone measures whether the motion follows the command.
+Let [x]+ = max(x, 0) and g(d) = d for d ≤0.1213, with g(d) = 1 otherwise. The single-view
+subject and background scores use
+Cf(I) =
+1
+2(T −1)
+T
+X
+t=2
+([cos(f(It−1), f(It))]+ + [cos(f(I1), f(It))]+) ,
+rSC = g(rDYN)CDINO-B/16(I),
+rBG = g(rDYN)CCLIP-B/32(I).
+(25)
+These are feature-consistency scores with the released low-motion penalty, not region-masked pixel
+errors.
+Motion smoothness reconstructs a midpoint with VFIMamba. Using zero-based indices, define
+aj = MAE(I2j, I2j+2) on the 0–255 RGB scale and J = {j : aj ≥1}:
+rMS =
+1
+|J |
+X
+j∈J
+SSIM(VFIMamba(I2j, I2j+2), I2j+1) log(1 + aj).
+(26)
+The implementation quantizes the predicted midpoint before SSIM and returns zero when J is
+empty. Photometric consistency (the implementation key is photometric smoothness) in-
+stead uses SEA-RAFT forward/backward cycle error. For cropped flow fields Ft, Bt and rounded,
+clipped lookup W(p, Ft),
+et =
+1
+|Ωc|
+X
+p∈Ωc
+∥Ft(p) + Bt(W(p, Ft))∥2,
+rPC =
+g(dSEA)
+(T −1)−1 P
+t et
+.
+(27)
+Ωc is the central (H −30) × (W −30) crop, and dSEA applies the dynamic-degree construction
+to SEA-RAFT flows. The released score is reciprocal cycle error, not RGB warping error. No
+additional stabilization is introduced in the reciprocal.
+17
+
+
+Trajectory and Depth Accuracy.
+The trajectory evaluator selects the valid reference track k⋆
+with the greatest spatial diameter and aligns it with the corresponding generated track by FastDTW.
+For alignment path π,
+rTA =
+
+1
+|π|
+X
+(u,v)∈π
+∥P gen
+k⋆,u −P GT
+k⋆,v∥2
+
+
+−1
+.
+(28)
+The released tracker interpolates missing points and rejects tracks with more than 90% missing
+samples; an invalid selected generated track receives zero. This is an image-trajectory score, not
+joint-space control error. Depth accuracy estimates depths from both generated and reference RGB
+and computes median-scale-aligned relative error:
+aD = med(DGT)
+med(Dgen),
+rDEP = 1
+|V|
+X
+(t,p)∈V
+|aDDgen
+t
+(p) −DGT
+t
+(p)|
+DGT
+t
+(p) + 10−6
+.
+(29)
+Here V = {(t, p) : DGT
+t
+(p) > 10−3}; the scale uses video-wide medians, defaults to one for a
+nonpositive generated median, and an empty mask falls back to all pixels. The lower-is-better error
+is inverted by NDEP. Depth estimates, preprocessing, and sampling remain those of the released
+evaluator rather than simulator ground-truth depth.
+Distributional JEPA Similarity.
+For generated and reference V-JEPA features xi, yj ∈Rd, the
+bundled JEDi evaluator uses the biased squared polynomial-kernel MMD:
+k(x, y) = (x⊤y/d)2,
+DJEDi = 100
+
+1
+n2
+X
+i,i′
+k(xi, xi′) + 1
+m2
+X
+j,j′
+k(yj, yj′) −
+2
+nm
+X
+i,j
+k(xi, yj)
+
+,
+mJEPA = exp(−0.4DJEDi).
+(30)
+Diagonal kernel terms are included and no square root is applied. This is a collection-level distri-
+bution comparison, not an average of per-episode embedding distances. The raw definitions above
+describe per-video component records, except for the collection-level JEPA score, rather than auxil-
+iary aggregate return values. Source-specific preprocessing, rounding, and failure behavior are part
+of the evaluator, including its depth-input byte conversion; the equations do not imply changes to
+that implementation.
+Reference-Capped Motion Metrics.
+Under the revised motion protocol, let ank and aGT
+nk be
+the normalized scores for generated video n and its matched ground-truth video.
+For k ∈
+{DYN, FL, MS}, the corrected per-video score is
+eank = min
+ ank, aGT
+nk
+
+.
+(31)
+This correction is applied before the benchmark’s component aggregation, not by capping a dataset
+mean after aggregation. It prevents motion beyond the reference level from automatically receiving
+additional credit. The other components are unchanged by this motion-specific revision.3 Public
+profiles retain the component scores supplied by their source snapshots, without retrospective recal-
+ibration. No additional difficulty or out-of-distribution multiplier is applied when aggregating these
+components in the paper.
+3The official evaluator specifies the per-video matched-reference cap.
+18
+
+
+Six-Dimension Aggregation.
+Using the abbreviations above, the six dimension scores are group
+means:
+GVis = SIMG + SAES + SJEPA
+3
+,
+GMot = SDYN + SFL + SMS
+3
+,
+GCont = SSC + SBG + SPC
+3
+,
+GPhys = SINT + STA
+2
+,
+G3D = SDEP + SPER
+2
+,
+GCtrl = SIF + SSA
+2
+.
+(32)
+These correspond to Visual Quality, Motion Quality, Content Consistency, Physics Adherence, 3D
+Accuracy, and Controllability. The displayed dimension values are Q2(Gg).
+Overall Perceptual Score.
+For a complete 15-component profile, the overall score is
+EWMScore-P = Q2
+ 
+1
+15
+15
+X
+k=1
+Sk
+!
+= Q2
+3GVis + 3GMot + 3GCont + 2GPhys + 2G3D + 2GCtrl
+15
+
+.
+(33)
+Every component has weight 1/15. The six dimensions are therefore not equally weighted: their
+group sizes are 3, 3, 3, 2, 2, 2. The second expression uses the group means before their display
+rounding. For illustration, the 15 displayed KineWorld components in Table A.2 sum to 1034.26,
+giving Q2(1034.26/15) = 68.95.
+Local Diagnostic Scales.
+Raw local DYN and FL measurements in Table A.3 are not substituted
+for the normalized components in Equation 33. A partial component profile is not reported as a
+complete 15-metric EWMScore-P. The metric name specifies the scoring convention, not whether a
+result is an official submission; the source and comparison scope remain those in Appendix A.3.
+A.3.2
+TRIWORLDBENCH METRICS AND TWB-SCORE
+Protocol and Reporting Scale.
+We use the official name TWB-Score for the multi-view aggregate
+(TriWorldBench Team, 2026). It is distinct from the single-view EWMScore-P and is not a task
+success rate. TriWorldBench evaluates synchronized head, left-wrist, and right-wrist videos using 19
+component signals. Component names and reductions follow the pinned implementation, including
+its task- and consistency-dependent visual quality penalty.4 Let bnk denote the processed score of
+component k for episode n, after its prescribed camera reduction. Under the default equal-episode
+reduction, the component summary is
+Smv
+k
+= 100
+1
+|Ek|
+X
+n∈Ek
+bnk,
+k = 1, . . . , 19,
+(34)
+where Ek is the set of episodes with a valid component output. A zero score is not a missing value.
+The implementation also supports an optional frame-bucket weighting mode; it is not implicit in the
+equal-episode expression above. Presentation rounding follows the specified reduction; intermediate
+rating quantization and numerical rounding remain part of the component evaluators.
+4See the TriWorldBench aggregation code, score transformations, and protocol configuration.
+19
+
+
+Pixel Fidelity and Cross-View Judgments.
+For paired frames X, Y
+∈[0, 255]H×W ×3, the
+benchmark first evaluates frame-level PSNR and SSIM:
+MSE(X, Y ) = ∥X −Y ∥2
+F
+3HW
+,
+PSNR(X, Y ) = 10 log10
+2552
+MSE(X, Y ),
+SSIM(X, Y ) =
+(2µXµY + C1)(2σXY + C2)
+(µ2
+X + µ2
+Y + C1)(σ2
+X + σ2
+Y + C2).
+(35)
+SSIM uses an 11 × 11 Gaussian window with standard deviation 1.5, C1 = (0.01 · 255)2, and
+C2 = (0.03 · 255)2, followed by spatial, channel, and frame averaging. PSNR is averaged in dB
+over the evaluator’s finite paired-frame values; exact matches have infinite PSNR, retained when
+all selected values are infinite. Let ⟨·⟩v be the equal mean over the three cameras. The reported
+normalized PSNR is
+bn,NPSNR = ⟨C(1 −exp(−PSNRnv /20))⟩v ,
+bn,SSIM = ⟨SSIMnv⟩v.
+(36)
+NPSNR is therefore not PSNR in dB. Both metrics compare each predicted camera with its own
+reference, rather than directly comparing pixels from different camera poses.
+The dedicated VLM consistency evaluators use STATE-selected phase samples, excluding idle and
+approach phases. For valid sample sets Pn,j, their released score reductions are
+bn,01 =
+1
+|Pn,01|
+X
+p∈Pn,01
+s01
+p + o01
+p
+10
+,
+bn,02 =
+1
+|Pn,02|
+X
+p∈Pn,02
+r02
+p
+5 ,
+bn,03 =
+1
+|Pn,03|
+X
+p∈Pn,03
+s03
+p + o03
+p
+10
+.
+(37)
+Here sp, op are the parsed state/object ratings and rp is the parsed overall rating produced by the
+fixed judge prompts. The identifiers 01–03 refer to the executable evaluator variants; the result
+tables retain the source’s VLM-I/II/III labels. Variant 01 uses a calibrated three-camera strip, and
+variants 02–03 use the head and active-wrist views. Variant 01 supports legacy 0–100 responses;
+variant 02 quantizes ratings to half-points, and variant 03 to integers on the 1–5 scale. Samples are
+averaged without phase-duration weighting. For VQA, let an be the fraction of correctly answered
+reference questions and un the view-check score:
+bn,VQA =
+an,
+un = 1,
+an/2,
+un̸ = 1.
+(38)
+These are fixed-model judgments of supplied evidence, not analytic geometric-consistency guaran-
+tees.
+Task, Geometry, and Motion Components.
+IF uses the head-view judge rating divided by five.
+SA uses the head-view caption cosine in Equation 23. JEPA uses Equation 30 on the evaluation
+collection; its single global value is repeated in the episode rows, so it is not an independently
+varying episode score. For INT and PER, normalized camera ratings av = Jv/5 are reduced by
+a robust mean. Let m = medianv av and d = medianv |av −m|. Retain cameras satisfying
+|av −m| ≤max(0.25, 2.5d), adding the closest cameras if needed to retain at least two, and average
+the retained ratings.
+FL applies NFL to each camera’s mean flow magnitude before equal-camera averaging. TA uses the
+head-view reciprocal FastDTW distance in Equation 28, followed by C(rTA/40.854); an invalid
+predicted track receives zero and an exact match saturates at one. STATE is distinct from the single-
+view DYN score. Let mnv be the fraction of frames marked moving for camera v, and let dnv be its
+RAFT-based dynamic degree from Equation 24. With θ = 0.1213,
+u(d) =
+ed−θ,
+d < θ,
+1,
+d ≥θ,
+z(d) =
+e−d,
+d > θ,
+1,
+d ≤θ,
+bn,STATE = ⟨mnvC(dnv)u(dnv) + (1 −mnv)z(dnv)⟩v .
+(39)
+20
+
+
+Wrist motion labels follow the corresponding arm; the head label uses the logical OR of the two
+arms. The released moving-phase set includes approach, grasp closing, manipulation, handover
+motion, action execution, adjustment, and release opening. STATE mixes expected moving and
+static fractions; it is not per-frame action classification accuracy.
+Temporal Components and Visual-Quality Penalty.
+The temporal components use the feature
+and flow-cycle statistics defined above, with the following multi-view reductions:
+bn,SC = ⟨CDINO(Inv)⟩v,
+bn,BG = ⟨g(dnv)CCLIP(Inv)⟩v,
+bn,PS =
+
+NPC
+ g(dSEA
+nv )/Ecycle
+nv
+
+v .
+(40)
+Ecycle
+nv
+is the mean cropped forward/backward cycle error from Equation 27. The pinned multi-
+view executor disables the legacy dynamic-degree multiplier for SC, but retains it for BG and the
+flow-cycle score. Thus the single-view SC formula cannot simply be reused without this distinction.
+Image and aesthetic scores first average the normalized learned frame scores over each view and
+then over cameras. For Q ∈{IMG, AES}, the score entering the final CSV is
+cn =
+1
+|An|
+X
+j∈An
+bn,j,
+An ⊆{01, 02, 03},
+bn,Q = C(braw
+n,Q) exp
+ 1
+2
+ C(bn,TA) −1
+
++ 1
+2
+ C(cn) −1
+
+.
+(41)
+Here An contains valid dedicated consistency outputs. Penalties are applied before episode aver-
+aging; an empty An or missing raw quality or TA excludes that quality value rather than assigning
+zero. Thus, multi-view IMG/AES are not interchangeable with unpenalized single-view scores.5
+Six Multi-View Dimensions.
+Using the components in Table A.11, the dimension scores are
+Gmv
+Tri =
+Smv
+NPSNR + Smv
+SSIM + Smv
+VLM-I + Smv
+VLM-II + Smv
+VLM-III + Smv
+VQA
+6
+,
+Gmv
+Task = Smv
+IF + Smv
+SA + Smv
+JEPA
+3
+,
+Gmv
+Phys = Smv
+INT + Smv
+PER
+2
+,
+Gmv
+Mot = Smv
+STATE + Smv
+FL + Smv
+TA
+3
+,
+Gmv
+Temp = Smv
+SC + Smv
+BG + Smv
+PS
+3
+,
+Gmv
+Vis = Smv
+IMG + Smv
+AES
+2
+.
+(42)
+These correspond to Tri-View Consistency, Task Alignment, Physical and 3D Coherence, Motion
+Quality, Temporal Consistency, and Visual Quality. PS denotes Photometric Smoothness, not PSNR.
+The single- and multi-view groups are different even when they share a short label such as Phys. For
+KineWorld, the two highlighted multi-view dimensions give Q2((37.55 + 88.92)/2) = 63.24 and
+Q2((86.02 + 66.71 + 56.97)/3) = 69.90.
+Overall TWB-Score.
+For a complete 19-component profile, the official component-mean rule is
+TWB-Score = Q2
+ 
+1
+19
+19
+X
+k=1
+Smv
+k
+!
+= Q2
+6Gmv
+Tri + 3Gmv
+Task + 2Gmv
+Phys + 3Gmv
+Mot + 3Gmv
+Temp + 2Gmv
+Vis
+19
+
+.
+(43)
+5Native component implementations and fixed-model routing are provided in the pinned metric modules;
+the equations summarize those implementations without changing them.
+21
+
+
+(a) Input and Kinematic Rendering
+(b) Kinematic Transport Lifting (KTL)
+(c) Transport-Aware World Diffusion (TAWD)
+Initial Frame I0
+Rendered Motion
+Robot
+Model
+Action Sequence a1:t
+3D Motion Field
+Projection
+Camera-Aligned Transport Field
+High
+Low
+Video Latents zt
+Motion-Support Distribution w
+Reweighted
+Flow-Matching Loss
+Figure A.2: Conceptual illustration of the KineWorld pipeline. KTL renders robot states and
+uses RAFT to construct camera-aligned transport, which conditions the generator. TAWD detaches
+the transport path, aggregates calibrated activity on the latent grid, and converts it into a transport
+distribution πi and mean-one weights wi = Nπi for future-RGB flow-matching errors. TAWD
+changes training-time supervision only; it adds no inference steps or parameters.
+The six dimensions are not equally weighted: their group sizes are 6, 3, 2, 3, 3, 2. The single-view
+15-component rule is not used here. The displayed KineWorld components sum to 1041.61, giving
+Q2(1041.61/19) = 54.82; computations from rounded component tables can differ from those us-
+ing the unrounded source outputs. The implementation can summarize a selected subset of available
+metrics, but such a partial summary is not a complete 19-component profile. We retain the published
+aggregate values for external systems rather than replacing them with recomputations from rounded
+entries. Episode-paired uncertainty is treated separately in Appendix A.7.
+A.4
+MORE DETAILS OF KINEWORLD
+Figure A.2 gives a conceptual view of the rendering, transport, and loss-weighting stages. We
+then provide the normalization properties and gradient boundary omitted from the main text. The
+derivation makes explicit that KineWorld reallocates a fixed supervision budget and recovers the
+uniform objective when no transport support is present.
+Let P be the set of N future RGB latent tokens and let di ≥0 denote the calibrated transport support
+at token i. For Sd = P
+j∈P dj > εsup, KineWorld defines
+ρtr
+i = di
+Sd
+,
+πi = 1 −αβ
+N
++ αβρtr
+i ,
+αβ =
+β
+1 + β .
+(44)
+The mean-one weight is wi = Nπi. Using the channel-averaged error from Equation 3 and sup-
+pressing the outer expectation in Equation 17 for brevity gives
+LKine = 1
+N
+X
+i∈P
+wiei =
+X
+i∈P
+πiei,
+ei = 1
+Cz
+∥vθ,i −v∗
+i ∥2
+2.
+(45)
+Fixed Aggregate Budget.
+Because P
+i ρtr
+i = 1, Equation 44 gives
+X
+i
+πi = 1,
+1
+N
+X
+i
+wi = 1.
+(46)
+Changing β redistributes supervision while preserving the sum of token weights; it does not fix the
+realized loss or gradient norm. The uniform component remains non-zero for every finite β, so static
+appearance and contextual dynamics continue to receive supervision.
+Zero-Motion Fallback.
+When Sd ≤εsup, we set ρtr
+i = 1/N, as in Equation 15. Consequently,
+πi = 1/N and wi = 1, exactly recovering uniform flow matching. This branch avoids numerical
+dependence on an arbitrary all-zero normalization.
+Gradient Boundary.
+With disjoint generator and action-head parameters, and with action-head
+inputs restricted to the stopped features in Equation 18, the auxiliary loss satisfies
+∇θwmLact = 0.
+(47)
+This equality requires that no shared parameter or additional differentiable path connects the auxil-
+iary loss to the generator. Action-head parameters θact remain trainable through this loss, but their
+gradient can be zero, for example at a stationary point.
+22
+
+
+Camera View
+Rendered Motion
+3D Transport Field
+Projected Field
+Normalized Support
+High
+Low
+High
+Low
+Figure A.3: Conceptual visualization of transport-support construction.
+Two manipulation
+scenes illustrate camera views, rendered robot motion, schematic 3D fields, image-plane transport,
+and normalized support. KTL estimates transport using RAFT between rendered robot states rather
+than analytic 3D-field projection. The final column illustrates ρtr, not the mean-one loss weights w.
+These panels are illustrative rather than measured experiment outputs.
+Support Interpretation.
+The transport field is a renderer-derived, camera-aligned estimate of pro-
+jected robot motion, not a sufficient statistic for the full action. Gripper semantics, contact forces,
+object state, and unobserved dynamics may not be recoverable from image-plane transport alone.
+KineWorld uses this estimate to decide where supervision is concentrated while language, the initial
+scene, and the generative model retain responsibility for the remaining dynamics. Figure A.3 con-
+ceptually illustrates the relation between projected robot motion and normalized transport support.
+Illustrative Weight Allocation.
+Figure A.4 illustrates how TAWD redistributes a fixed token-
+weight budget. We construct N = 1000 ordered future RGB latent tokens with di = exp[−10(i −
+1)/(N −1)] and apply Equation 44 at β = 1. For the top k tokens in descending weight order, let
+q = k/N and Ck = Pk
+i=1 wi/N. Uniform weighting gives Ck = q, while TAWD satisfies q ≤
+Ck ≤(1 + q)/2 for k = 1, . . . , N, with C0 = 0. In this construction, the top 10% receive 36.63%
+of the total token weight, below the general upper bound of 55%. This construction illustrates
+normalization and concentration, not an observed training distribution or a performance gain.
+A.5
+IMPLEMENTATION DETAILS
+Training Sequence.
+A reproducible KineWorld update consists of the following operations:
+1. integrate the control sequence from the initial embodiment configuration and sample K =
+9 visual states at stride r = 4;
+2. render robot-only frames with the training camera and obtain source-grid forward flow
+between successive rendered states;
+3. mask flow by source-frame robot occupancy, clip displacement at Mpx = 25, and construct
+the three-channel transport video;
+4. encode RGB and transport clips with the video-VAE interfaces, keeping the initial RGB
+and transport streams clean;
+5. downsample source-supported activity to the future-RGB latent grid and normalize it ac-
+cording to Equation 44;
+6. predict the conditional flow field with the dual-stream denoiser and apply Equation 45; and
+7. update the optional action expert through detached generator features and add λactLact to
+the scalar training objective.
+23
+
+
+0
+20
+40
+60
+80
+100
+Ranked tokens (%)
+0
+1
+2
+3
+4
+5
+6
+Per-token weight
+Concentrates weight
+on top-ranked tokens.
+TAWD (β = 1)
+Uniform
+(a)
+0
+25
+50
+75
+100
+Top-ranked tokens (%)
+0
+25
+50
+75
+100
+Cumulative weight (%)
+Top 10%: 36.63%
+TAWD (β = 1)
+Uniform
+Upper bound
+(b)
+Figure A.4: Analytical illustration of TAWD token-weight allocation. For the constructed expo-
+nential support over N = 1000 future RGB latent tokens at β = 1, (a) shows descending mean-one
+weights and (b) their cumulative share relative to uniform weighting. The top 10% receive 36.63%
+of the total token weight. The green curve shows the general upper bound (1 + q)/2 for q > 0;
+the cumulative share has C0 = 0. These curves illustrate the weighting rule, not measured training
+statistics or loss/gradient shares.
+Matched-Comparison Protocol.
+Both runs start from the step-315 checkpoint and use 50 up-
+dates, a learning rate of 10−5 without warmup, and λact = 1. They share the optimizer reset, data
+order, seeds, KTL condition, sampler, chunking, interpolation, encoding, and evaluation settings.
+The only change is β = 0 versus β = 1 in the future-RGB loss.
+Inference Path and Cost Accounting.
+TAWD modifies only the training objective, leaving the
+dual-stream generator and its 25 denoising steps unchanged. At inference, KTL converts each new
+action trajectory into a transport condition through robot rendering, RAFT estimation, and transport
+encoding. The reported FPS is measured with precomputed transport and excludes this preparation.
+Appendix A.6 specifies the timing protocol.
+A.6
+AUDITED MODEL SIZE AND RUNTIME
+Parameter Accounting.
+We count instantiated denoiser tensor entries rather than checkpoint
+bytes and identify trainable parameters from the frozen continuation contract. The Wan2.2 DiT
+contains 4,999,787,712 parameters. The transport input/output stream adds 1,192,128 parameters,
+or 0.02384% of the DiT, for an active single-view denoising path of 5,000,979,840 parameters
+(100.02384% of the DiT). TAWD is a training objective and therefore adds zero learned parameters.
+The selected self-attention-LoRA continuation exposes 80,415,936 trainable parameters (1.60839%
+of the DiT): 67,430,400 modulation parameters, 11,796,480 LoRA parameters, and 1,189,056 pa-
+rameters in the checkpoint-version transport stream. The 3,072-parameter difference between this
+training contract and the instantiated inference stream is the inference revision’s stream-identity em-
+bedding; rounding both footprints to two decimal places gives 1.19M transport and 80.42M trainable
+parameters. This trainable subset is not an additional component to be added to the denoiser total.
+An optional 778,125,326-parameter action expert (15.56317% of the DiT) is stored in the joint train-
+ing checkpoint, but the reported single-view loader ignores it; we consequently exclude it from the
+active denoiser size. The frozen video VAE and text encoder are also excluded so that the count
+follows the DiT-backbone convention.
+Runtime Protocol.
+The reported timing profile covers 1,000 single-view episodes generated by
+32 single-device workers across four nodes with 25 denoising steps. The outputs contain 230,908
+frames (75–1,468 per episode), with mean and median episode times of 76.37 s and 61.60 s, re-
+spectively. Worker-normalized throughput is P
+n Fn/ P
+n tn, where Fn is exported frame count
+and tn is episode wall time. Timing includes input loading, denoising, linear frame expansion, and
+640 × 480 H.264 export, but excludes model initialization and offline transport construction. This
+24
+
+
+measures exported-video throughput with precomputed transport. Videos are exported at 24 fps for
+playback.
+Joint-Attention Cost.
+For nx RGB tokens and nu transport tokens with hidden width d, the
+quadratic term of joint self-attention scales as (nx + nu)2d. Relative to RGB-only attention, this
+term increases by a factor of (1 + nu/nx)2, reaching 4× for equal-length streams. This factor ap-
+plies to the quadratic attention term rather than full-model runtime. Uniform CFM and TAWD share
+the same transport-conditioning architecture and therefore incur the same attention cost.
+A.7
+EVALUATION AND STATISTICAL PROTOCOL
+The controlled-comparison protocol separates changes to future-RGB supervision from changes
+to initialization, training budget, or inference. The following estimator applies to episode-paired
+outputs under shared evaluation conditions; reference profiles are analyzed descriptively.
+Primary Causal Contrast.
+Let sKW
+n
+and sU
+n be per-episode evaluator scores from KineWorld and
+the continued uniform control, generated with the same episode input and inference seed. Here M =
+1000 complete episode pairs. For metrics defined as episode-wise averages, the paired estimator is
+b∆= 1
+M
+M
+X
+n=1
+ sKW
+n
+−sU
+n
+
+.
+(48)
+We form 95% percentile bootstrap intervals from 20,000 resamples of the M complete episode pairs
+with replacement. All frames, cameras, and metrics from each episode remain grouped, and the same
+sampled indices are used for both methods. EWMScore-P is recomputed in each replicate using
+the prespecified component-aggregation rule before taking the paired difference. These intervals
+quantify episode-sampling uncertainty for the fixed checkpoint pair, rather than variability across
+independent training runs.
+Multiple Outcomes.
+The protocol designates EWMScore-P as the primary endpoint, Motion
+Quality and Trajectory Accuracy as mechanism-focused secondary endpoints, and Visual Quality
+and Interaction Quality as guardrails. It fixes component evaluators and aggregation before com-
+parison and includes all specified outcomes regardless of significance. The paired intervals for
+secondary and guardrail outcomes are reported descriptively; we make no multiplicity-adjusted sig-
+nificance claims for those outcomes.
+Matched-Run Requirements.
+The comparison is considered valid only when both variants share:
+• the exact parent-checkpoint hash and optimizer-reset policy;
+• the same ordered training examples, augmentation decisions, update count, and random
+seed;
+• identical sampler, initial noise, chunk boundaries, interpolation, and video encoding;
+• the same evaluation manifest and evaluator version, with episode membership specified
+independently of the collection size; and
+• retained per-episode metric files, logs, generated-video manifest, and checkpoint check-
+sums.
+A frozen parent checkpoint is a diagnostic rather than the primary baseline because it receives fewer
+updates. Likewise, the retained FlowWAM-FiveAges profile is external context, not a verified local
+matched control.
+Artifact Provenance.
+A reproducible comparison links each training configuration and check-
+point to its evaluation inputs, generated outputs, and per-episode metrics. Data identifiers include
+source, task, and episode rather than numeric indices alone. External system profiles remain sepa-
+rate from locally reproduced comparisons; aggregate values alone do not yield episode-paired un-
+certainty estimates.
+25
+
+
+A.8
+ADDITIONAL DIAGNOSTICS AND COMPARISON PROTOCOLS
+The following sections separate transport-input and temporal-reconstruction diagnostics from the
+matched objective comparison. Diagnostic datasets follow Appendix A.3; the matched TAWD pro-
+tocol appears in Appendix A.8.2.
+A.8.1
+KTL TRANSPORT CONSTRUCTION
+Table 5 reports a fixed-checkpoint diagnostic on 100 episodes from the separate three-view valida-
+tion collection. All-view RAFT supplies guidance to the head, left-wrist, and right-wrist views; the
+control retains head-view guidance and replaces both wrist inputs with white placeholders. Each
+variant contains 300 frame-count-matched videos, with 4,800 sampled prediction–reference frame
+pairs in the reported evaluation. First-frame fidelity is reported separately because the initial RGB
+observation is a model condition.
+N-MAE is normalized RGB mean absolute error, reported in 10−3 units. Mot. Corr. is the per-
+video Pearson correlation between sampled prediction and reference temporal-difference sequences.
+Head, Left, and Right report view-specific PSNR, while First and Last report boundary-frame
+PSNR. These are retained local video diagnostics, not official RoboTwin 2.0 scores.
+Episode Coverage.
+Both generation inventories cover episodes 1–100 with one head-camera and
+two wrist-camera videos per episode. The three-view collection uses its own episode numbering
+rather than the Clean-50 split definition; identical numeric indices do not imply identical demon-
+strations.
+A.8.2
+MATCHED TAWD OBJECTIVE COMPARISON
+Table 6 reports the executed matched comparison between β = 0 and β = 1. The comparison fixes
+KTL and the aggregate future-RGB token weight, and changes only the spatial allocation of that
+weight.
+Executed Weight Definitions.
+The uniform continuation uses β = 0 and therefore wi = 1. The
+TAWD continuation uses β = 1, giving wi = (1 + Nρtr
+i )/2 and assigning half of the aggregate
+weight uniformly. Both variants have unit mean token weight and recover uniform weights under
+the zero-support fallback in Equation 15.
+Matched Comparison and Interpretation.
+TAWD improves EWMScore-P by 1.75 points (95%
+paired bootstrap CI [+1.10, +2.37]), Trajectory Accuracy by 5.60 points, Interaction Quality by 4.20
+points, and Motion Quality by 0.85 points. The Visual Quality interval crosses zero (∆= +0.60,
+CI [−0.10, +1.20]). These results apply to the matched 50-update continuation and do not measure
+the separate effect of KTL or longer training.
+A.8.3
+FRAME-LEVEL DIAGNOSTIC DEFINITIONS
+The measurements in Table A.6 are complementary local diagnostics rather than newly proposed
+or official benchmark metrics. Let Yt ∈[0, 1]H×W denote the luma channel of frame t. A-MAD
+averages the pixel-wise absolute difference between adjacent Yt; CPF reports the fraction of pix-
+els whose adjacent-frame change exceeds the evaluator’s fixed threshold; and FL-MAD applies the
+same absolute-difference statistic to the first and last frames. NDP is the fraction of adjacent pairs
+classified as near duplicates by a fixed frame-difference test. Frame differencing and cross-frame
+mean absolute differences have long been used in video analysis, including temporal-flicker evalua-
+tion (Huang et al., 2024).
+For motion diagnostics, we estimate dense flow between adjacent frames with Farneb¨ack’s two-
+frame method (Farneb¨ack, 2003). FB Mean and FB P95 are the mean and 95th percentile of the
+resulting flow magnitudes, while Jerk summarizes temporal variation across successive flow fields
+as a heuristic smoothness measure. Related differential-flow and jerk-based analyses precede this
+work (Shen et al., 2020; Takeda et al., 2018). These statistics characterize different failure modes:
+adjacent differences are sensitive to both motion and flicker, first-to-last difference measures end-
+point change but not path quality, near-duplicate rate exposes repetition, and flow magnitude or jerk
+26
+
+
+Table A.4: Interpolation Strategy.
+Diagnostic on the same 16 episodes with fixed generated
+keyframes. Linear expansion uses linear frame interpolation; VFIMamba and RIFE HDv3 use
+learned interpolation.
+Method
+Appearance
+Motion
+Consistency
+AES ↑
+IMG ↑
+DYN ↑
+FL ↑
+MS ↑
+BG ↑
+PS ↑
+SC ↑
+Linear expansion
+41.86
+45.43
+22.47
+0.37
+58.75
+85.00
+1.02
+81.30
+VFIMamba (no TTA)
+40.30
+45.50
+41.65
+8.37
+63.43
+90.50
+54.22
+86.97
+RIFE HDv3
+39.53
+45.95
+43.23
+10.85
+63.47
+90.42
+65.62
+87.13
+does not by itself establish correct action-conditioned motion. We therefore assign no universal
+optimization direction and use the diagnostics only to interpret the interpolation ablation.
+A.8.4
+TEMPORAL RECONSTRUCTION AND INTERPOLATION
+Effects of Different Interpolators.
+This ablation tests whether learned interpolation improves
+motion and visual quality over linear expansion with the generated keyframes fixed (Table A.4 and
+Figure A.5). RIFE improves seven of eight metrics over linear expansion and raises Dynamic Degree
+and Flow Score from 22.47 and 0.37 to 43.23 and 10.85, respectively, demonstrating stronger motion
+recovery despite a small aesthetic trade-off.
+AES
+IMG
+DYN
+FL
+MS
+BG
+PS
+SC
+0
+20
+40
+60
+80
+100
+Reported score
+Linear expansion
+VFIMamba (no TTA)
+RIFE HDv3
+Figure A.5: Interpolation diagnostics on
+16 local episodes. The methods expand the
+same generated keyframes; values match
+Table A.4. AES, IMG, DYN, FL, MS, BG,
+and SC follow Table A.2; PS denotes
+Photometric Smoothness. This comparison
+evaluates temporal reconstruction with the
+generator fixed, rather than the isolated effect
+of TAWD.
+Effects of Temporal Reconstruction.
+Table A.5 compares temporal reconstruction on fixed gen-
+erated outputs. Keyframe-6 retains every fourth frame of each 24-fps source and exports the se-
+quence at 6 fps, providing a sparse-frame reference for the 24-fps reconstruction variants. It yields
+the highest Dynamic Degree and Flow Score under this coarser temporal sampling. Among the
+24-fps variants, RIFE leads all three reported metrics, achieving Dynamic Degree of 43.23, Flow
+Score of 10.85, and Photometric Smoothness of 65.62. These results support RIFE for temporal
+reconstruction at the target frame rate.
+Temporal Variant
+Local Motion
+Metrics (%)
+DYN ↑
+FL ↑
+PS ↑
+Keyframe-6 (6 fps)
+45.80
+12.20
+26.40
+Linear expansion
+22.47
+0.37
+1.02
+Keyframe hold-4
+33.09
+9.69
+13.78
+VFIMamba (no TTA)
+41.65
+8.37
+54.22
+RIFE HDv3
+43.23
+10.85
+65.62
+Table A.5: Temporal Reconstruction.
+Comparison on the same 16 local episodes
+with the generator fixed. Keyframe-6 reports
+the sparse generated keyframes directly at 6
+fps, whereas the remaining variants produce
+24-fps outputs. Bold marks the best results
+among the 24-fps reconstruction variants.
+DYN, FL, and PS denote Dynamic Degree,
+Flow Score, and Photometric Smoothness.
+Frame-Level Motion Analysis.
+This diagnostic tests whether interpolation changes intermedi-
+ate motion and frame repetition without shifting the endpoints (Table A.6). RIFE increases mean
+optical-flow magnitude from 0.109 to 0.337 and reduces near-duplicate pairs from 0.588 to 0.563
+while preserving the first-to-last difference, confirming that its gains arise from richer intermediate
+motion rather than endpoint drift.
+27
+
+
+Table A.6: Frame Diagnostics for the 16-episode interpolation ablation. Definitions, interpretation,
+and metric provenance are provided in Appendix A.8.3.
+Method
+Pixel Difference
+Repetition
+Optical Flow
+A-MAD
+CPF
+FL-MAD
+NDP
+FB Mean
+FB P95
+Jerk
+Linear expansion
+0.006884
+0.049167
+0.096238
+0.588374
+0.109187
+0.418630
+0.026805
+VFIMamba (no TTA)
+0.008584
+0.038254
+0.096187
+0.570205
+0.324903
+1.399471
+0.078122
+RIFE HDv3
+0.008832
+0.039097
+0.096191
+0.563069
+0.337443
+1.428315
+0.075933
+Scaling to Representative-100.
+This comparison tests whether RIFE’s gains extend to interac-
+tion, perspective, and instruction following across 100 fixed episodes (Tables A.7 and A.8). RIFE
+improves Perspectivity by 0.40 points but reduces Interaction Quality and Instruction Following by
+0.80 and 0.60 points, respectively, showing that interpolation gains do not transfer uniformly to
+semantic control.
+Method
+Paired Local VLM
+Metrics (%)
+INT ↑
+PER ↑
+IF ↑
+Linear expansion
+67.40
+87.40
+73.40
+RIFE HDv3
+66.60
+87.80
+72.80
+RIFE −Linear (pp)
+−0.80
++0.40
+−0.60
+Table A.7: Representative-100 paired
+comparison on identical episodes. INT,
+PER, and IF denote Interaction Quality,
+Perspectivity, and Instruction Following.
+Values are local VLM-judge percentages.
+Metric
+RIFE versus Linear
+(episodes)
+Improved
+Tied
+Regressed
+Interaction Quality
+8
+80
+12
+Perspectivity
+8
+86
+6
+Instruction Following
+12
+73
+15
+Table A.8: Paired Outcome counts for
+RIFE versus linear expansion on
+Representative-100. Each row sums to 100;
+ties denote unchanged VLM-judge scores.
+Efficiency of Different Interpolators.
+This comparison tests whether RIFE reduces interpolation
+latency relative to VFIMamba under the same video-processing protocol (Table A.9). RIFE reduces
+the mean per-episode time from 1168.24 to 6.02 seconds, yielding a 194.07× speedup excluding the
+shared video-generation cost.
+Method
+Measured Time (s)
+Relative
+Efficiency
+Mean ↓
+Total ↓
+Speedup ↑
+VFIMamba (no TTA)
+1168.24
+18691.88
+1.00×
+RIFE HDv3
+6.02
+96.32
+194.07×
+Table A.9: Interpolation Efficiency
+measured on 16 episodes. Mean is
+per-episode time, Total is summed
+accelerator time, and Speedup is relative to
+VFIMamba.
+Inference-Time Flow-Condition Scale.
+Table A.10 compares inference-time flow-conditioning
+strengths on the same 16 episodes without changing the generator. Increasing the scale from 1.00 to
+1.50 raises Dynamic Degree by 4.69% and lowers Flow Score by 5.27%, relative to scale 1.00. This
+diagnostic concerns inference-time conditioning strength, not the effect of training with TAWD.
+Flow-Condition Scale
+Local Motion
+Diagnostics
+DYN ↑
+FL ↑
+1.00
+0.224695
+0.003716
+1.25
+0.227275
+0.003652
+1.50
+0.235240
+0.003520
+Table A.10: Inference-Time
+Flow-Condition Scale on 16 local episodes.
+DYN and FL denote Dynamic Degree and
+Flow Score. This is an auxiliary inference
+diagnostic rather than a KineWorld
+component ablation.
+Transport-Construction Ablation.
+This ablation tests whether measured wrist-view guidance
+improves multi-view prediction over white wrist-flow placeholders (Table 5). All-view RAFT im-
+proves every reported reconstruction and temporal-agreement metric over the white-wrist-flow con-
+trol, with the largest PSNR gains in the right-wrist and final-frame measurements. This supports
+28
+
+
+the multi-view transport-construction choice within KTL but does not isolate the TAWD training
+objective.
+A.8.5
+RETAINED MULTI-VIEW COMPONENT PROFILES
+Table A.11 reports all 19 component scores for the methods in Table 3. NPSNR denotes normal-
+ized PSNR; VLM-I/II/III and VQA denote the four cross-view consistency assessments; IF, SA,
+and JEPA denote instruction following, semantic alignment, and JEPA similarity; INT and PER
+denote interaction quality and perspectivity; STATE denotes dynamic-state alignment; FL and TA
+denote flow score and trajectory accuracy; SC, BG, and PS denote subject consistency, background
+consistency, and photometric smoothness; IMG and AES denote image and aesthetic quality.
+Table A.11: Complete retained multi-view component profiles. All seven methods and numeri-
+cal entries are preserved from the supplied comparison; these are external aggregates, not verified
+RoboTwin 2.0 local re-evaluations. The normalized score scale and preference direction are un-
+changed; NPSNR is not PSNR in dB. Bold denotes the largest retained values at the reported preci-
+sion, not a verified local ranking.
+A. Tri-view consistency components
+Method
+NPSNR ↑
+SSIM ↑
+VLM-I ↑
+VLM-II ↑
+VLM-III ↑
+VQA ↑
+BWM
+73.43
+87.47
+85.11
+83.94
+95.31
+65.94
+WoVR_Plus
+74.62
+87.91
+83.79
+83.94
+94.84
+69.11
+DreamDojo
+59.78
+71.58
+77.14
+73.26
+88.19
+47.82
+Motus
+60.13
+76.31
+63.68
+67.56
+87.22
+45.33
+Genie Envisioner
+58.74
+74.44
+69.40
+57.13
+77.93
+36.72
+Ctrl-World
+46.39
+64.62
+46.44
+63.69
+82.46
+40.90
+KineWorld (Ours)
+43.15
+67.23
+91.70
+73.72
+82.93
+39.41
+B. Task and physical components
+Method
+IF ↑
+SA ↑
+JEPA ↑
+INT ↑
+PER ↑
+BWM
+73.84
+89.93
+94.37
+33.59
+87.20
+WoVR_Plus
+70.67
+90.61
+87.12
+28.76
+85.49
+DreamDojo
+49.72
+88.28
+30.73
+28.28
+59.39
+Motus
+52.28
+86.54
+10.24
+25.00
+44.20
+Genie Envisioner
+20.20
+79.30
+0.02
+20.10
+87.91
+Ctrl-World
+38.90
+81.94
+10.32
+24.19
+45.15
+KineWorld (Ours)
+62.78
+89.02
+0.37
+37.55
+88.92
+C. Motion, temporal, and visual components
+Method
+FL ↑
+TA ↑
+STATE ↑
+SC ↑
+BG ↑
+PS ↑
+IMG ↑
+AES ↑
+BWM
+20.48
+41.97
+61.42
+84.20
+70.29
+33.95
+38.71
+24.13
+WoVR_Plus
+24.85
+45.27
+60.91
+84.22
+75.19
+32.90
+36.22
+26.06
+DreamDojo
+6.52
+16.61
+60.76
+77.37
+89.29
+15.86
+24.45
+17.58
+Motus
+0.80
+13.77
+59.31
+77.37
+1.00
+1.31
+16.08
+16.44
+Genie Envisioner
+0.40
+0.84
+59.28
+91.40
+1.07
+4.08
+19.36
+15.57
+Ctrl-World
+21.29
+6.09
+60.47
+77.05
+49.02
+12.44
+18.37
+14.92
+KineWorld (Ours)
+4.69
+32.93
+59.21
+86.02
+66.71
+56.97
+33.88
+24.42
+A.9
+ADDITIONAL QUALITATIVE ANALYSIS
+Visualization Protocol.
+Figures A.6–A.8 show 15 single-view episode pairs, each with its de-
+coded input and five uniformly sampled future frames. Timestamps follow each video’s encoded
+frame rate, without retiming. Figures A.9–A.11 pair all-view-RAFT validation rollouts with ground
+truth at eleven shared frame indices across three cameras. These visualization collections are distinct
+from the Clean-50 held-out partition and do not constitute matched objective comparisons.
+Single-View Comparisons.
+In Figures A.6–A.8, Wan2.2 remains nearly static in episodes 45 and
+488, whereas KineWorld depicts robot motion and object displacement. In episodes 300, 336, and
+865, Wan2.2 introduces human hands or changes the objects and scene composition; KineWorld re-
+29
+
+
+tains the robotic setting. These observations distinguish visible rollout behavior, but do not establish
+trajectory accuracy or task completion.
+Multi-View Comparisons.
+Figures A.9–A.11 expose view-dependent errors. Episode 1 retains
+the bottle on the table after the reference lift and misses its left-wrist close-up. Episode 50 shows di-
+vergent tray contents and reduced wrist-view object detail. Episode 100 preserves the static left-wrist
+scene but exhibits delayed head-view motion and missing right-wrist objects. Stable backgrounds
+therefore do not ensure accurate object transport across views. These validation diagnostics are
+separate from the scored multi-view test outputs.
+A.10
+LIMITATIONS AND REPRODUCIBILITY
+Limitations.
+KineWorld relies on calibrated robot and camera models, and its transport support is
+sensitive to calibration errors, flow estimation errors, and occlusion. The support captures projected
+robot motion but does not explicitly model object motion or contact dynamics. Autoregressive roll-
+out may accumulate appearance drift, while transport-focused supervision may trade visual fidelity
+for motion quality. The matched study evaluates TAWD over a 50-update continuation from a shared
+checkpoint; convergence and stability across training seeds remain to be assessed. Future work will
+investigate object-aware transport, calibration-robust conditioning, and cross-embodiment transfer.
+Safety.
+Generated rollouts are predictive media rather than certified robot trajectories. They must
+not be used as evidence of collision-free or hardware-safe execution. Deployment requires indepen-
+dent state estimation, feasibility and collision checking, controller limits, emergency handling, and
+validation in the target simulator and robot system.
+Reproducibility Specification.
+Reproducing the controlled comparison requires:
+• source code for rendering, support construction, training, sampling, and evaluation;
+• pinned environment and dependency versions, including renderer, RAFT, and VAE revi-
+sions;
+• data-split and episode manifests with checksums and license notes;
+• parent and trained checkpoint hashes plus complete run configurations;
+• external-source records and local or matched per-episode evaluations with bootstrap scripts;
+• generated-video manifests linking each output to its input, seed, and checkpoint; and
+• timing, memory, seed-variation, ablation, qualitative-selection, and failure-case reports.
+Scope of Conclusions.
+The normalization and zero-motion properties follow from the objective
+definition. The reported system profiles and local diagnostics characterize their respective evaluation
+scopes; their interpretation is distinct from the causal effect of changing future-RGB supervision
+(Appendix A.8.2).
+30
+
+
+Episode 45
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Episode 125
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Episode 212
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Episode 300
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Episode 336
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Figure A.6: Additional qualitative rollout comparisons (1/3). Wan2.2 and KineWorld outputs for
+retained episode identifiers 45, 125, 212, 300, and 336. Each row shows the decoded input followed
+by five uniformly spaced rollout frames.
+31
+
+
+Episode 391
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Episode 488
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Episode 586
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Episode 704
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=0.8s
+t=1.7s
+t=2.5s
+t=3.3s
+t=4.1s
+Episode 732
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Figure A.7: Additional qualitative rollout comparisons (2/3). Wan2.2 and KineWorld outputs
+for retained episode identifiers 391, 488, 586, 704, and 732, using the same deterministic frame-
+sampling rule as Figure A.6.
+32
+
+
+Episode 780
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Episode 865
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Episode 938
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Episode 976
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Episode 982
+Wan2.2
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+KineWorld
+Input
+t=1.0s
+t=2.0s
+t=3.0s
+t=4.0s
+t=5.0s
+Figure A.8: Additional qualitative rollout comparisons (3/3). Wan2.2 and KineWorld outputs
+for retained episode identifiers 780, 865, 938, 976, and 982, using the same deterministic frame-
+sampling rule as Figure A.6.
+33
+
+
+Left wrist
+Head
+Right wrist
+0
+14
+28
+43
+57
+71
+85
+99
+114
+128
+142
+Figure A.9: Episode 1, bottle manipulation. Columns are Left wrist, Head, and Right wrist; within
+each cell, the left image is GT and the right image is KineWorld. Eleven uniformly sampled frame
+indices are shown.
+34
+
+
+Left wrist
+Head
+Right wrist
+0
+24
+48
+72
+96
+120
+145
+169
+193
+217
+241
+Figure A.10: Episode 50, bimanual food placement. Columns are Left wrist, Head, and Right
+wrist; within each cell, the left image is GT and the right image is KineWorld. Eleven uniformly
+sampled frame indices are shown.
+35
+
+
+Left wrist
+Head
+Right wrist
+0
+9
+19
+28
+38
+47
+56
+66
+75
+85
+94
+Figure A.11: Episode 100, switch interaction. Columns are Left wrist, Head, and Right wrist;
+within each cell, the left image is GT and the right image is KineWorld. Eleven uniformly sampled
+frame indices are shown.
+36
