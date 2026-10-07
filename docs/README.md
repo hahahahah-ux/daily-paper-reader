@@ -48,17 +48,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-06</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-07</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 21 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-06 19:04:51 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-07 19:20:46 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -69,7 +69,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-10-06 日报共筛出 21 篇机器人学习论文，精读 9 篇、速读 12 篇，聚焦灵巧操作与移动操作两大方向。最值得关注的是满分 9.0 的 DexJoCo-X 多手灵巧操作动作表示基准，以及 MobiAgent 面向长时程移动操作的双环递归策略自改进；速读中 VLM 智能体回溯世界建模与全身安全框架也值得一瞥。普通读者可先从 DexJoCo-X 了解灵巧操作评测标准，再顺着 MobiAgent 看移动操作如何靠自改进提升长任务表现。</p>
+<p>2026-10-07 日报精选 19 篇机器人学习论文，精读 7 篇、速读 12 篇，聚焦视觉-语言-动作模型与高效强化学习。最值得看的是精读双 9 分工作：SWAP 用逐步动作策略路由提升 VLA 模型表现，Task-Space 模仿引导则让强化学习更高效。普通读者可优先从这两篇入手，再顺带浏览灵巧操作与视觉-触觉扩散策略等 8 分速读工作。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -78,12 +78,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">9 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DexJoCo-X: Benchmarking Action Representations for Multi-Hand Dexterous Manipulation">DexJoCo-X: Benchmarking Action Representations for Multi-Hand Dexterous Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="MobiAgent: Dual-Loop Recursive Policy Self-Improvement for Long-Horizon Mobile Manipulation">MobiAgent: Dual-Loop Recursive Policy Self-Improvement for Long-Horizon Mobile Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="GOTT: Object-centric Dexterous Manipulation with a Reusable Cross-Embodiment Primitive">GOTT: Object-centric Dexterous Manipulation with a Reusable Cross-Embodiment Primitive</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="SWAP: Stepwise Action Policy Routing for Vision-Language-Action Models">SWAP: Stepwise Action Policy Routing for Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Task-Space Imitation Guidance for Efficient Reinforcement Learning">Task-Space Imitation Guidance for Efficient Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="EigenDEXplore: Structured Exploration for Dexterous Manipulation with Human Priors">EigenDEXplore: Structured Exploration for Dexterous Manipulation with Human Priors</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">hand-manip <strong>5</strong></span><span class="dpr-home-dashboard-tag">embodied-ai <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>6</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -94,7 +94,7 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Beyond Prediction: Steering VLM Agents with Retrospective World Modeling">Beyond Prediction: Steering VLM Agents with Retrospective World Modeling</span></li><li><span class="dpr-home-dashboard-paper-title" title="WBAG: A Whole-Body and Attached-Geometry Safety Framework for Vision-Language-Action Manipulation">WBAG: A Whole-Body and Attached-Geometry Safety Framework for Vision-Language-Action Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="FlashDexRetarget: Accelerating Dexterous Manipulation Data Generation through Multi-Motion Retargeting">FlashDexRetarget: Accelerating Dexterous Manipulation Data Generation through Multi-Motion Retargeting</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Equivariant Visual-Tactile Diffusion Policy for Contact-Rich Manipulation">Equivariant Visual-Tactile Diffusion Policy for Contact-Rich Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="DexForge: High-Fidelity Physics-Informed Dexterous Retargeting">DexForge: High-Fidelity Physics-Informed Dexterous Retargeting</span></li><li><span class="dpr-home-dashboard-paper-title" title="ReDex: Repairing Sim-to-Real Dexterous Policies by Finger-Level Compliant Interaction">ReDex: Repairing Sim-to-Real Dexterous Policies by Finger-Level Compliant Interaction</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">embodied-ai <strong>7</strong></span><span class="dpr-home-dashboard-tag">hand-manip <strong>5</strong></span></div>
 </section>
